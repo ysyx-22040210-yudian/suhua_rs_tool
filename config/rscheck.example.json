@@ -1,0 +1,27 @@
+{
+  "excel": {
+    "sheet": "RS_Check",
+    "header_row": 1,
+    "data_start_row": 2,
+    "validate_headers": true
+  },
+  "columns": {
+    "Intf_type": 1,
+    "RS_module": 2,
+    "RS_inst": 3,
+    "position": 4,
+    "step": 5,
+    "clk": 6,
+    "rst": 7,
+    "CRG_source": 8
+  },
+  "rtl": {
+    "clk_port": "clk",
+    "rst_port": "rst",
+    "suffix_regex": "(?P<tag>.+?)(?P<index>[0-9]+)",
+    "index_base": 0,
+    "require_contiguous_indices": false,
+    "allow_leaf_signal_match": false,
+    "crg_match": "module"
+  }
+}

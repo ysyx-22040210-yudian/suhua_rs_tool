@@ -1,0 +1,4 @@
+Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source
+OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,2,clk_rs,rst_n,crg_core
+CTRL_IF,rs_pipe,CTRL_RS,top.u_tile,1,clk_aux,rst_n,crg_aux
+

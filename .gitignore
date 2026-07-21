@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+npi/build/
+output/
+outputs/
+.tmp/
+
+# Verdi/NPI generated databases and logs
+*.lib++/
+*.elab++/
+*.daidir/
+rs_npi_collectorLog/
+vericomLog/
+elabcomLog/
+*.log
+
+# Desktop metadata
+.DS_Store
+Thumbs.db

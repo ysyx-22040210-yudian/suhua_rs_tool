@@ -1,0 +1,3 @@
+Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source
+OUT_IF,wrong_pipe,AAAA_BBB,top.u_tile,3,clk_wrong,rst_wrong,wrong_crg
+

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "positions": {
+    "top.u_tile": {
+      "found": true,
+      "instances": [
+        {
+          "name": "AAAA_BBB_C0",
+          "full_name": "top.u_tile.AAAA_BBB_C0",
+          "module": "rs_pipe",
+          "file": "rs_top.sv",
+          "line": 10,
+          "ports": {
+            "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
+            "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
+          },
+          "clk_sources": [
+            {"instance": "top.u_tile.u_crg", "module": "crg_core"}
+          ]
+        },
+        {
+          "name": "AAAA_BBB_C1",
+          "full_name": "top.u_tile.AAAA_BBB_C1",
+          "module": "rs_pipe",
+          "file": "rs_top.sv",
+          "line": 20,
+          "ports": {
+            "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
+            "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
+          },
+          "clk_sources": [
+            {"instance": "top.u_tile.u_crg", "module": "crg_core"}
+          ]
+        },
+        {
+          "name": "CTRL_RS_D0",
+          "full_name": "top.u_tile.CTRL_RS_D0",
+          "module": "rs_pipe",
+          "file": "rs_top.sv",
+          "line": 30,
+          "ports": {
+            "clk": {"connection": "top.u_tile.clk_aux", "type": "npiNet"},
+            "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
+          },
+          "clk_sources": [
+            {"instance": "top.u_tile.u_aux_crg", "module": "crg_aux"}
+          ]
+        },
+        {
+          "name": "u_crg",
+          "full_name": "top.u_tile.u_crg",
+          "module": "crg_core",
+          "file": "rs_top.sv",
+          "line": 2,
+          "ports": {},
+          "clk_sources": []
+        }
+      ]
+    }
+  },
+  "warnings": []
+}
+
