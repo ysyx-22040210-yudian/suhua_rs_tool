@@ -191,4 +191,4 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-验证结果：42 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+验证结果：46 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
