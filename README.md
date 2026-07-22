@@ -15,6 +15,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)
 - [Excel 输入模板](examples/RS_Check_Excel_Template.xlsx)
 
 ## 工程结构
@@ -26,6 +27,7 @@ config/rscheck.example.json
 examples/                可运行的 CSV 与 SystemVerilog 示例
 docs/                    详细使用与测试文档
 tests/                   无 NPI license 也能运行的离线测试
+scripts/                 可复现的 VM/Verdi GUI 端到端测试脚本
 ```
 
 Python 端要求 3.8 或更高版本，没有第三方运行时依赖。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式会被拒绝，以免读取过期缓存值。
@@ -179,6 +181,16 @@ python -m unittest discover -v
 
 离线测试覆盖 XLSX/CSV 解析、列映射、公式/空字段/重复组、实例分组、拍数、模块名、clk/rst、CRG、多源、前缀歧义和报告导出。真实 NPI 编译与设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
+在已登录图形桌面并安装 Verdi/NPI 的 Linux 设备上，可运行完整 GUI 正向链路：
+
+```bash
+export LM_LICENSE_FILE=<port>@<license-host>
+export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+bash scripts/test_vm_verdi_gui.sh
+```
+
+脚本运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。设备相关变量和成功判据见 [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)。
+
 ## 已验证环境
 
 2026-07-22 已在以下环境完成真实构建与端到端验证：
@@ -191,4 +203,6 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-验证结果：46 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+验证结果：47 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+
+2026-07-23 进一步验证了 `scripts/test_vm_verdi_gui.sh` 对图形会话的动态发现、Verdi GUI 启动和窗口检测；Verdi 主窗口成功加载 `top`，同一 elaborated KDB 的在线检查仍为 2 行 PASS、0 error、0 warning。

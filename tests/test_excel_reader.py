@@ -5,6 +5,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from rscheck.config import load_config
 from rscheck.excel_reader import column_letters_to_index, read_spec_rows
 from rscheck.model import ExcelConfig, WorkbookError
 
@@ -163,6 +164,28 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertEqual(rows[0].rs_module, "rs_pipe")
         self.assertEqual(rows[0].step, 2)
         self.assertEqual(rows[0].intf_type, "OUT_IF")
+
+    def test_repository_excel_template_matches_example_csv(self) -> None:
+        config = load_config(ROOT / "config" / "rscheck.example.json").excel
+        xlsx_rows = read_spec_rows(ROOT / "examples" / "RS_Check_Excel_Template.xlsx", config)
+        csv_rows = read_spec_rows(ROOT / "examples" / "specs.csv", config)
+
+        def values(row: object) -> tuple[object, ...]:
+            return tuple(
+                getattr(row, field)
+                for field in (
+                    "intf_type",
+                    "rs_module",
+                    "rs_inst",
+                    "position",
+                    "step",
+                    "clk",
+                    "rst",
+                    "crg_source",
+                )
+            )
+
+        self.assertEqual([values(row) for row in xlsx_rows], [values(row) for row in csv_rows])
 
     def test_formula_in_mapped_cell_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:

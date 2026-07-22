@@ -10,6 +10,10 @@ npi/build/
 output/
 outputs/
 .tmp/
+.env
+.env.*
+!.env.example
+config/*.local.*
 
 # Verdi/NPI generated databases and logs
 *.lib++/
@@ -19,6 +23,14 @@ rs_npi_collectorLog/
 vericomLog/
 elabcomLog/
 *.log
+*.fsdb
+*.vpd
+*.vcd
+core
+core.*
+novas.rc
+novas.conf
+ucli.key
 
 # Desktop metadata
 .DS_Store

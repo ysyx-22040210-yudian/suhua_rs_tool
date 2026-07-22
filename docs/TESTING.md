@@ -10,12 +10,13 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 46 tests`、`OK` |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 47 tests`、`OK` |
 | L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
 | C1 | CentOS + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
 | K1 | CentOS + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | CentOS + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
+| V1 | CentOS + Verdi + X11 | Verdi GUI 加载同一 KDB | `0` | 检测到 Verdi X11 主窗口并显示 `top` |
 | N1 | CentOS + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
 | N2 | CentOS + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
@@ -37,7 +38,7 @@
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 46 项测试
+### 3.1 全量 47 项测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -56,7 +57,7 @@ if ($LASTEXITCODE -ne 0) {
 预期末尾输出：
 
 ```text
-Ran 46 tests in ...
+Ran 47 tests in ...
 
 OK
 ```
@@ -180,7 +181,7 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-预期同样是 `Ran 46 tests` 和 `OK`。
+预期同样是 `Ran 47 tests` 和 `OK`。
 
 可单独运行 elab-only 契约测试：
 
@@ -571,12 +572,12 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 46
+### 14.1 本地测试数量不是 47
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 46。
+- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 47。
 
 ### 14.2 `header validation failed`
 
@@ -637,3 +638,29 @@ work_lib_as_elab.log
 - 确认运行的是当前仓库中的 `rscheck`，而不是系统中已安装的旧版本。
 - 执行 `python3 -c 'import rscheck; print(rscheck.__file__)'` 检查导入位置。
 - 当前生产 CLI 不存在 passthrough；任何恢复任意 NPI 参数转发的改动都应视为安全回归。
+
+## 15. 一键复现 Verdi GUI 正向链路
+
+仓库提供 `scripts/test_vm_verdi_gui.sh`，用于在已登录 GNOME/X11 桌面且安装 Verdi/NPI 的 Linux 设备上自动执行：
+
+1. 全量 Python 测试；
+2. NPI collector 构建和动态库检查；
+3. 在全新目录运行 `vericom` 和 `elabcom`；
+4. 通过 `verdi -elab <kdb.elab++>` 启动 GUI并检测 X11 窗口；
+5. 检查工具只用 `--elab-db <同一kdb.elab++>` 运行在线正例；
+6. 断言 JSON summary 为 2 行通过、0 error、0 warning。
+
+最小运行命令：
+
+```bash
+cd /path/to/suhua_rs_tool
+export VERDI_HOME=/path/to/verdi
+export LM_LICENSE_FILE=<port>@<license-host>
+export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+export GUI_USER=<logged-in-desktop-user>
+bash scripts/test_vm_verdi_gui.sh
+```
+
+脚本不会把 RTL 或 filelist 传给 NPI 检查。`vericom` 仅在准备阶段为仓库示例生成 `work.lib++`，随后 `elabcom` 生成真正的 elaborated KDB；检查命令的设计输入只有 `--elab-db`。
+
+完整的设备变量、预期输出、人工 hierarchy 检查点和 2026-07-23 实测记录见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于被 `.gitignore` 排除的目录，不应提交仓库。
