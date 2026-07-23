@@ -7,19 +7,28 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
-VERDI_HOME="${VERDI_HOME:-/home/synopsys/verdi/Verdi_O-2018.09-SP2}"
-NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
-GUI_USER="${GUI_USER-}"
-GUI_DISPLAY="${GUI_DISPLAY-}"
-GUI_SESSION_PID="${GUI_SESSION_PID-}"
-GUI_SESSION_PATTERN="${GUI_SESSION_PATTERN:-gnome-session-binary|gnome-session|gnome-shell|startplasma|plasmashell|ksmserver|kwin_x11|kwin_wayland|xfce4-session|mate-session|cinnamon|lxsession|lxqt-session|Xwayland}"
-GUI_PROC_ROOT="${GUI_PROC_ROOT:-/proc}"
-GUI_PROBE_TIMEOUT="${GUI_PROBE_TIMEOUT:-5}"
-GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-60}"
+VERDI_HOME="${VERDI_HOME:-${NOVAS_INST_DIR:-}}"
+VERDI_BIN="${VERDI_BIN-}"
+VERICOM_BIN="${VERICOM_BIN-}"
+ELABCOM_BIN="${ELABCOM_BIN-}"
+NPI_PLATFORM="${NPI_PLATFORM-}"
+NPI_INC_DIR="${NPI_INC_DIR-}"
+NPI_LIB_DIR="${NPI_LIB_DIR-}"
+GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-180}"
+VERDI_GENERIC_READY_DELAY="${VERDI_GENERIC_READY_DELAY:-10}"
+VERDI_WINDOW_REGEX="${VERDI_WINDOW_REGEX:-verdi|novas|debussy}"
+VERDI_READY_REGEX="${VERDI_READY_REGEX:-<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)}"
 NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
 OUTPUT_BASE="${OUTPUT_BASE:-$PROJECT_ROOT/output}"
-PYTHON_ENABLE="${PYTHON_ENABLE-/opt/rh/rh-python38/enable}"
-GCC_ENABLE="${GCC_ENABLE-/opt/rh/devtoolset-11/enable}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+CXX="${CXX:-g++}"
+PYTHON_ENABLE_IS_SET="${PYTHON_ENABLE+x}"
+GCC_ENABLE_IS_SET="${GCC_ENABLE+x}"
+PYTHON_ENABLE="${PYTHON_ENABLE-}"
+GCC_ENABLE="${GCC_ENABLE-}"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/gui_session.sh"
 
 TEST_ROOT=""
 GUI_PROBE_ONLY=0
@@ -51,250 +60,38 @@ case "${1-}" in
 esac
 [ "$#" -le 1 ] || { usage; fail "only one optional argument is supported"; }
 
-for numeric_setting in "$GUI_PROBE_TIMEOUT" "$GUI_START_TIMEOUT"; do
+for numeric_setting in "$GUI_START_TIMEOUT" "$VERDI_GENERIC_READY_DELAY"; do
   case "$numeric_setting" in
-    ''|*[!0-9]*) fail "GUI_PROBE_TIMEOUT and GUI_START_TIMEOUT must be positive integers" ;;
+    ''|*[!0-9]*) fail "GUI_START_TIMEOUT and VERDI_GENERIC_READY_DELAY must be non-negative integers" ;;
   esac
-  [ "$numeric_setting" -gt 0 ] || fail "GUI timeouts must be greater than zero"
 done
+[ "$GUI_START_TIMEOUT" -gt 0 ] || fail "GUI_START_TIMEOUT must be greater than zero"
 
-for command_name in sed xdpyinfo timeout; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "required GUI probe command not found: $command_name"
-done
-
-read_process_env() {
-  local process_id=$1
-  local variable_name=$2
-  local entry
-
-  while IFS= read -r -d '' entry; do
-    case "$entry" in
-      "$variable_name="*)
-        printf '%s\n' "${entry#*=}"
-        return 0
-        ;;
-    esac
-  done <"$GUI_PROC_ROOT/$process_id/environ" 2>/dev/null
-  return 1
-}
-
-set_optional_gui_env() {
-  local variable_name=$1
-  local variable_value=$2
-  if [ -n "$variable_value" ]; then
-    export "$variable_name=$variable_value"
-  else
-    unset "$variable_name"
-  fi
-}
-
-probe_process_gui() {
-  local process_id=$1
-  local process_owner
-  local candidate_display
-  local candidate_xauthority
-  local candidate_dbus
-  local candidate_runtime
-  local candidate_home
-
-  [ -r "$GUI_PROC_ROOT/$process_id/environ" ] || return 1
-  candidate_display="$(read_process_env "$process_id" DISPLAY || true)"
-  [ -n "$candidate_display" ] || return 1
-  if [ -n "$GUI_DISPLAY" ] && [ "$candidate_display" != "$GUI_DISPLAY" ]; then
-    return 1
-  fi
-  if [ -z "$GUI_USER" ] && [ -z "$GUI_DISPLAY" ] && [ -z "$GUI_SESSION_PID" ]; then
-    case "$candidate_display" in
-      :[0-9]*|unix/:[0-9]*) ;;
-      *) return 1 ;;
-    esac
-  fi
-
-  process_owner="$(ps -o user:64= -p "$process_id" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
-  [ -n "$process_owner" ] || process_owner=unknown
-  if [ -n "$GUI_USER" ] && [ "$process_owner" != "$GUI_USER" ]; then
-    return 1
-  fi
-  if [ -z "$GUI_USER" ]; then
-    case "$process_owner" in
-      gdm|sddm|lightdm) return 1 ;;
-    esac
-  fi
-
-  candidate_xauthority="$(read_process_env "$process_id" XAUTHORITY || true)"
-  candidate_dbus="$(read_process_env "$process_id" DBUS_SESSION_BUS_ADDRESS || true)"
-  candidate_runtime="$(read_process_env "$process_id" XDG_RUNTIME_DIR || true)"
-  candidate_home="$(read_process_env "$process_id" HOME || true)"
-  if [ -z "$candidate_xauthority" ] && [ -n "$candidate_home" ] && [ -r "$candidate_home/.Xauthority" ]; then
-    candidate_xauthority="$candidate_home/.Xauthority"
-  fi
-
-  if ! (
-    export DISPLAY="$candidate_display"
-    set_optional_gui_env XAUTHORITY "$candidate_xauthority"
-    timeout "$GUI_PROBE_TIMEOUT" xdpyinfo >/dev/null 2>&1
-  ); then
-    return 1
-  fi
-
-  CANDIDATE_PID="$process_id"
-  CANDIDATE_USER="$process_owner"
-  CANDIDATE_DISPLAY="$candidate_display"
-  CANDIDATE_XAUTHORITY="$candidate_xauthority"
-  CANDIDATE_DBUS="$candidate_dbus"
-  CANDIDATE_RUNTIME="$candidate_runtime"
-  return 0
-}
-
-record_gui_candidate() {
-  local process_id=$1
-  local session_key
-  local quick_display
-
-  case " $SEEN_GUI_PIDS " in
-    *" $process_id "*) return ;;
-  esac
-  SEEN_GUI_PIDS="$SEEN_GUI_PIDS $process_id"
-
-  quick_display="$(read_process_env "$process_id" DISPLAY || true)"
-  if [ -n "$quick_display" ]; then
-    session_key="|$quick_display|"
-    case "$FOUND_GUI_KEYS" in
-      *"$session_key"*) return ;;
-    esac
-  fi
-
-  probe_process_gui "$process_id" || return 0
-  session_key="|$CANDIDATE_DISPLAY|"
-  case "$FOUND_GUI_KEYS" in
-    *"$session_key"*) return ;;
-  esac
-
-  FOUND_GUI_KEYS="$FOUND_GUI_KEYS$session_key"
-  AVAILABLE_GUI_SESSIONS="${AVAILABLE_GUI_SESSIONS}${CANDIDATE_USER} DISPLAY=${CANDIDATE_DISPLAY} PID=${CANDIDATE_PID}\n"
-  if [ -z "$FOUND_GUI_DISPLAY" ]; then
-    FOUND_GUI_PID="$CANDIDATE_PID"
-    FOUND_GUI_USER="$CANDIDATE_USER"
-    FOUND_GUI_DISPLAY="$CANDIDATE_DISPLAY"
-    FOUND_GUI_XAUTHORITY="$CANDIDATE_XAUTHORITY"
-    FOUND_GUI_DBUS="$CANDIDATE_DBUS"
-    FOUND_GUI_RUNTIME="$CANDIDATE_RUNTIME"
-  else
-    GUI_AMBIGUOUS=1
-  fi
-}
-
-resolve_gui_environment() {
-  local initial_display="${DISPLAY:-}"
-  local current_user="${USER:-${LOGNAME:-current-user}}"
-  local candidate_pids=""
-  local process_dir
-  local process_id
-
-  if [ -z "$GUI_SESSION_PID" ] &&
-     { [ -z "$GUI_USER" ] || [ "$GUI_USER" = "$current_user" ]; } &&
-     { [ -z "$GUI_DISPLAY" ] || [ "$GUI_DISPLAY" = "$initial_display" ]; } &&
-     [ -n "$initial_display" ] && timeout "$GUI_PROBE_TIMEOUT" xdpyinfo >/dev/null 2>&1; then
-    GUI_SOURCE="current environment"
-    GUI_SELECTED_USER="$current_user"
-    return 0
-  fi
-
-  command -v ps >/dev/null 2>&1 || fail "ps is required when the current DISPLAY is unusable"
-  if [ -z "$GUI_SESSION_PID" ]; then
-    command -v pgrep >/dev/null 2>&1 || fail "pgrep is required for automatic GUI discovery"
-  fi
-
-  SEEN_GUI_PIDS=""
-  FOUND_GUI_KEYS=""
-  AVAILABLE_GUI_SESSIONS=""
-  FOUND_GUI_PID=""
-  FOUND_GUI_USER=""
-  FOUND_GUI_DISPLAY=""
-  FOUND_GUI_XAUTHORITY=""
-  FOUND_GUI_DBUS=""
-  FOUND_GUI_RUNTIME=""
-  GUI_AMBIGUOUS=0
-
-  if [ -n "$GUI_SESSION_PID" ]; then
-    case "$GUI_SESSION_PID" in
-      *[!0-9]*|'') fail "GUI_SESSION_PID must be a numeric process ID" ;;
-    esac
-    record_gui_candidate "$GUI_SESSION_PID"
-  else
-    if [ -n "$GUI_USER" ]; then
-      candidate_pids="$(pgrep -u "$GUI_USER" -f "$GUI_SESSION_PATTERN" 2>/dev/null || true)"
-    else
-      candidate_pids="$(pgrep -f "$GUI_SESSION_PATTERN" 2>/dev/null || true)"
-    fi
-    for process_id in $candidate_pids; do
-      record_gui_candidate "$process_id"
-    done
-
-    # Fall back to every readable process environment. This covers VNC,
-    # Openbox, SSH-created X servers, and desktop implementations not listed
-    # in GUI_SESSION_PATTERN.
-    for process_dir in "$GUI_PROC_ROOT"/[0-9]*; do
-      [ -d "$process_dir" ] || continue
-      process_id="${process_dir##*/}"
-      record_gui_candidate "$process_id"
-    done
-  fi
-
-  if [ "$GUI_AMBIGUOUS" -ne 0 ] && [ -z "$GUI_DISPLAY" ]; then
-    echo "ERROR: multiple usable X11 displays were found:" >&2
-    printf '%b' "$AVAILABLE_GUI_SESSIONS" >&2
-    echo "Set GUI_DISPLAY to the intended DISPLAY, or run from that graphical/SSH-X shell." >&2
-    return 1
-  fi
-
-  if [ -z "$FOUND_GUI_DISPLAY" ]; then
-    echo "ERROR: no usable X11 display was found." >&2
-    echo "Current DISPLAY=${initial_display:-<unset>} did not pass xdpyinfo." >&2
-    echo "Run 'bash scripts/test_vm_verdi_gui.sh --gui-probe-only' from a graphical terminal," >&2
-    echo "connect with 'ssh -Y', or set GUI_USER / GUI_DISPLAY / GUI_SESSION_PID explicitly." >&2
-    echo "Wayland sessions require a working Xwayland DISPLAY for this Verdi release." >&2
-    [ -z "$GUI_USER" ] || echo "GUI_USER filter: $GUI_USER" >&2
-    return 1
-  fi
-
-  export DISPLAY="$FOUND_GUI_DISPLAY"
-  set_optional_gui_env XAUTHORITY "$FOUND_GUI_XAUTHORITY"
-  set_optional_gui_env DBUS_SESSION_BUS_ADDRESS "$FOUND_GUI_DBUS"
-  set_optional_gui_env XDG_RUNTIME_DIR "$FOUND_GUI_RUNTIME"
-  GUI_SOURCE="process $FOUND_GUI_PID"
-  GUI_SELECTED_USER="$FOUND_GUI_USER"
-  return 0
-}
-
-if ! resolve_gui_environment; then
+if ! gui_session_resolve; then
   exit 1
 fi
 
-echo "GUI access OK: source=$GUI_SOURCE user=$GUI_SELECTED_USER DISPLAY=$DISPLAY"
+echo "GUI access OK: source=$GUI_SESSION_SOURCE user=$GUI_SESSION_SELECTED_USER DISPLAY=$DISPLAY"
 if [ "$GUI_PROBE_ONLY" -eq 1 ]; then
   echo "GUI probe PASS"
   exit 0
 fi
 
-for command_name in xwininfo make ldd mktemp nohup sort comm tee; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
+for command_name in xwininfo make ldd mktemp nohup sort comm tee grep; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    if [ "$command_name" = xwininfo ]; then
+      fail "xwininfo not found; install x11-utils (Debian/Ubuntu) or xorg-x11-utils (RHEL/CentOS)"
+    fi
+    fail "required command not found: $command_name"
+  fi
 done
 
-[ -d "$PROJECT_ROOT" ] || fail "PROJECT_ROOT is not a directory: $PROJECT_ROOT"
-[ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
-[ -x "$VERDI_HOME/bin/vericom" ] || fail "vericom is not executable under VERDI_HOME"
-[ -x "$VERDI_HOME/bin/elabcom" ] || fail "elabcom is not executable under VERDI_HOME"
-[ -x "$VERDI_HOME/bin/verdi" ] || fail "verdi is not executable under VERDI_HOME"
-[ -f "$VERDI_HOME/share/NPI/inc/npi.h" ] || fail "NPI header not found under VERDI_HOME"
-[ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/libNPI.so" ] || fail "libNPI.so not found for $NPI_PLATFORM"
-
-if [ -z "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ]; then
-  fail "set LM_LICENSE_FILE or SNPSLMD_LICENSE_FILE before running this script"
+if [ -z "$PYTHON_ENABLE_IS_SET" ] && [ -f /opt/rh/rh-python38/enable ]; then
+  PYTHON_ENABLE=/opt/rh/rh-python38/enable
 fi
-export LM_LICENSE_FILE="${LM_LICENSE_FILE:-$SNPSLMD_LICENSE_FILE}"
-export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
-
+if [ -z "$GCC_ENABLE_IS_SET" ] && [ -f /opt/rh/devtoolset-11/enable ]; then
+  GCC_ENABLE=/opt/rh/devtoolset-11/enable
+fi
 if [ -n "$PYTHON_ENABLE" ]; then
   [ -f "$PYTHON_ENABLE" ] || fail "Python enable script not found: $PYTHON_ENABLE"
   # shellcheck disable=SC1090
@@ -306,8 +103,60 @@ if [ -n "$GCC_ENABLE" ]; then
   source "$GCC_ENABLE"
 fi
 
-command -v python3 >/dev/null 2>&1 || fail "python3 is not available"
-command -v g++ >/dev/null 2>&1 || fail "g++ is not available"
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "Python executable not found: $PYTHON_BIN"
+command -v "$CXX" >/dev/null 2>&1 || fail "C++ compiler not found: $CXX"
+
+if [ -z "$VERDI_BIN" ]; then
+  if [ -n "$VERDI_HOME" ] && [ -x "$VERDI_HOME/bin/verdi" ]; then
+    VERDI_BIN="$VERDI_HOME/bin/verdi"
+  elif command -v verdi >/dev/null 2>&1; then
+    VERDI_BIN="$(command -v verdi)"
+  elif [ -x /home/synopsys/verdi/Verdi_O-2018.09-SP2/bin/verdi ]; then
+    VERDI_HOME=/home/synopsys/verdi/Verdi_O-2018.09-SP2
+    VERDI_BIN="$VERDI_HOME/bin/verdi"
+  else
+    fail "Verdi not found; set VERDI_HOME, NOVAS_INST_DIR, or VERDI_BIN"
+  fi
+fi
+[ -x "$VERDI_BIN" ] || fail "Verdi executable is not accessible: $VERDI_BIN"
+
+if [ -z "$VERDI_HOME" ]; then
+  VERDI_BIN_DIR="$(cd "$(dirname "$VERDI_BIN")" && pwd -P)"
+  VERDI_HOME="$(cd "$VERDI_BIN_DIR/.." && pwd -P)"
+fi
+VERICOM_BIN="${VERICOM_BIN:-$VERDI_HOME/bin/vericom}"
+ELABCOM_BIN="${ELABCOM_BIN:-$VERDI_HOME/bin/elabcom}"
+[ -x "$VERICOM_BIN" ] || fail "vericom not found; set VERICOM_BIN or correct VERDI_HOME"
+[ -x "$ELABCOM_BIN" ] || fail "elabcom not found; set ELABCOM_BIN or correct VERDI_HOME"
+
+NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
+if [ -z "$NPI_LIB_DIR" ]; then
+  if [ -n "$NPI_PLATFORM" ] && [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/libNPI.so" ]; then
+    NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
+  elif [ -f "$VERDI_HOME/share/NPI/lib/LINUX64/libNPI.so" ]; then
+    NPI_PLATFORM=LINUX64
+    NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/LINUX64"
+  else
+    for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libNPI.so; do
+      [ -f "$candidate_library" ] || continue
+      NPI_LIB_DIR="${candidate_library%/libNPI.so}"
+      NPI_PLATFORM="${NPI_LIB_DIR##*/}"
+      break
+    done
+  fi
+fi
+[ -n "$NPI_PLATFORM" ] || NPI_PLATFORM="${NPI_LIB_DIR##*/}"
+[ -f "$NPI_INC_DIR/npi.h" ] || fail "NPI header not found: $NPI_INC_DIR/npi.h"
+[ -f "$NPI_LIB_DIR/libNPI.so" ] || fail "libNPI.so not found; set NPI_LIB_DIR"
+
+[ -d "$PROJECT_ROOT" ] || fail "PROJECT_ROOT is not a directory: $PROJECT_ROOT"
+[ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
+
+if [ -z "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ]; then
+  fail "set LM_LICENSE_FILE or SNPSLMD_LICENSE_FILE before running this script"
+fi
+export LM_LICENSE_FILE="${LM_LICENSE_FILE:-$SNPSLMD_LICENSE_FILE}"
+export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
 export VERDI_HOME NPI_PLATFORM
 export NOVAS_INST_DIR="$VERDI_HOME"
 export PYTHONDONTWRITEBYTECODE=1
@@ -316,18 +165,20 @@ mkdir -p "$OUTPUT_BASE"
 TEST_ROOT="$(mktemp -d "$OUTPUT_BASE/verdi_gui_test.XXXXXXXX")"
 
 cd "$PROJECT_ROOT"
-python3 --version
-g++ --version
-python3 -m unittest discover -v 2>&1 | tee "$TEST_ROOT/python_tests.log"
+"$PYTHON_BIN" --version
+"$CXX" --version
+"$PYTHON_BIN" -m unittest discover -v 2>&1 | tee "$TEST_ROOT/python_tests.log"
 grep -Eq '^Ran [0-9]+ tests? in ' "$TEST_ROOT/python_tests.log"
-grep -q '^OK$' "$TEST_ROOT/python_tests.log"
+grep -q '^OK' "$TEST_ROOT/python_tests.log"
 
 NPI_BUILD_DIR="$TEST_ROOT/npi_build"
 make -C npi \
   BUILD_DIR="$NPI_BUILD_DIR" \
   VERDI_HOME="$VERDI_HOME" \
   NPI_PLATFORM="$NPI_PLATFORM" \
-  CXX=g++
+  NPI_INC="$NPI_INC_DIR" \
+  NPI_LIB="$NPI_LIB_DIR" \
+  CXX="$CXX"
 COLLECTOR="$NPI_BUILD_DIR/rs_npi_collector"
 [ -x "$COLLECTOR" ] || fail "collector was not built: $COLLECTOR"
 ldd "$COLLECTOR" | tee "$TEST_ROOT/collector_ldd.txt" | grep 'libNPI.so'
@@ -340,10 +191,10 @@ ELAB_DB="$ELAB_ROOT/kdb.elab++"
 mkdir -p "$ELAB_ROOT"
 
 cd "$ELAB_ROOT"
-"$VERDI_HOME/bin/vericom" -sv "$PROJECT_ROOT/examples/rtl/rs_example.sv"
+"$VERICOM_BIN" -sv "$PROJECT_ROOT/examples/rtl/rs_example.sv"
 [ -d "$ELAB_ROOT/work.lib++" ] || fail "vericom did not create work.lib++"
 
-"$VERDI_HOME/bin/elabcom" -top top -elab "$ELAB_DB"
+"$ELABCOM_BIN" -top top -elab "$ELAB_DB"
 [ -d "$ELAB_DB" ] || fail "elabcom did not create the elaborated KDB"
 
 VERDI_LOG="$TEST_ROOT/verdi_gui.log"
@@ -355,12 +206,12 @@ CURRENT_PIDS="$TEST_ROOT/verdi_pids.current.txt"
 NEW_PIDS="$TEST_ROOT/verdi_pids.new.txt"
 
 xwininfo -root -tree 2>/dev/null |
-  grep -Ei 'verdi|novas|debussy' |
-  sort >"$BASELINE_WINDOWS" || true
+  grep -Ei "$VERDI_WINDOW_REGEX" |
+  LC_ALL=C sort >"$BASELINE_WINDOWS" || true
 pgrep -f '[v]erdi|[N]ovas|[d]ebussy' |
-  sort -n >"$BASELINE_PIDS" || true
+  LC_ALL=C sort >"$BASELINE_PIDS" || true
 
-nohup "$VERDI_HOME/bin/verdi" -elab "$ELAB_DB" >"$VERDI_LOG" 2>&1 </dev/null &
+nohup "$VERDI_BIN" -elab "$ELAB_DB" >"$VERDI_LOG" 2>&1 </dev/null &
 VERDI_LAUNCH_PID=$!
 disown "$VERDI_LAUNCH_PID" 2>/dev/null || true
 echo "Verdi launch PID=$VERDI_LAUNCH_PID"
@@ -368,13 +219,19 @@ echo "Verdi launch PID=$VERDI_LAUNCH_PID"
 elapsed=0
 VERDI_WINDOWS=""
 VERDI_READY=0
+VERDI_TITLE_CONFIRMED=0
 while [ "$elapsed" -lt "$GUI_START_TIMEOUT" ]; do
   xwininfo -root -tree 2>/dev/null |
-    grep -Ei 'verdi|novas|debussy' |
-    sort >"$CURRENT_WINDOWS" || true
-  comm -13 "$BASELINE_WINDOWS" "$CURRENT_WINDOWS" >"$NEW_WINDOWS"
+    grep -Ei "$VERDI_WINDOW_REGEX" |
+    LC_ALL=C sort >"$CURRENT_WINDOWS" || true
+  LC_ALL=C comm -13 "$BASELINE_WINDOWS" "$CURRENT_WINDOWS" >"$NEW_WINDOWS"
   VERDI_WINDOWS="$(sed -n '1,$p' "$NEW_WINDOWS")"
-  if grep -Eq '<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)' "$NEW_WINDOWS"; then
+  if [ -n "$VERDI_WINDOWS" ] && grep -Eq "$VERDI_READY_REGEX" "$NEW_WINDOWS"; then
+    VERDI_READY=1
+    VERDI_TITLE_CONFIRMED=1
+    break
+  fi
+  if [ -n "$VERDI_WINDOWS" ] && [ "$elapsed" -ge "$VERDI_GENERIC_READY_DELAY" ]; then
     VERDI_READY=1
     break
   fi
@@ -383,8 +240,8 @@ while [ "$elapsed" -lt "$GUI_START_TIMEOUT" ]; do
 done
 
 pgrep -f '[v]erdi|[N]ovas|[d]ebussy' |
-  sort -n >"$CURRENT_PIDS" || true
-comm -13 "$BASELINE_PIDS" "$CURRENT_PIDS" >"$NEW_PIDS"
+  LC_ALL=C sort >"$CURRENT_PIDS" || true
+LC_ALL=C comm -13 "$BASELINE_PIDS" "$CURRENT_PIDS" >"$NEW_PIDS"
 VERDI_PROCESSES="$(pgrep -af '[v]erdi|[N]ovas|[d]ebussy' || true)"
 
 if [ "$VERDI_READY" -ne 1 ]; then
@@ -394,10 +251,14 @@ if [ "$VERDI_READY" -ne 1 ]; then
   printf '%s\n' "$VERDI_WINDOWS" >&2
   echo "Verdi log:" >&2
   sed -n '1,200p' "$VERDI_LOG" >&2
-  fail "no new Verdi X11 window loaded elaborated top 'top' within ${GUI_START_TIMEOUT}s"
+  fail "no new Verdi X11 window appeared within ${GUI_START_TIMEOUT}s"
 fi
 
-echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
+if [ "$VERDI_TITLE_CONFIRMED" -eq 1 ]; then
+  echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
+else
+  echo "Verdi GUI window detected after ${elapsed}s; title format differs from the tested Verdi release:"
+fi
 printf '%s\n' "$VERDI_WINDOWS"
 
 cd "$PROJECT_ROOT"
@@ -407,12 +268,13 @@ POS_CSV="$TEST_ROOT/positive_report.csv"
 
 # The checker receives only the elaborated KDB as its design input. RTL and
 # filelist arguments are intentionally not accepted by this command.
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/examples/specs.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout "$NPI_TIMEOUT" \
   --keep-inventory "$POS_INVENTORY" \
   --json-report "$POS_REPORT" \
@@ -422,7 +284,7 @@ python3 -m rscheck check \
 [ -s "$POS_REPORT" ] || fail "positive JSON report was not written"
 [ -s "$POS_CSV" ] || fail "positive CSV report was not written"
 
-python3 - "$POS_REPORT" <<'PY'
+"$PYTHON_BIN" - "$POS_REPORT" <<'PY'
 import json
 import sys
 

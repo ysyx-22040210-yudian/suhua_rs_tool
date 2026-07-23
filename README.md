@@ -27,7 +27,7 @@ config/rscheck.example.json
 examples/                可运行的 CSV 与 SystemVerilog 示例
 docs/                    详细使用与测试文档
 tests/                   无 NPI license 也能运行的离线测试
-scripts/                 可复现的 VM/Verdi GUI 端到端测试脚本
+scripts/                 跨设备 Verdi GUI 启动器和端到端测试脚本
 ```
 
 Python 端要求 3.8 或更高版本，没有第三方运行时依赖。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式会被拒绝，以免读取过期缓存值。
@@ -110,6 +110,20 @@ CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。JSON 报告包含匹配
 make -C npi VERDI_HOME=/path/to/verdi NPI_PLATFORM=LINUX64
 ```
 
+非标准安装布局可显式指定头文件和库目录：
+
+```bash
+: "${VERDI_HOME:?set VERDI_HOME in the current shell}"
+: "${NPI_INC_DIR:?set NPI_INC_DIR in the current shell}"
+: "${NPI_LIB_DIR:?set NPI_LIB_DIR in the current shell}"
+make -C npi \
+  VERDI_HOME="$VERDI_HOME" \
+  NPI_INC="$NPI_INC_DIR" \
+  NPI_LIB="$NPI_LIB_DIR"
+```
+
+GNU Make 会按空白拆分目标名，因此仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；Makefile 会对此提前报错。该限制只影响 collector/端到端构建，独立 GUI 启动器仍支持 KDB 路径包含空格。
+
 构建产物默认位于 `npi/build/rs_npi_collector`。采集器使用手册中的 `npi_init`、`npi_load_design`、`npi_handle_by_name`、`npiInternalScope`、`npiPort`、`npiHighConn`，并用 Netlist Model 的 `npiNlDriver` 追踪 clk 驱动。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。
 
 运行前设置 `VERDI_HOME`。Python runner 会自动把对应 NPI library 目录加入采集器子进程的 `LD_LIBRARY_PATH`：
@@ -156,6 +170,32 @@ python -m rscheck check \
 
 旧的 `-- -f ...`、`-- -sv ...`、`-- -lib ...` 和其他任意参数透传会被拒绝，防止在线检查绕过 elab 库直接重新编译 RTL。
 
+## 跨设备启动 Verdi GUI
+
+`rscheck` 本身是 CLI；需要查看层次时，用仓库内的启动器打开同一个 elaborated KDB。启动器只执行 `verdi -elab <KDB>`，不接受 RTL、filelist、`work.lib++`、`-top` 或任意参数透传：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/launch_verdi_gui.sh --probe-only
+
+export ELAB_DB=/absolute/path/to/kdb.elab++
+bash scripts/launch_verdi_gui.sh --elab-db "$ELAB_DB"
+```
+
+默认以前台方式运行，关闭 Verdi 后命令才返回。需要让命令立即返回时使用后台模式：
+
+```bash
+bash scripts/launch_verdi_gui.sh \
+  --elab-db "$ELAB_DB" \
+  --background
+```
+
+GUI 可以来自本地图形终端、VNC/XRDP 桌面，或客户端已运行 X server 的 `ssh -Y` 会话。GNOME 不是必需条件；KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 桌面均可使用。Wayland 桌面必须启用 Xwayland，因为 Verdi 是 X11 应用。Debian/Ubuntu 安装 `x11-utils`，RHEL/CentOS 安装 `xorg-x11-utils`，以提供 `xdpyinfo`/`xwininfo`。
+
+应优先由图形会话所属用户运行，并确保该用户能读取仓库和 KDB。root 从其他用户进程恢复 GUI 环境只作为旧部署兼容回退，可能受 SELinux、`hidepid` 和 Xauthority 权限限制。
+
+Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI 选择可通过 `GUI_USER`、`GUI_DISPLAY`、`GUI_XAUTHORITY`、`GUI_SESSION_PID` 覆盖。完整测试脚本还支持 `PYTHON_BIN`、`CXX`、`NPI_INC_DIR`、`NPI_LIB_DIR`。详细矩阵和可复制命令见 [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)。
+
 ## 退出码
 
 | 退出码 | 含义 |
@@ -184,17 +224,18 @@ python -m unittest discover -v
 在已登录图形桌面并安装 Verdi/NPI 的 Linux 设备上，可运行完整 GUI 正向链路：
 
 ```bash
-export LM_LICENSE_FILE=<port>@<license-host>
-export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
-bash scripts/test_vm_verdi_gui.sh --gui-probe-only
+: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE in the current shell}"
+export LM_LICENSE_FILE
+export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
+bash scripts/launch_verdi_gui.sh --probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
 
-GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则自动扫描 GNOME、KDE、Xfce、Wayland/Xwayland 和其他进程环境；不再要求固定的桌面用户名或 `gnome-session-binary`。脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。设备相关变量和成功判据见 [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)。
+GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。完整脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。
 
 ## 已验证环境
 
-2026-07-22 已在以下环境完成真实构建与端到端验证：
+2026-07-24 已在以下环境完成真实构建与端到端验证：
 
 ```text
 CentOS 7.9
@@ -204,6 +245,4 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-验证结果：53 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
-
-2026-07-23 进一步验证了 `scripts/test_vm_verdi_gui.sh` 对图形会话的动态发现、Verdi GUI 启动和窗口检测；Verdi 主窗口成功加载 `top`，同一 elaborated KDB 的在线检查仍为 2 行 PASS、0 error、0 warning。
+64 项全量测试和 17 项 GUI 定向测试全部通过。未设置 GUI 选择变量时自动发现 `DISPLAY=:0`，Verdi 在 2 秒内出现窗口，独立 launcher 成功打开真实 elaborated KDB；同一 KDB 的在线 NPI 检查为 2 行 PASS、0 error、0 warning。错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。

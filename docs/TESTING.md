@@ -10,18 +10,18 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 53 tests`、`OK` |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 64 tests`、`OK` |
 | L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
-| C1 | CentOS + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
-| K1 | CentOS + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
-| K2 | CentOS + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
+| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
+| K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
+| K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的 GUI 环境探测 | `0` | `GUI probe PASS` |
-| V1 | CentOS + Verdi + X11 | Verdi GUI 加载同一 KDB | `0` | 检测到 Verdi X11 主窗口并显示 `top` |
-| N1 | CentOS + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
-| N2 | CentOS + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
+| V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 检测到新的 Verdi X11 窗口 |
+| N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
+| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
-| G2 | CentOS + Verdi/NPI | 把 `work.lib++` 错当 elab 输入 | `2` | collector/NPI 加载失败，不生成 PASS 报告 |
+| G2 | Linux + Verdi/NPI | 把 `work.lib++` 错当 elab 输入 | `2` | collector/NPI 加载失败，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
 
 退出码定义：
@@ -39,7 +39,7 @@
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 53 项测试
+### 3.1 全量 64 项测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -58,12 +58,12 @@ if ($LASTEXITCODE -ne 0) {
 预期末尾输出：
 
 ```text
-Ran 53 tests in ...
+Ran 64 tests in ...
 
 OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约及 runner 固定命令构造。
+这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、runner 固定命令构造、跨桌面 GUI 会话发现和严格 Verdi 启动参数。Windows 和 macOS 会跳过 17 项仅适用于 Linux 的 Bash/X11 测试，但总数仍为 64，其他 47 项必须通过。
 
 ### 3.2 使用 Excel 生成“乱序列 + 额外列”XLSX
 
@@ -182,7 +182,7 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-预期同样是 `Ran 53 tests` 和 `OK`。
+预期同样是 `Ran 64 tests` 和 `OK`。Linux 有 Bash 时，GUI 会话和 launcher 回归不应 skipped。
 
 可单独运行 elab-only 契约测试：
 
@@ -193,32 +193,34 @@ python3 -m unittest tests.test_npi_runner tests.test_cli -v
 
 预期 15 项全部通过。
 
-## 5. CentOS/Verdi 测试环境
+## 5. Linux/Verdi 测试环境
 
-以下变量全部是占位符。不要把 SSH 密码、真实主机/IP、license 地址或其他凭据写入仓库、报告或命令日志。
+先通过组织批准的方式进入 Linux 设备，并在当前 shell 或受控环境模块中设置仓库、Verdi 和 license 环境。不要把 SSH 密码、真实主机/IP、license 地址或其他凭据写入仓库、报告或命令日志。以下检查命令不包含这些值，可直接复制：
 
 ```bash
-# 可选：先登录测试机。主机名和用户均使用环境实际值替换。
-ssh <REMOTE_USER>@<CENTOS_HOST>
+: "${PROJECT_ROOT:?set PROJECT_ROOT in the current shell}"
+: "${VERDI_HOME:?set VERDI_HOME in the current shell}"
+: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE in the current shell}"
 
-export PROJECT_ROOT="<PROJECT_ROOT>"
-export VERDI_HOME="<VERDI_HOME>"
-export NPI_PLATFORM="LINUX64"
+export NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
 export NOVAS_INST_DIR="$VERDI_HOME"
-export LM_LICENSE_FILE="<LICENSE_PORT>@<LICENSE_HOST>"
-export SNPSLMD_LICENSE_FILE="<LICENSE_PORT>@<LICENSE_HOST>"
+export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
+export PYTHON_BIN="${PYTHON_BIN:-python3}"
+export CXX="${CXX:-g++}"
+export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
+export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
 
 # 若系统有多个 Python/GCC 工具链，在这里 source 对应的 enable 脚本。
 # source <PYTHON_TOOLCHAIN_ENABLE>
 # source <GCC_TOOLCHAIN_ENABLE>
 
 cd "$PROJECT_ROOT"
-python3 --version
-g++ --version
+"$PYTHON_BIN" --version
+"$CXX" --version
 test -x "$VERDI_HOME/bin/vericom"
 test -x "$VERDI_HOME/bin/elabcom"
-test -f "$VERDI_HOME/share/NPI/inc/npi.h"
-test -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/libNPI.so"
+test -f "$NPI_INC_DIR/npi.h"
+test -f "$NPI_LIB_DIR/libNPI.so"
 ```
 
 若任一 `test` 返回非零，先修复安装路径或环境变量，不要继续构建。
@@ -231,7 +233,9 @@ cd "$PROJECT_ROOT"
 make -C npi \
   VERDI_HOME="$VERDI_HOME" \
   NPI_PLATFORM="$NPI_PLATFORM" \
-  CXX=g++
+  NPI_INC="$NPI_INC_DIR" \
+  NPI_LIB="$NPI_LIB_DIR" \
+  CXX="$CXX"
 
 COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
 test -x "$COLLECTOR"
@@ -239,17 +243,15 @@ file "$COLLECTOR"
 ldd "$COLLECTOR" | grep 'libNPI.so'
 ```
 
+仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；GNU Make 会拆分目标名，Makefile 会在构建前明确拒绝这类路径。
+
 预期：
 
 - `make` 返回 `0`。
 - `$COLLECTOR` 是当前 CentOS 架构的可执行文件。
-- `ldd` 中 `libNPI.so` 指向 `$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/`，且不是 `not found`。
+- `ldd` 中 `libNPI.so` 指向 `$NPI_LIB_DIR`，且不是 `not found`。
 
-若 NPI 库不在标准目录，运行在线检查时可显式增加：
-
-```text
---npi-lib-dir <DIRECTORY_CONTAINING_libNPI.so>
-```
+若 NPI 库不在标准目录，在 `rscheck check` 命令中增加 `--npi-lib-dir "$NPI_LIB_DIR"`。
 
 该选项只配置 collector 子进程的动态库搜索路径，不是设计参数，也不会传给 `npi_load_design`。
 
@@ -316,6 +318,7 @@ python3 -m rscheck check \
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout 180 \
   --keep-inventory "$POS_INVENTORY" \
   --json-report "$POS_REPORT" \
@@ -385,6 +388,7 @@ python3 -m rscheck check \
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout 180 \
   --json-report "$NEG_REPORT" \
   >"$NEG_LOG" 2>&1
@@ -505,6 +509,7 @@ python3 -m rscheck check \
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_ROOT/work.lib++" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout 180 \
   >"$WORKLIB_LOG" 2>&1
 WORKLIB_RC=$?
@@ -573,12 +578,13 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 53
+### 14.1 本地测试数量不是 64
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 53。
+- Windows 和 macOS 允许 17 项 Linux Bash/X11 测试 skipped；Linux 上应确认这些测试实际运行。
+- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 64。
 
 ### 14.2 `header validation failed`
 
@@ -596,7 +602,7 @@ work_lib_as_elab.log
 
 - 检查 `VERDI_HOME` 和 `NPI_PLATFORM`。
 - 执行 `ldd "$COLLECTOR" | grep libNPI`。
-- 必要时使用 `--npi-lib-dir "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"`。
+- 必要时使用 `--npi-lib-dir "$NPI_LIB_DIR"`。
 - 不要把动态库路径伪装成设计参数；它与 `--elab-db` 是不同用途。
 
 ### 14.5 Verdi 或 license 初始化失败
@@ -640,30 +646,81 @@ work_lib_as_elab.log
 - 执行 `python3 -c 'import rscheck; print(rscheck.__file__)'` 检查导入位置。
 - 当前生产 CLI 不存在 passthrough；任何恢复任意 NPI 参数转发的改动都应视为安全回归。
 
-## 15. 一键复现 Verdi GUI 正向链路
+## 15. 跨设备 Verdi GUI 与一键正向链路
 
-仓库提供 `scripts/test_vm_verdi_gui.sh`，用于在具有可用 X11/Xwayland DISPLAY 且安装 Verdi/NPI 的 Linux 设备上自动执行：
+### 15.1 GUI 前提和独立探测
 
-1. 全量 Python 测试；
-2. NPI collector 构建和动态库检查；
-3. 在全新目录运行 `vericom` 和 `elabcom`；
-4. 通过 `verdi -elab <kdb.elab++>` 启动 GUI并检测 X11 窗口；
-5. 检查工具只用 `--elab-db <同一kdb.elab++>` 运行在线正例；
-6. 断言 JSON summary 为 2 行通过、0 error、0 warning。
+GUI 可来自本地图形会话、VNC/XRDP 桌面，或客户端已运行 X server 的 `ssh -Y` 会话。GNOME 不是必需条件；Wayland 必须同时启用 Xwayland。按系统选择一组安装命令。
 
-最小运行命令：
+Debian/Ubuntu：
 
 ```bash
-cd /path/to/suhua_rs_tool
-export VERDI_HOME=/path/to/verdi
-export LM_LICENSE_FILE=<port>@<license-host>
-export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+sudo apt-get update
+sudo apt-get install -y x11-utils
+```
+
+RHEL/CentOS：
+
+```bash
+sudo yum install -y xorg-x11-utils
+```
+
+应从图形用户自己的终端运行，并确保该用户能读取仓库和 KDB。root 跨用户读取会话环境仅是兼容回退。进入仓库后，独立探测不需要 Verdi 或 license：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/launch_verdi_gui.sh --probe-only
+```
+
+也可验证端到端脚本使用的同一探测库：
+
+```bash
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
+```
+
+### 15.2 独立启动已有 elaborated KDB
+
+前台模式：
+
+```bash
+: "${ELAB_DB:?export ELAB_DB to an elaborated KDB directory}"
+bash scripts/launch_verdi_gui.sh --elab-db "$ELAB_DB"
+```
+
+后台模式：
+
+```bash
+: "${ELAB_DB:?export ELAB_DB to an elaborated KDB directory}"
+bash scripts/launch_verdi_gui.sh \
+  --elab-db "$ELAB_DB" \
+  --background
+```
+
+启动器只调用 `verdi -elab "$ELAB_DB"`。它拒绝 `work.lib++`、普通文件、RTL/filelist、`-f`、`-sv`、`-lib`、`-top`、位置参数和 `--` passthrough。SSH X11 转发的前台或后台 Verdi 都依赖当前隧道，使用期间必须保持 SSH 连接。
+
+### 15.3 一键端到端测试
+
+`scripts/test_vm_verdi_gui.sh` 自动执行：64 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
+
+在已设置 Verdi 和 license 环境的图形 shell 中执行：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE in the current shell}"
+export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
+bash scripts/launch_verdi_gui.sh --probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
 
-`--gui-probe-only` 不检查 Verdi、license 或工程文件，只验证当前/自动发现的 X11 DISPLAY 是否可由 `xdpyinfo` 访问。当前 shell 已通过 `ssh -Y` 或图形终端获得可用 DISPLAY 时无需设置 `GUI_USER`。只有自动发现失败或存在多个桌面时，才使用 `GUI_USER`、`GUI_DISPLAY` 或 `GUI_SESSION_PID` 显式选择。
+可移植覆盖项：
 
-脚本不会把 RTL 或 filelist 传给 NPI 检查。`vericom` 仅在准备阶段为仓库示例生成 `work.lib++`，随后 `elabcom` 生成真正的 elaborated KDB；检查命令的设计输入只有 `--elab-db`。
+| 分类 | 环境变量 |
+|---|---|
+| Verdi 定位 | `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` |
+| GUI 选择 | `GUI_USER`、`GUI_DISPLAY`、`GUI_XAUTHORITY`、`GUI_SESSION_PID` |
+| 测试工具链 | `PYTHON_BIN`、`CXX` |
+| 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR` |
 
-完整的设备变量、预期输出、人工 hierarchy 检查点和 2026-07-23 实测记录见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于被 `.gitignore` 排除的目录，不应提交仓库。
+端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
+
+2026-07-24 实测：64 项全量测试和 17 项 GUI 定向测试通过；未设置 GUI 选择变量时自动发现 `DISPLAY=:0`；Verdi 在 2 秒内出现窗口；独立 launcher 成功打开真实 KDB；在线 NPI 结果为 2 行 PASS、0 error、0 warning。

@@ -55,6 +55,18 @@ python -m rscheck --help
 
 已验证组合为 CentOS 7.9、Python 3.8.13、G++ 11.2.1、Verdi/NPI O-2018.09-SP2、`NPI_PLATFORM=LINUX64`。
 
+### 1.3 Verdi GUI 环境
+
+Verdi GUI 需要一个能通过 `xdpyinfo` 访问的 X11 DISPLAY。以下方式均可：
+
+- 在 Linux 本地图形桌面的终端中运行；
+- 在 VNC/XRDP 桌面内的终端中运行；
+- 从已启动 X server 的客户端使用 `ssh -Y` 登录，并保持 SSH 连接开启。
+
+GNOME 不是必需条件。KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 会话都可使用；Wayland 会话必须启用 Xwayland。Debian/Ubuntu 需安装 `x11-utils`，RHEL/CentOS 需安装 `xorg-x11-utils`，以提供 GUI 探测所需的 `xdpyinfo` 和完整测试所需的 `xwininfo`。
+
+应优先在图形会话所属用户的终端中运行，并将仓库和 KDB 放在该用户可读取的位置。root 读取其他用户 `/proc/<PID>/environ` 的跨用户探测仅作为旧部署兼容回退，不保证在启用 SELinux、`hidepid` 或严格 Xauthority 权限时可用。
+
 ## 2. 规格表要求
 
 ### 2.1 八个必需字段
@@ -377,6 +389,21 @@ Makefile 使用 C++11，包含 `$VERDI_HOME/share/NPI/inc`，并从以下目录�
 $VERDI_HOME/share/NPI/lib/$NPI_PLATFORM
 ```
 
+安装布局不符合上述结构时，可直接覆盖 Makefile 的目录和编译器：
+
+```bash
+: "${VERDI_HOME:?set VERDI_HOME in the current shell}"
+: "${NPI_INC_DIR:?set NPI_INC_DIR in the current shell}"
+: "${NPI_LIB_DIR:?set NPI_LIB_DIR in the current shell}"
+make -C npi \
+  VERDI_HOME="$VERDI_HOME" \
+  NPI_INC="$NPI_INC_DIR" \
+  NPI_LIB="$NPI_LIB_DIR" \
+  CXX="${CXX:-g++}"
+```
+
+GNU Make 无法可靠表示带空白的目标路径，因此仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；Makefile 会在解析阶段给出明确错误。该约束不影响 `launch_verdi_gui.sh`，后者支持带空格的 KDB 路径。
+
 运行前设置：
 
 ```bash
@@ -491,6 +518,48 @@ python -m rscheck check \
 
 不要在命令末尾添加 `-- -f ...`、`-- -sv ...` 或其他 Verdi 参数；argparse 会直接拒绝这些参数。
 
+### 9.1 打开同一个 KDB 的 Verdi GUI
+
+`rscheck` 是 CLI。需要人工查看 hierarchy、实例或连线时，使用严格的跨设备启动器；它只接受现存 elaborated KDB 目录，并且实际调用固定为 `verdi -elab <KDB>`。
+
+先在当前图形 shell 中验证 GUI：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/launch_verdi_gui.sh --probe-only
+```
+
+前台启动，关闭 Verdi 后 shell 才返回：
+
+```bash
+: "${ELAB_DB:?export ELAB_DB to an elaborated KDB directory}"
+bash scripts/launch_verdi_gui.sh --elab-db "$ELAB_DB"
+```
+
+后台启动并打印 PID 和日志路径：
+
+```bash
+: "${ELAB_DB:?export ELAB_DB to an elaborated KDB directory}"
+bash scripts/launch_verdi_gui.sh \
+  --elab-db "$ELAB_DB" \
+  --background
+```
+
+`--probe-only` 不能与 `--elab-db` 或 `--background` 同时使用。启动器拒绝 `work.lib++`、普通文件、RTL/filelist、`-f`、`-sv`、`-lib`、`-top`、位置参数和 `--` passthrough。
+
+Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/bin/verdi`、`PATH` 的顺序查找。GUI 默认先使用当前可访问的 `DISPLAY`，再扫描常见桌面/Xwayland 进程；可用以下变量消除设备差异：
+
+| 变量 | 用途 |
+|---|---|
+| `VERDI_BIN` | 直接指定 Verdi 可执行文件 |
+| `VERDI_HOME` / `NOVAS_INST_DIR` | 指定 Verdi 安装根目录 |
+| `GUI_USER` | 自动扫描时限定进程用户；配合 `GUI_DISPLAY` 时标识目标图形用户 |
+| `GUI_DISPLAY` | 显式指定 DISPLAY，或在多个可用 DISPLAY 中选择 |
+| `GUI_XAUTHORITY` | 为显式 DISPLAY 指定 Xauthority 文件 |
+| `GUI_SESSION_PID` | 从指定图形进程读取 DISPLAY 和会话环境 |
+
+完整端到端测试 `scripts/test_vm_verdi_gui.sh` 还支持 `PYTHON_BIN`、`CXX`、`NPI_INC_DIR` 和 `NPI_LIB_DIR`，分别覆盖 Python、C++ 编译器、`npi.h` 所在目录和 `libNPI.so` 所在目录。详见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。
+
 ## 10. 报告和退出码
 
 ### 10.1 控制台
@@ -585,6 +654,9 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | `CRG_SOURCE_MISMATCH` | 唯一来源与 `CRG_source` 不一致 | 核对 `rtl.crg_match` 和 Excel 来源字段 |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst` 前缀 | 重新设计互不重叠的组前缀 |
 | `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
+| `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
+| `multiple usable X11 displays` | 自动探测到多个有效 DISPLAY | 设置 `GUI_DISPLAY`，必要时同时设置 `GUI_USER` 或 `GUI_XAUTHORITY` |
+| `no active gnome-session-binary session` | 使用了仓库旧版或外部旧启动脚本 | 更新仓库并改用 `scripts/launch_verdi_gui.sh --probe-only`；当前实现不要求 GNOME |
 
 ## 12. 当前边界
 
@@ -610,3 +682,4 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 5. 同时输出 JSON/CSV，并用 `--keep-inventory` 保存可审计快照。
 6. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。
 7. RTL、KDB 或相关配置变化后立即重新在线采集。
+8. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。
