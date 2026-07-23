@@ -10,12 +10,13 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 47 tests`、`OK` |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 53 tests`、`OK` |
 | L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
 | C1 | CentOS + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
 | K1 | CentOS + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | CentOS + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
+| V0 | Linux + X11/Xwayland | 无 Verdi/license 的 GUI 环境探测 | `0` | `GUI probe PASS` |
 | V1 | CentOS + Verdi + X11 | Verdi GUI 加载同一 KDB | `0` | 检测到 Verdi X11 主窗口并显示 `top` |
 | N1 | CentOS + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
 | N2 | CentOS + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
@@ -38,7 +39,7 @@
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 47 项测试
+### 3.1 全量 53 项测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -57,7 +58,7 @@ if ($LASTEXITCODE -ne 0) {
 预期末尾输出：
 
 ```text
-Ran 47 tests in ...
+Ran 53 tests in ...
 
 OK
 ```
@@ -181,7 +182,7 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-预期同样是 `Ran 47 tests` 和 `OK`。
+预期同样是 `Ran 53 tests` 和 `OK`。
 
 可单独运行 elab-only 契约测试：
 
@@ -572,12 +573,12 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 47
+### 14.1 本地测试数量不是 53
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 47。
+- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 53。
 
 ### 14.2 `header validation failed`
 
@@ -641,7 +642,7 @@ work_lib_as_elab.log
 
 ## 15. 一键复现 Verdi GUI 正向链路
 
-仓库提供 `scripts/test_vm_verdi_gui.sh`，用于在已登录 GNOME/X11 桌面且安装 Verdi/NPI 的 Linux 设备上自动执行：
+仓库提供 `scripts/test_vm_verdi_gui.sh`，用于在具有可用 X11/Xwayland DISPLAY 且安装 Verdi/NPI 的 Linux 设备上自动执行：
 
 1. 全量 Python 测试；
 2. NPI collector 构建和动态库检查；
@@ -657,9 +658,11 @@ cd /path/to/suhua_rs_tool
 export VERDI_HOME=/path/to/verdi
 export LM_LICENSE_FILE=<port>@<license-host>
 export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
-export GUI_USER=<logged-in-desktop-user>
+bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
+
+`--gui-probe-only` 不检查 Verdi、license 或工程文件，只验证当前/自动发现的 X11 DISPLAY 是否可由 `xdpyinfo` 访问。当前 shell 已通过 `ssh -Y` 或图形终端获得可用 DISPLAY 时无需设置 `GUI_USER`。只有自动发现失败或存在多个桌面时，才使用 `GUI_USER`、`GUI_DISPLAY` 或 `GUI_SESSION_PID` 显式选择。
 
 脚本不会把 RTL 或 filelist 传给 NPI 检查。`vericom` 仅在准备阶段为仓库示例生成 `work.lib++`，随后 `elabcom` 生成真正的 elaborated KDB；检查命令的设计输入只有 `--elab-db`。
 

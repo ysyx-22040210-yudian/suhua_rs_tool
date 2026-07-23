@@ -186,10 +186,11 @@ python -m unittest discover -v
 ```bash
 export LM_LICENSE_FILE=<port>@<license-host>
 export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
 
-脚本运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。设备相关变量和成功判据见 [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)。
+GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则自动扫描 GNOME、KDE、Xfce、Wayland/Xwayland 和其他进程环境；不再要求固定的桌面用户名或 `gnome-session-binary`。脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。设备相关变量和成功判据见 [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)。
 
 ## 已验证环境
 
@@ -203,6 +204,6 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-验证结果：47 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+验证结果：53 项自动测试全部通过；示例 RTL 先经 `vericom`/`elabcom` 生成 `kdb.elab++`，再由采集器通过 `-elab` 加载，两个规格组在线 NPI 检查 PASS；错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
 
 2026-07-23 进一步验证了 `scripts/test_vm_verdi_gui.sh` 对图形会话的动态发现、Verdi GUI 启动和窗口检测；Verdi 主窗口成功加载 `top`，同一 elaborated KDB 的在线检查仍为 2 行 PASS、0 error、0 warning。

@@ -9,8 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
 VERDI_HOME="${VERDI_HOME:-/home/synopsys/verdi/Verdi_O-2018.09-SP2}"
 NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
-GUI_USER="${GUI_USER:-host}"
-GUI_SESSION_PATTERN="${GUI_SESSION_PATTERN:-gnome-session-binary}"
+GUI_USER="${GUI_USER-}"
+GUI_DISPLAY="${GUI_DISPLAY-}"
+GUI_SESSION_PID="${GUI_SESSION_PID-}"
+GUI_SESSION_PATTERN="${GUI_SESSION_PATTERN:-gnome-session-binary|gnome-session|gnome-shell|startplasma|plasmashell|ksmserver|kwin_x11|kwin_wayland|xfce4-session|mate-session|cinnamon|lxsession|lxqt-session|Xwayland}"
+GUI_PROC_ROOT="${GUI_PROC_ROOT:-/proc}"
+GUI_PROBE_TIMEOUT="${GUI_PROBE_TIMEOUT:-5}"
 GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-60}"
 NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
 OUTPUT_BASE="${OUTPUT_BASE:-$PROJECT_ROOT/output}"
@@ -18,6 +22,7 @@ PYTHON_ENABLE="${PYTHON_ENABLE-/opt/rh/rh-python38/enable}"
 GCC_ENABLE="${GCC_ENABLE-/opt/rh/devtoolset-11/enable}"
 
 TEST_ROOT=""
+GUI_PROBE_ONLY=0
 
 fail() {
   echo "ERROR: $*" >&2
@@ -35,12 +40,244 @@ on_error() {
 
 trap 'on_error $LINENO' ERR
 
-case "$GUI_START_TIMEOUT" in
-  ''|*[!0-9]*) fail "GUI_START_TIMEOUT must be a positive integer" ;;
-esac
-[ "$GUI_START_TIMEOUT" -gt 0 ] || fail "GUI_START_TIMEOUT must be greater than zero"
+usage() {
+  echo "Usage: bash scripts/test_vm_verdi_gui.sh [--gui-probe-only]" >&2
+}
 
-for command_name in pgrep tr sed xdpyinfo xwininfo make ldd mktemp nohup sort comm tee; do
+case "${1-}" in
+  "") ;;
+  --gui-probe-only) GUI_PROBE_ONLY=1 ;;
+  *) usage; fail "unexpected argument: $1" ;;
+esac
+[ "$#" -le 1 ] || { usage; fail "only one optional argument is supported"; }
+
+for numeric_setting in "$GUI_PROBE_TIMEOUT" "$GUI_START_TIMEOUT"; do
+  case "$numeric_setting" in
+    ''|*[!0-9]*) fail "GUI_PROBE_TIMEOUT and GUI_START_TIMEOUT must be positive integers" ;;
+  esac
+  [ "$numeric_setting" -gt 0 ] || fail "GUI timeouts must be greater than zero"
+done
+
+for command_name in sed xdpyinfo timeout; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "required GUI probe command not found: $command_name"
+done
+
+read_process_env() {
+  local process_id=$1
+  local variable_name=$2
+  local entry
+
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      "$variable_name="*)
+        printf '%s\n' "${entry#*=}"
+        return 0
+        ;;
+    esac
+  done <"$GUI_PROC_ROOT/$process_id/environ" 2>/dev/null
+  return 1
+}
+
+set_optional_gui_env() {
+  local variable_name=$1
+  local variable_value=$2
+  if [ -n "$variable_value" ]; then
+    export "$variable_name=$variable_value"
+  else
+    unset "$variable_name"
+  fi
+}
+
+probe_process_gui() {
+  local process_id=$1
+  local process_owner
+  local candidate_display
+  local candidate_xauthority
+  local candidate_dbus
+  local candidate_runtime
+  local candidate_home
+
+  [ -r "$GUI_PROC_ROOT/$process_id/environ" ] || return 1
+  candidate_display="$(read_process_env "$process_id" DISPLAY || true)"
+  [ -n "$candidate_display" ] || return 1
+  if [ -n "$GUI_DISPLAY" ] && [ "$candidate_display" != "$GUI_DISPLAY" ]; then
+    return 1
+  fi
+  if [ -z "$GUI_USER" ] && [ -z "$GUI_DISPLAY" ] && [ -z "$GUI_SESSION_PID" ]; then
+    case "$candidate_display" in
+      :[0-9]*|unix/:[0-9]*) ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  process_owner="$(ps -o user:64= -p "$process_id" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+  [ -n "$process_owner" ] || process_owner=unknown
+  if [ -n "$GUI_USER" ] && [ "$process_owner" != "$GUI_USER" ]; then
+    return 1
+  fi
+  if [ -z "$GUI_USER" ]; then
+    case "$process_owner" in
+      gdm|sddm|lightdm) return 1 ;;
+    esac
+  fi
+
+  candidate_xauthority="$(read_process_env "$process_id" XAUTHORITY || true)"
+  candidate_dbus="$(read_process_env "$process_id" DBUS_SESSION_BUS_ADDRESS || true)"
+  candidate_runtime="$(read_process_env "$process_id" XDG_RUNTIME_DIR || true)"
+  candidate_home="$(read_process_env "$process_id" HOME || true)"
+  if [ -z "$candidate_xauthority" ] && [ -n "$candidate_home" ] && [ -r "$candidate_home/.Xauthority" ]; then
+    candidate_xauthority="$candidate_home/.Xauthority"
+  fi
+
+  if ! (
+    export DISPLAY="$candidate_display"
+    set_optional_gui_env XAUTHORITY "$candidate_xauthority"
+    timeout "$GUI_PROBE_TIMEOUT" xdpyinfo >/dev/null 2>&1
+  ); then
+    return 1
+  fi
+
+  CANDIDATE_PID="$process_id"
+  CANDIDATE_USER="$process_owner"
+  CANDIDATE_DISPLAY="$candidate_display"
+  CANDIDATE_XAUTHORITY="$candidate_xauthority"
+  CANDIDATE_DBUS="$candidate_dbus"
+  CANDIDATE_RUNTIME="$candidate_runtime"
+  return 0
+}
+
+record_gui_candidate() {
+  local process_id=$1
+  local session_key
+  local quick_display
+
+  case " $SEEN_GUI_PIDS " in
+    *" $process_id "*) return ;;
+  esac
+  SEEN_GUI_PIDS="$SEEN_GUI_PIDS $process_id"
+
+  quick_display="$(read_process_env "$process_id" DISPLAY || true)"
+  if [ -n "$quick_display" ]; then
+    session_key="|$quick_display|"
+    case "$FOUND_GUI_KEYS" in
+      *"$session_key"*) return ;;
+    esac
+  fi
+
+  probe_process_gui "$process_id" || return 0
+  session_key="|$CANDIDATE_DISPLAY|"
+  case "$FOUND_GUI_KEYS" in
+    *"$session_key"*) return ;;
+  esac
+
+  FOUND_GUI_KEYS="$FOUND_GUI_KEYS$session_key"
+  AVAILABLE_GUI_SESSIONS="${AVAILABLE_GUI_SESSIONS}${CANDIDATE_USER} DISPLAY=${CANDIDATE_DISPLAY} PID=${CANDIDATE_PID}\n"
+  if [ -z "$FOUND_GUI_DISPLAY" ]; then
+    FOUND_GUI_PID="$CANDIDATE_PID"
+    FOUND_GUI_USER="$CANDIDATE_USER"
+    FOUND_GUI_DISPLAY="$CANDIDATE_DISPLAY"
+    FOUND_GUI_XAUTHORITY="$CANDIDATE_XAUTHORITY"
+    FOUND_GUI_DBUS="$CANDIDATE_DBUS"
+    FOUND_GUI_RUNTIME="$CANDIDATE_RUNTIME"
+  else
+    GUI_AMBIGUOUS=1
+  fi
+}
+
+resolve_gui_environment() {
+  local initial_display="${DISPLAY:-}"
+  local current_user="${USER:-${LOGNAME:-current-user}}"
+  local candidate_pids=""
+  local process_dir
+  local process_id
+
+  if [ -z "$GUI_SESSION_PID" ] &&
+     { [ -z "$GUI_USER" ] || [ "$GUI_USER" = "$current_user" ]; } &&
+     { [ -z "$GUI_DISPLAY" ] || [ "$GUI_DISPLAY" = "$initial_display" ]; } &&
+     [ -n "$initial_display" ] && timeout "$GUI_PROBE_TIMEOUT" xdpyinfo >/dev/null 2>&1; then
+    GUI_SOURCE="current environment"
+    GUI_SELECTED_USER="$current_user"
+    return 0
+  fi
+
+  command -v ps >/dev/null 2>&1 || fail "ps is required when the current DISPLAY is unusable"
+  if [ -z "$GUI_SESSION_PID" ]; then
+    command -v pgrep >/dev/null 2>&1 || fail "pgrep is required for automatic GUI discovery"
+  fi
+
+  SEEN_GUI_PIDS=""
+  FOUND_GUI_KEYS=""
+  AVAILABLE_GUI_SESSIONS=""
+  FOUND_GUI_PID=""
+  FOUND_GUI_USER=""
+  FOUND_GUI_DISPLAY=""
+  FOUND_GUI_XAUTHORITY=""
+  FOUND_GUI_DBUS=""
+  FOUND_GUI_RUNTIME=""
+  GUI_AMBIGUOUS=0
+
+  if [ -n "$GUI_SESSION_PID" ]; then
+    case "$GUI_SESSION_PID" in
+      *[!0-9]*|'') fail "GUI_SESSION_PID must be a numeric process ID" ;;
+    esac
+    record_gui_candidate "$GUI_SESSION_PID"
+  else
+    if [ -n "$GUI_USER" ]; then
+      candidate_pids="$(pgrep -u "$GUI_USER" -f "$GUI_SESSION_PATTERN" 2>/dev/null || true)"
+    else
+      candidate_pids="$(pgrep -f "$GUI_SESSION_PATTERN" 2>/dev/null || true)"
+    fi
+    for process_id in $candidate_pids; do
+      record_gui_candidate "$process_id"
+    done
+
+    # Fall back to every readable process environment. This covers VNC,
+    # Openbox, SSH-created X servers, and desktop implementations not listed
+    # in GUI_SESSION_PATTERN.
+    for process_dir in "$GUI_PROC_ROOT"/[0-9]*; do
+      [ -d "$process_dir" ] || continue
+      process_id="${process_dir##*/}"
+      record_gui_candidate "$process_id"
+    done
+  fi
+
+  if [ "$GUI_AMBIGUOUS" -ne 0 ] && [ -z "$GUI_DISPLAY" ]; then
+    echo "ERROR: multiple usable X11 displays were found:" >&2
+    printf '%b' "$AVAILABLE_GUI_SESSIONS" >&2
+    echo "Set GUI_DISPLAY to the intended DISPLAY, or run from that graphical/SSH-X shell." >&2
+    return 1
+  fi
+
+  if [ -z "$FOUND_GUI_DISPLAY" ]; then
+    echo "ERROR: no usable X11 display was found." >&2
+    echo "Current DISPLAY=${initial_display:-<unset>} did not pass xdpyinfo." >&2
+    echo "Run 'bash scripts/test_vm_verdi_gui.sh --gui-probe-only' from a graphical terminal," >&2
+    echo "connect with 'ssh -Y', or set GUI_USER / GUI_DISPLAY / GUI_SESSION_PID explicitly." >&2
+    echo "Wayland sessions require a working Xwayland DISPLAY for this Verdi release." >&2
+    [ -z "$GUI_USER" ] || echo "GUI_USER filter: $GUI_USER" >&2
+    return 1
+  fi
+
+  export DISPLAY="$FOUND_GUI_DISPLAY"
+  set_optional_gui_env XAUTHORITY "$FOUND_GUI_XAUTHORITY"
+  set_optional_gui_env DBUS_SESSION_BUS_ADDRESS "$FOUND_GUI_DBUS"
+  set_optional_gui_env XDG_RUNTIME_DIR "$FOUND_GUI_RUNTIME"
+  GUI_SOURCE="process $FOUND_GUI_PID"
+  GUI_SELECTED_USER="$FOUND_GUI_USER"
+  return 0
+}
+
+if ! resolve_gui_environment; then
+  exit 1
+fi
+
+echo "GUI access OK: source=$GUI_SOURCE user=$GUI_SELECTED_USER DISPLAY=$DISPLAY"
+if [ "$GUI_PROBE_ONLY" -eq 1 ]; then
+  echo "GUI probe PASS"
+  exit 0
+fi
+
+for command_name in xwininfo make ldd mktemp nohup sort comm tee; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
 
@@ -57,30 +294,6 @@ if [ -z "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ]; then
 fi
 export LM_LICENSE_FILE="${LM_LICENSE_FILE:-$SNPSLMD_LICENSE_FILE}"
 export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
-
-GUI_PID="$(pgrep -u "$GUI_USER" -o -f "$GUI_SESSION_PATTERN" || true)"
-[ -n "$GUI_PID" ] || fail "no active $GUI_SESSION_PATTERN session for user $GUI_USER"
-[ -r "/proc/$GUI_PID/environ" ] || fail "cannot read GUI environment from PID $GUI_PID"
-
-read_gui_env() {
-  local variable_name=$1
-  tr '\0' '\n' <"/proc/$GUI_PID/environ" |
-    sed -n "s/^${variable_name}=//p" |
-    sed -n '1p'
-}
-
-export DISPLAY="$(read_gui_env DISPLAY)"
-export XAUTHORITY="$(read_gui_env XAUTHORITY)"
-export DBUS_SESSION_BUS_ADDRESS="$(read_gui_env DBUS_SESSION_BUS_ADDRESS)"
-XDG_RUNTIME_DIR="$(read_gui_env XDG_RUNTIME_DIR)"
-[ -z "$XDG_RUNTIME_DIR" ] || export XDG_RUNTIME_DIR
-
-[ -n "$DISPLAY" ] || fail "DISPLAY is missing from the GUI session"
-[ -n "$XAUTHORITY" ] || fail "XAUTHORITY is missing from the GUI session"
-[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || fail "DBUS_SESSION_BUS_ADDRESS is missing from the GUI session"
-[ -r "$XAUTHORITY" ] || fail "XAUTHORITY is not readable: $XAUTHORITY"
-xdpyinfo >/dev/null
-echo "GUI access OK: user=$GUI_USER DISPLAY=$DISPLAY"
 
 if [ -n "$PYTHON_ENABLE" ]; then
   [ -f "$PYTHON_ENABLE" ] || fail "Python enable script not found: $PYTHON_ENABLE"
@@ -234,4 +447,11 @@ echo "PASS: Verdi GUI launch and online NPI check completed."
 echo "ELAB_DB=$ELAB_DB"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "Verdi remains open on DISPLAY=$DISPLAY for manual hierarchy inspection."
+case "$DISPLAY" in
+  localhost:*|127.0.0.1:*)
+    echo "Verdi uses SSH X11 forwarding on DISPLAY=$DISPLAY; keep this SSH connection open."
+    ;;
+  *)
+    echo "Verdi remains open on DISPLAY=$DISPLAY for manual hierarchy inspection."
+    ;;
+esac

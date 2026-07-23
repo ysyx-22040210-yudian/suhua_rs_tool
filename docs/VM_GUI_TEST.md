@@ -11,7 +11,7 @@ GUI 是 Verdi，不是 `rscheck`。`rscheck` 保持为命令行工具，并且�
 - `scripts/test_vm_verdi_gui.sh`：一键 GUI 端到端测试；
 - `examples/rtl/rs_example.sv`：可独立 elaboration 的最小 RTL；
 - `examples/specs.csv` 和 Excel 模板：正向规格；
-- `tests/`：47 项 Python 自动测试、正反例规格和离线 inventory；
+- `tests/`：53 项 Python 自动测试、正反例规格、GUI 会话发现回归和离线 inventory；
 - `config/rscheck.example.json`：八列映射和 RTL 规则；
 - `docs/TESTING.md`：正例、反例和输入门禁的详细测试命令。
 
@@ -30,7 +30,7 @@ rs_npi_collectorLog/
 
 ## 2. 前提条件
 
-- Linux 图形桌面已经登录，脚本运行用户能读取该桌面会话的 `/proc/<PID>/environ` 和 Xauthority；
+- 当前 shell 已有可用的 X11 DISPLAY，或脚本运行用户能读取某个图形会话的 `/proc/<PID>/environ`；
 - Bash 4.2 或更高版本；
 - Python 3.8 或更高版本；
 - 支持 C++11 的 G++；
@@ -55,12 +55,22 @@ export VERDI_HOME=/path/to/verdi
 export NPI_PLATFORM=LINUX64
 export LM_LICENSE_FILE=<port>@<license-host>
 export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
-export GUI_USER=<logged-in-desktop-user>
 
 # 没有 Software Collections enable 脚本时显式置空，使用 PATH 中的工具。
 export PYTHON_ENABLE=
 export GCC_ENABLE=
 
+bash scripts/test_vm_verdi_gui.sh --gui-probe-only
+bash scripts/test_vm_verdi_gui.sh
+```
+
+通过 SSH 显示到客户端时，在支持 X server 的客户端使用可信转发，并保持该 SSH 连接开启：
+
+```bash
+ssh -Y <user>@<linux-host>
+cd /path/to/suhua_rs_tool
+xdpyinfo >/dev/null
+bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
 
@@ -70,6 +80,7 @@ bash scripts/test_vm_verdi_gui.sh
 cd /root/suhua_rs_tool
 export LM_LICENSE_FILE=<port>@<license-host>
 export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
 
@@ -80,15 +91,20 @@ bash scripts/test_vm_verdi_gui.sh
 | `PROJECT_ROOT` | 脚本所在仓库根目录 | 仓库路径 |
 | `VERDI_HOME` | `/home/synopsys/verdi/Verdi_O-2018.09-SP2` | Verdi 安装根目录 |
 | `NPI_PLATFORM` | `LINUX64` | NPI 平台库目录 |
-| `GUI_USER` | `host` | 已登录图形桌面的用户 |
-| `GUI_SESSION_PATTERN` | `gnome-session-binary` | 图形会话进程匹配式 |
+| `GUI_USER` | 空（自动） | 将候选进程限制到指定桌面用户 |
+| `GUI_DISPLAY` | 空（自动） | 多个可用 DISPLAY 时显式选择端点，如 `:0` |
+| `GUI_SESSION_PID` | 空 | 直接从指定进程读取四个 GUI 环境变量 |
+| `GUI_SESSION_PATTERN` | 常见 GNOME/KDE/Xfce/MATE/Cinnamon/LXQt/Xwayland 进程 | 优先候选进程匹配式 |
+| `GUI_PROBE_TIMEOUT` | `5` | 单个 DISPLAY 的 `xdpyinfo` 超时秒数 |
 | `GUI_START_TIMEOUT` | `60` | 等待 Verdi X11 窗口的秒数 |
 | `NPI_TIMEOUT` | `180` | collector 超时秒数 |
 | `OUTPUT_BASE` | `<仓库>/output` | 本次测试产物根目录 |
 | `PYTHON_ENABLE` | `/opt/rh/rh-python38/enable` | Python 工具链 enable 脚本，空值表示不 source |
 | `GCC_ENABLE` | `/opt/rh/devtoolset-11/enable` | GCC 工具链 enable 脚本，空值表示不 source |
 
-`DISPLAY`、`XAUTHORITY` 和 `DBUS_SESSION_BUS_ADDRESS` 不应硬编码。脚本会从 `GUI_USER` 当前 GNOME 会话动态读取，并先用 `xdpyinfo` 验证访问权限。
+脚本首先验证当前 shell 的 `DISPLAY`，这覆盖图形终端和 `ssh -Y`。当前 DISPLAY 不可用时，它才扫描常见桌面进程和可读的 `/proc/<PID>/environ`，并且只提取 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR`。`XAUTHORITY`、DBus 和 XDG 可为空，唯一成功判据是 `xdpyinfo`。多个 DISPLAY 均可用时脚本不会猜测，而是要求设置 `GUI_DISPLAY`。
+
+Wayland 会话必须同时提供可工作的 Xwayland `DISPLAY`，因为该版本 Verdi 是 X11 应用。不要使用 `xhost +` 绕过认证。
 
 ## 4. 测试执行顺序
 
@@ -109,7 +125,7 @@ Python tests
 终端应包含：
 
 ```text
-Ran 47 tests in ...
+Ran 53 tests in ...
 OK
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances)
@@ -143,13 +159,16 @@ NPI_PLATFORM=LINUX64
 GNOME/X11 display=:0
 ```
 
-实际结果：47 项 Python 测试全部通过；`vericom` 和 `elabcom` 均为 0 error、0 warning；检测到 Verdi 主窗口 `<Verdi:nTraceMain:1> top top`；同一 `kdb.elab++` 的在线 NPI 正例为 2 行 PASS、0 error、0 warning。
+实际结果：53 项 Python 测试全部通过；`vericom` 和 `elabcom` 均为 0 error、0 warning；检测到 Verdi 主窗口 `<Verdi:nTraceMain:1> top top`；同一 `kdb.elab++` 的在线 NPI 正例为 2 行 PASS、0 error、0 warning。
 
 ## 7. 常见故障
 
-- `no active gnome-session-binary session`：先登录设备的图形桌面，或修改 `GUI_USER`/`GUI_SESSION_PATTERN`。
-- `cannot read GUI environment`：以图形用户本人或具备读取权限的管理员用户运行。
-- `xdpyinfo` 失败：检查动态读取到的 `DISPLAY` 和 `XAUTHORITY`，不要复制上一次登录产生的 `/run/gdm/auth-*` 路径。
+- `no usable X11 display`：先执行 `--gui-probe-only`；从图形终端运行、使用 `ssh -Y`，或设置 `GUI_USER`/`GUI_DISPLAY`/`GUI_SESSION_PID`。
+- `multiple usable X11 displays`：根据错误列出的端点设置 `GUI_DISPLAY=:N`，不要任取旧会话。
+- 只有 `WAYLAND_DISPLAY`：确认桌面启用了 Xwayland；旧 Verdi 不能直接使用 Wayland socket。
+- 读取不到其他用户 `/proc/<PID>/environ`：可能是权限、SELinux 或 `hidepid`；改从图形用户自己的终端运行，或由管理员显式提供 DISPLAY/Xauthority。
+- `xdpyinfo` 失败：检查当前 DISPLAY 的认证；不要复制上一次登录产生的 `/run/gdm/auth-*` 路径，也不要使用 `xhost +`。
 - `no new Verdi X11 window loaded elaborated top`：查看脚本打印的窗口快照和 `verdi_gui.log`，检查 license、显示权限、KDB 和 Verdi 兼容库。
 - `npi_load_design failed`：确认输入是脚本刚生成的 `kdb.elab++`，而不是 `work.lib++`。
-- GUI 已打开但 SSH 断开：脚本使用 `nohup` 启动 Verdi；仍应从设备图形桌面人工确认窗口。
+- 本地桌面 GUI 已打开但 SSH 断开：脚本使用 `nohup`，Verdi 可继续留在本地桌面。
+- `ssh -Y` 转发的 GUI：必须保持 SSH 隧道；`nohup` 无法在隧道关闭后继续转发窗口。
