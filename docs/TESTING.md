@@ -1,6 +1,6 @@
 # RTL 打拍例化检查工具测试指南
 
-本文档给出从本地单元测试到 CentOS/Verdi 在线 NPI 检查的完整验证流程。除非某一节明确说明可以独立执行，Linux 在线测试各节应在同一个 shell 中按顺序执行，以复用 `PROJECT_ROOT`、`TEST_ROOT`、`ELAB_DB` 等变量。
+本文档给出从本地单元测试、`rscheck` 自带 Tkinter GUI 可见 smoke 和压力测试，到 CentOS/Verdi 在线 NPI 检查的完整验证流程。除非某一节明确说明可以独立执行，Linux 在线测试各节应在同一个 shell 中按顺序执行，以复用 `PROJECT_ROOT`、`TEST_ROOT`、`ELAB_DB` 等变量。
 
 > **生产契约：在线检查的设计输入只能是 `--elab-db <Verdi elaborated KDB 目录>`。**
 >
@@ -10,18 +10,24 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 64 tests`、`OK` |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 88 tests`、`OK` |
 | L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
+| L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，包含五类核心 finding |
+| R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
+| R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
+| R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
+| R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS、0 error、0 warning |
+| R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
 | C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
-| V0 | Linux + X11/Xwayland | 无 Verdi/license 的 GUI 环境探测 | `0` | `GUI probe PASS` |
+| V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
 | V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 检测到新的 Verdi X11 窗口 |
 | N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
 | N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
-| G2 | Linux + Verdi/NPI | 把 `work.lib++` 错当 elab 输入 | `2` | collector/NPI 加载失败，不生成 PASS 报告 |
+| G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
 
 退出码定义：
@@ -35,11 +41,12 @@
 - Python 3.8 或更高版本。
 - 当前目录是仓库根目录，能够看到 `pyproject.toml`、`rscheck/`、`tests/`。
 - Python 自动测试和离线检查不需要 Verdi、NPI license 或第三方 Python 包。
+- 可见 GUI 测试需要 Tkinter；Linux 还需要可访问的 X11/Xwayland DISPLAY、`xdpyinfo`、`xprop` 和 `xwininfo`。
 - 建议设置 `PYTHONDONTWRITEBYTECODE=1`，避免测试产生 `__pycache__`。
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 64 项测试
+### 3.1 全量 88 项测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -58,14 +65,37 @@ if ($LASTEXITCODE -ne 0) {
 预期末尾输出：
 
 ```text
-Ran 64 tests in ...
+Ran 88 tests in ...
 
-OK
+OK (skipped=21)
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、runner 固定命令构造、跨桌面 GUI 会话发现和严格 Verdi 启动参数。Windows 和 macOS 会跳过 17 项仅适用于 Linux 的 Bash/X11 测试，但总数仍为 64，其他 47 项必须通过。
+这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、GUI 命令构造与生命周期、进程树取消、跨桌面 GUI 会话发现，以及严格的 rscheck/Verdi launcher 参数。Windows 当前总共发现 88 项，其中 21 项仅适用于 Linux Bash/X11，按预期 skipped；其余全部通过。CentOS 应运行全部 88 项并显示 `OK`，不能跳过 Linux launcher 回归。
 
-### 3.2 使用 Excel 生成“乱序列 + 额外列”XLSX
+### 3.2 Windows 工具自带 GUI 启动和布局检查
+
+Tkinter 可用性和 GUI 启动命令：
+
+```powershell
+$ProjectRoot = "C:\path\to\suhua_rs_tool"
+Set-Location $ProjectRoot
+
+python -c "import tkinter; print(tkinter.TkVersion)"
+if ($LASTEXITCODE -ne 0) { throw "Tkinter is unavailable" }
+
+python -m rscheck gui
+```
+
+也可先安装项目，再从 PowerShell 或开始菜单快捷方式调用安装入口：
+
+```powershell
+python -m pip install -e .
+rtl-rs-check-gui
+```
+
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查以下内容均可见、文字未截断且控件不重叠：八个 1-based 列映射、在线/离线数据源选择、JSON/CSV 输出、“验证 Excel”“运行 RTL 检查”“取消”和三个页签。2026-07-24 已在 Windows 通过该最小尺寸截图检查；截图是本地验收证据，不提交仓库。
+
+### 3.3 使用 Excel 生成“乱序列 + 额外列”XLSX
 
 本节需要安装桌面版 Microsoft Excel。脚本生成一个真实 `.xlsx`，其中八个目标字段被打乱，并在首尾各加入一个无关列。
 
@@ -148,7 +178,7 @@ row 2: top.u / PIPE_X module=my_pipe step=1
 
 这证明列号可由用户定义，额外列不会参与解析，表头校验仍会按照覆盖后的列号执行。
 
-### 3.3 本地离线正例
+### 3.4 本地离线正例和反例
 
 ```powershell
 Set-Location $ProjectRoot
@@ -168,6 +198,28 @@ if ($LASTEXITCODE -ne 0) {
 RESULT: PASS | rows=2 errors=0 warnings=0
 ```
 
+继续运行离线反例；返回码 `1` 是预期结果：
+
+```powershell
+$NegativeReport = Join-Path $ProjectRoot "output\manual_testing\negative.json"
+python -m rscheck check `
+  --excel tests/fixtures/specs_negative.csv `
+  --config config/rscheck.example.json `
+  --sheet 1 `
+  --inventory tests/fixtures/inventory.json `
+  --json-report $NegativeReport
+if ($LASTEXITCODE -ne 1) {
+    throw "Offline negative check did not return 1"
+}
+
+$Negative = Get-Content -Raw -Encoding utf8 $NegativeReport | ConvertFrom-Json
+if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1) {
+    throw "Unexpected negative report summary"
+}
+```
+
+预期 finding 至少包含 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+
 ## 4. 通用 POSIX 本地测试
 
 Linux 或 macOS 无需 Verdi 即可运行 Python 测试：
@@ -182,7 +234,17 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-预期同样是 `Ran 64 tests` 和 `OK`。Linux 有 Bash 时，GUI 会话和 launcher 回归不应 skipped。
+当前预期是 `Ran 88 tests` 和 `OK`。Windows 有 21 项 Linux Bash/X11 测试 skipped；CentOS 应执行全部 88 项，GUI 会话和 launcher 回归不应 skipped。
+
+macOS 可直接启动工具自带 GUI，验证 Excel 或使用 inventory 做离线检查：
+
+```bash
+cd "$PROJECT_ROOT"
+python3 -c 'import tkinter; print(tkinter.TkVersion)'
+python3 -m rscheck gui
+```
+
+macOS 不支持真实 NPI 在线采集；在线 collector、`libNPI.so` 和 elaborated KDB 加载测试必须在 Linux/Verdi 环境执行。
 
 可单独运行 elab-only 契约测试：
 
@@ -191,7 +253,152 @@ cd "$PROJECT_ROOT"
 python3 -m unittest tests.test_npi_runner tests.test_cli -v
 ```
 
-预期 15 项全部通过。
+预期全部通过。
+
+### 4.1 Linux 工具自带 GUI 可见 smoke、稳定性与负载测试
+
+先安装与 Python 匹配的 Tkinter 和 X11 工具。按发行版选一组命令：
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install -y python3-tk x11-utils
+
+# RHEL/CentOS 系统 Python
+sudo yum install -y python3-tkinter xorg-x11-utils
+
+# RHEL/CentOS SCL Python 3.8
+sudo yum install -y rh-python38-python-tkinter xorg-x11-utils
+```
+
+在图形终端、VNC/XRDP 终端或保持连接的 `ssh -Y` shell 中执行。SCL 环境使用 `source /opt/rh/rh-python38/enable`；其他环境删掉该行：
+
+```bash
+PROJECT_ROOT="/path/to/suhua_rs_tool"
+cd "$PROJECT_ROOT"
+
+if [ -f /opt/rh/rh-python38/enable ]; then
+  source /opt/rh/rh-python38/enable
+fi
+export PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+"$PYTHON_BIN" -c 'import tkinter; print("Tk", tkinter.TkVersion)'
+bash scripts/launch_rscheck_gui.sh --probe-only
+
+# 让本 shell 使用与 launcher 相同的、已验证的 DISPLAY/Xauthority。
+source scripts/lib/gui_session.sh
+gui_session_resolve
+xdpyinfo >/dev/null
+```
+
+先单独覆盖 GUI 的“验证 Excel”按钮。该路径不运行 inventory 或 NPI 检查；下面连续验证 20 轮：
+
+```bash
+cd "$PROJECT_ROOT"
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --validate-only \
+  --iterations 20 \
+  --visible-seconds 5
+```
+
+预期末行包含：
+
+```text
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20
+```
+
+2026-07-24 的 CentOS 可见窗口实测中，20 轮全部通过。
+
+离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。窗口映射通过根窗口 `_NET_CLIENT_LIST` 中新增的 X11 window ID 验证，不依赖本地化标题：
+
+```bash
+cd "$PROJECT_ROOT"
+POS_GUI_LOG="$(mktemp /tmp/rscheck_gui_positive.XXXXXX.log)"
+GUI_WINDOWS_BEFORE="$(mktemp /tmp/rscheck_windows_before.XXXXXX)"
+GUI_WINDOWS_CURRENT="$(mktemp /tmp/rscheck_windows_current.XXXXXX)"
+GUI_WINDOWS_NEW="$(mktemp /tmp/rscheck_windows_new.XXXXXX)"
+xprop -root _NET_CLIENT_LIST 2>/dev/null \
+  | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$GUI_WINDOWS_BEFORE" || true
+
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --iterations 100 \
+  --visible-seconds 10 \
+  >"$POS_GUI_LOG" 2>&1 &
+POS_GUI_PID=$!
+
+for _ in $(seq 1 50); do
+  xprop -root _NET_CLIENT_LIST 2>/dev/null \
+    | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$GUI_WINDOWS_CURRENT" || true
+  comm -13 "$GUI_WINDOWS_BEFORE" "$GUI_WINDOWS_CURRENT" >"$GUI_WINDOWS_NEW"
+  test -s "$GUI_WINDOWS_NEW" && break
+  sleep 0.2
+done
+test -s "$GUI_WINDOWS_NEW"
+printf 'new rscheck GUI window ID(s):\n'
+cat "$GUI_WINDOWS_NEW"
+wait "$POS_GUI_PID"
+cat "$POS_GUI_LOG"
+grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=100' "$POS_GUI_LOG"
+rm -f "$GUI_WINDOWS_BEFORE" "$GUI_WINDOWS_CURRENT" "$GUI_WINDOWS_NEW"
+```
+
+2026-07-24 的 CentOS 可见窗口实测中，100 轮全部通过，最终结果为 2 行 PASS、0 error、0 warning。
+
+离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
+
+```bash
+cd "$PROJECT_ROOT"
+NEG_GUI_LOG="$(mktemp /tmp/rscheck_gui_negative.XXXXXX.log)"
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --negative \
+  --iterations 1 \
+  --visible-seconds 5 \
+  >"$NEG_GUI_LOG" 2>&1
+cat "$NEG_GUI_LOG"
+grep -F 'mode=offline case=negative iterations=1' "$NEG_GUI_LOG"
+```
+
+10,000 行负载测试会在临时目录生成规格和对应 inventory，通过 GUI 后台进程、JSON 报告解析及 10,000 行 Treeview 渲染路径。命令使用 GNU `time` 同时记录墙钟时间和最大常驻内存：
+
+```bash
+cd "$PROJECT_ROOT"
+LOAD_GUI_LOG="$(mktemp /tmp/rscheck_gui_load.XXXXXX.log)"
+/usr/bin/time -f 'GUI_LOAD wall=%e sec max_rss=%M KiB' \
+  "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --generated-rows 10000 \
+  --iterations 1 \
+  --timeout 180 \
+  --visible-seconds 0 \
+  >"$LOAD_GUI_LOG" 2>&1
+cat "$LOAD_GUI_LOG"
+grep -F 'rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1' "$LOAD_GUI_LOG"
+grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
+```
+
+CentOS 实测墙钟时间为 4.10 秒，最大 RSS 为 150080 KiB，结果为 10,000 行、0 error、0 warning。该数值用于记录已验证基线，不应作为不同 CPU、存储或桌面环境上的硬性性能门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+
+取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
+
+```bash
+cd "$PROJECT_ROOT"
+set -e
+CANCEL_START_SECONDS="$(date +%s)"
+for _ in $(seq 1 100); do
+  "$PYTHON_BIN" -m unittest \
+    tests.test_gui_backend.ProcessControllerTests.test_cancel_during_process_start_is_not_lost \
+    >/dev/null 2>&1
+done
+CANCEL_ELAPSED="$(( $(date +%s) - CANCEL_START_SECONDS ))"
+printf 'cancel-during-start: 100/100 PASS in %s seconds\n' "$CANCEL_ELAPSED"
+```
+
+CentOS 实测 100 轮在 9 秒内完成。完整测试套件还覆盖运行中取消，验证不会只结束 Python CLI 而遗留 collector 子进程。
+
+手工验收时可在较慢的在线检查开始后点击“取消”，结果状态应变为 `CANCELLED`，日志停止增长，`pgrep -af rs_npi_collector` 不应出现本次 collector。不要用 `kill -9` 代替 GUI 取消按钮进行这项功能验收。
 
 ## 5. Linux/Verdi 测试环境
 
@@ -371,6 +578,79 @@ PY
 
 预期输出 `positive summary OK`，Python 返回 `0`。
 
+### 8.2 VM 上工具自带 GUI 的在线 KDB smoke
+
+以下块不包含主机、密码或真实 license。先把前三个占位变量替换为本机受控路径；`ELAB_DB` 必须是已经由 `elabcom` 生成的目录。命令只把 collector 和该 KDB 交给 GUI，不传 RTL、filelist 或 top：
+
+```bash
+export PROJECT_ROOT="/path/to/suhua_rs_tool"
+export VERDI_HOME="/path/to/verdi"
+export ELAB_DB="/absolute/path/to/kdb.elab++"
+
+: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE through the approved site environment}"
+export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
+export NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
+export PYTHON_BIN="${PYTHON_BIN:-python3}"
+export CXX="${CXX:-g++}"
+export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
+export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
+export COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
+
+cd "$PROJECT_ROOT"
+if [ -f /opt/rh/rh-python38/enable ]; then
+  source /opt/rh/rh-python38/enable
+fi
+
+make -C npi \
+  VERDI_HOME="$VERDI_HOME" \
+  NPI_PLATFORM="$NPI_PLATFORM" \
+  NPI_INC="$NPI_INC_DIR" \
+  NPI_LIB="$NPI_LIB_DIR" \
+  CXX="$CXX"
+test -x "$COLLECTOR"
+test -d "$ELAB_DB"
+test -f "$NPI_LIB_DIR/libNPI.so"
+
+bash scripts/launch_rscheck_gui.sh --probe-only
+source scripts/lib/gui_session.sh
+gui_session_resolve
+
+ONLINE_GUI_LOG="$(mktemp /tmp/rscheck_gui_online.XXXXXX.log)"
+ONLINE_WINDOWS_BEFORE="$(mktemp /tmp/rscheck_online_windows_before.XXXXXX)"
+ONLINE_WINDOWS_CURRENT="$(mktemp /tmp/rscheck_online_windows_current.XXXXXX)"
+ONLINE_WINDOWS_NEW="$(mktemp /tmp/rscheck_online_windows_new.XXXXXX)"
+xprop -root _NET_CLIENT_LIST 2>/dev/null \
+  | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$ONLINE_WINDOWS_BEFORE" || true
+
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout 180 \
+  --iterations 3 \
+  --visible-seconds 15 \
+  >"$ONLINE_GUI_LOG" 2>&1 &
+ONLINE_GUI_PID=$!
+
+for _ in $(seq 1 100); do
+  xprop -root _NET_CLIENT_LIST 2>/dev/null \
+    | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$ONLINE_WINDOWS_CURRENT" || true
+  comm -13 "$ONLINE_WINDOWS_BEFORE" "$ONLINE_WINDOWS_CURRENT" >"$ONLINE_WINDOWS_NEW"
+  test -s "$ONLINE_WINDOWS_NEW" && break
+  sleep 0.2
+done
+test -s "$ONLINE_WINDOWS_NEW"
+printf 'new rscheck GUI window ID(s):\n'
+cat "$ONLINE_WINDOWS_NEW"
+wait "$ONLINE_GUI_PID"
+cat "$ONLINE_GUI_LOG"
+grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3' "$ONLINE_GUI_LOG"
+rm -f "$ONLINE_WINDOWS_BEFORE" "$ONLINE_WINDOWS_CURRENT" "$ONLINE_WINDOWS_NEW"
+```
+
+成功标准是 `wait` 返回 `0`、`_NET_CLIENT_LIST` 出现新增 window ID，并出现最后一行 `GUI_SMOKE_PASS`。不要按窗口标题 grep：C locale 下 `xwininfo` 读取中文标题可能报告 conversion failure。3 轮中的每一轮都使用真实 collector 加载同一个 elaborated KDB；最终 GUI 结果页应显示 `PASS`、行数 2、通过 2、失败 0、错误 0、警告 0。2026-07-24 的 CentOS/Verdi 实测满足该结果。在线 smoke 创建的报告和临时 inventory 位于系统临时目录，脚本退出后自动清理。
+
 ## 9. 在线反例
 
 反例复用同一个 `$ELAB_DB`，只把 Excel/CSV 规格替换为 `tests/fixtures/specs_negative.csv`。该规格故意写错拍数、模块名、clk、rst 和 CRG source。
@@ -496,7 +776,7 @@ rtl-rs-check: error: unrecognized arguments: -- -f ...
 
 ## 11. 安全门禁：work.lib++ 不能作为 elab 输入
 
-Python runner 会确认路径存在且为目录，因此 `work.lib++` 会进入 collector；随后 `npi_load_design -elab <work.lib++>` 必须失败。这验证工具不会把编译库误当 elaborated KDB。
+Python runner 会在启动 collector 前拒绝名为 `work.lib++` 的编译库；解析后的最终路径同样检查，因此把它改名为符号链接也不能绕过门禁。这验证工具不会把编译库误当 elaborated KDB。
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -520,14 +800,15 @@ if [ "$WORKLIB_RC" -ne 2 ]; then
   cat "$WORKLIB_LOG" >&2
   exit 1
 fi
-grep -Eq 'NPI_LOAD|npi_load_design|collector exited' "$WORKLIB_LOG"
+grep -Fq 'not an elaborated KDB' "$WORKLIB_LOG"
 cat "$WORKLIB_LOG"
 ```
 
 预期：
 
-- Python CLI 返回 `2`，表示设计加载失败。
-- 日志包含 `NPI_LOAD`、`npi_load_design failed` 或 collector 非零退出信息。
+- Python CLI 返回 `2`，表示输入被拒绝。
+- 日志包含 `work.lib++ is a compiled Verdi library, not an elaborated KDB`。
+- collector 不启动。
 - 不得出现 `RESULT: PASS`。
 
 ## 12. inventory 模式互斥检查
@@ -578,13 +859,13 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 64
+### 14.1 本地测试数量不是 88
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
-- Windows 和 macOS 允许 17 项 Linux Bash/X11 测试 skipped；Linux 上应确认这些测试实际运行。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 64。
+- Windows 和 macOS 允许 Linux Bash/X11 测试 skipped；Linux 上应确认这些测试实际运行。
+- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 88。
 
 ### 14.2 `header validation failed`
 
@@ -619,7 +900,8 @@ work_lib_as_elab.log
 
 ### 14.7 `error[NPI_LOAD]` / `npi_load_design failed`
 
-- 最常见原因是错误地传入 `work.lib++`。
+- 当前 Python runner 会在 collector 启动前拒绝 `work.lib++` 及其符号链接别名；若看到对应错误，改传真正的 elaborated KDB。
+- 对真正进入 `npi_load_design` 后的失败，检查 KDB 是否损坏、未完成 elaboration，或与当前 Verdi/NPI 版本不兼容。
 - 返回第 7 节重新执行 `elabcom -top <top> -elab <path>`。
 - 确认生成 KDB 时使用的 Verdi 版本与运行 collector 时兼容。
 - 确认 `-top` 与 Excel 中 `position` 的层次根一致。
@@ -646,7 +928,9 @@ work_lib_as_elab.log
 - 执行 `python3 -c 'import rscheck; print(rscheck.__file__)'` 检查导入位置。
 - 当前生产 CLI 不存在 passthrough；任何恢复任意 NPI 参数转发的改动都应视为安全回归。
 
-## 15. 跨设备 Verdi GUI 与一键正向链路
+## 15. Verdi GUI 与一键正向链路
+
+本节只测试 Verdi GUI。工具自带的 Tkinter GUI 使用第 4.1 节和第 8.2 节命令；两者共享显示会话发现，但窗口、用途和启动命令不同。
 
 ### 15.1 GUI 前提和独立探测
 
@@ -700,7 +984,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：64 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
+`scripts/test_vm_verdi_gui.sh` 自动执行：88 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
 
 在已设置 Verdi 和 license 环境的图形 shell 中执行：
 
@@ -723,4 +1007,4 @@ bash scripts/test_vm_verdi_gui.sh
 
 端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
 
-2026-07-24 实测：64 项全量测试和 17 项 GUI 定向测试通过；未设置 GUI 选择变量时自动发现 `DISPLAY=:0`；Verdi 在 2 秒内出现窗口；独立 launcher 成功打开真实 KDB；在线 NPI 结果为 2 行 PASS、0 error、0 warning。
+2026-07-24 实测：CentOS 88 项全量测试通过；清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后自动发现 `DISPLAY=:0`；“验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning；10,000 行单轮 GUI 负载为 4.10 秒、最大 RSS 150080 KiB、0 error、0 warning；取消启动竞态 100 轮在 9 秒内通过；真实 elaborated KDB 在线 GUI smoke 3 轮均为 2 行 PASS、0 error、0 warning。Windows 当前发现 88 项，其中 21 项 Linux Bash/X11 测试按预期 skipped；工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，截图不纳入仓库。

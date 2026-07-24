@@ -1,6 +1,6 @@
 # RTL 打拍例化检查工具
 
-该工具把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
+该工具提供命令行（CLI）和自带的 Tkinter 桌面 GUI，把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
 
 - `position` 是否存在；
 - 同一 `RS_inst` 前缀组的实例数量是否等于 `step`；
@@ -15,22 +15,22 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
-- [Verdi GUI 端到端复现指南](docs/VM_GUI_TEST.md)
+- [rscheck 自带 GUI 与 Verdi GUI 的 VM 复现指南](docs/VM_GUI_TEST.md)
 - [Excel 输入模板](examples/RS_Check_Excel_Template.xlsx)
 
 ## 工程结构
 
 ```text
-rscheck/                 Python 前端、XLSX 解析、检查与报告
+rscheck/                 Python CLI/GUI、XLSX 解析、检查与报告
 npi/                     C++ NPI 采集器及 Makefile
 config/rscheck.example.json
 examples/                可运行的 CSV 与 SystemVerilog 示例
 docs/                    详细使用与测试文档
 tests/                   无 NPI license 也能运行的离线测试
-scripts/                 跨设备 Verdi GUI 启动器和端到端测试脚本
+scripts/                 rscheck/Verdi GUI 启动器和端到端测试脚本
 ```
 
-Python 端要求 3.8 或更高版本，没有第三方运行时依赖。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式会被拒绝，以免读取过期缓存值。
+Python 端要求 3.8 或更高版本，CLI 没有第三方运行时依赖；桌面 GUI 使用 Python 标准库 Tkinter，最小化 Linux 安装需另装对应 Python 版本的 Tk 包。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式会被拒绝，以免读取过期缓存值。
 
 ## 列映射
 
@@ -74,6 +74,37 @@ AAAA_BBB + 非空字符串 + 末尾阿拉伯数字
 因此 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配。相同前缀但不同 suffix stem 仍属于同一组，只产生 warning。数字是否从 0 连续默认不影响 PASS；需要时把 `require_contiguous_indices` 设为 `true`。
 
 Excel 中的简单 `clk`/`rst` 名称相对 `position` 解析，例如 `position=top.u_tile`、`clk=clk_rs` 对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
+
+## 工具自带桌面 GUI
+
+这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动；macOS 支持 Excel 验证和离线 inventory 检查，但不支持真实 NPI 在线采集：
+
+```bash
+python -m rscheck gui
+```
+
+安装项目后也可使用独立入口：
+
+```bash
+rtl-rs-check-gui
+```
+
+Linux 必须安装与实际 Python 解释器匹配的 Tkinter 和 X11 工具。Debian/Ubuntu 使用 `python3-tk x11-utils`；RHEL/CentOS 使用匹配版本的 `python3-tkinter xorg-x11-utils`；SCL Python 3.8 使用 `rh-python38-python-tkinter xorg-x11-utils`。先探测显示会话，再启动：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/launch_rscheck_gui.sh --probe-only
+bash scripts/launch_rscheck_gui.sh
+```
+
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及八个互不重复的 1-based 列号。RTL 数据源可选：
+
+- **在线 NPI**：填写 collector、Verdi elaborated KDB、可选 NPI 库目录、超时和 inventory 保存路径；
+- **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。
+
+在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
+
+“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、每行匹配实例数和 finding。选择结果行后可查看 finding 与证据；“运行日志”页保留实际命令、stdout、stderr 和退出码。
 
 ## 先验证 Excel
 
@@ -172,7 +203,7 @@ python -m rscheck check \
 
 ## 跨设备启动 Verdi GUI
 
-`rscheck` 本身是 CLI；需要查看层次时，用仓库内的启动器打开同一个 elaborated KDB。启动器只执行 `verdi -elab <KDB>`，不接受 RTL、filelist、`work.lib++`、`-top` 或任意参数透传：
+Verdi GUI 与上面的 `rscheck` 自带 GUI 是两个独立窗口。`rscheck` GUI 用于输入和查看检查结果；需要人工浏览 RTL hierarchy、实例或连线时，再用仓库内的 Verdi 启动器打开同一个 elaborated KDB。启动器只执行 `verdi -elab <KDB>`，不接受 RTL、filelist、`work.lib++`、`-top` 或任意参数透传：
 
 ```bash
 cd "$HOME/suhua_rs_tool"
@@ -190,7 +221,7 @@ bash scripts/launch_verdi_gui.sh \
   --background
 ```
 
-GUI 可以来自本地图形终端、VNC/XRDP 桌面，或客户端已运行 X server 的 `ssh -Y` 会话。GNOME 不是必需条件；KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 桌面均可使用。Wayland 桌面必须启用 Xwayland，因为 Verdi 是 X11 应用。Debian/Ubuntu 安装 `x11-utils`，RHEL/CentOS 安装 `xorg-x11-utils`，以提供 `xdpyinfo`/`xwininfo`。
+两个 Linux GUI 都可以来自本地图形终端、VNC/XRDP 桌面，或客户端已运行 X server 的 `ssh -Y` 会话。GNOME 不是必需条件；KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 桌面均可使用。Wayland 桌面必须启用 Xwayland。Debian/Ubuntu 安装 `x11-utils`，RHEL/CentOS 安装 `xorg-x11-utils`，以提供 `xdpyinfo`、`xprop` 和 `xwininfo`。
 
 应优先由图形会话所属用户运行，并确保该用户能读取仓库和 KDB。root 从其他用户进程恢复 GUI 环境只作为旧部署兼容回退，可能受 SELinux、`hidepid` 和 Xauthority 权限限制。
 
@@ -219,7 +250,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-离线测试覆盖 XLSX/CSV 解析、列映射、公式/空字段/重复组、实例分组、拍数、模块名、clk/rst、CRG、多源、前缀歧义和报告导出。真实 NPI 编译与设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+88 项自动测试覆盖 XLSX/CSV 解析、列映射、公式/空字段/重复组、实例分组、拍数、模块名、clk/rst、CRG、多源、前缀歧义、报告导出、GUI 命令构造/生命周期和 Linux GUI 启动器。真实 NPI 编译与设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。Windows 当前同样发现 88 项，其中 21 项 Linux Bash/X11 测试按预期 skipped，其余全部通过。
 
 在已登录图形桌面并安装 Verdi/NPI 的 Linux 设备上，可运行完整 GUI 正向链路：
 
@@ -230,6 +261,8 @@ export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
 bash scripts/launch_verdi_gui.sh --probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
+
+工具自带 GUI 的可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。
 
 GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。完整脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。
 
@@ -245,4 +278,4 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-64 项全量测试和 17 项 GUI 定向测试全部通过。未设置 GUI 选择变量时自动发现 `DISPLAY=:0`，Verdi 在 2 秒内出现窗口，独立 launcher 成功打开真实 elaborated KDB；同一 KDB 的在线 NPI 检查为 2 行 PASS、0 error、0 warning。错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+CentOS 上 88 项全量测试全部通过。清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后，启动器仍自动发现 `DISPLAY=:0`。工具自带 GUI 的“验证 Excel”连续 20 轮均为 2 行 VALID、0 error、0 warning；离线正例连续 100 轮均为 2 行 PASS、0 error、0 warning；生成 10,000 行的单轮 GUI 负载耗时 4.10 秒、最大 RSS 150080 KiB，仍为 0 error、0 warning；取消发生在进程启动阶段的回归连续 100 轮在 9 秒内通过。真实 elaborated KDB 在线 GUI smoke 连续 3 轮均为 2 行 PASS、0 error、0 warning，Verdi launcher 也能打开同一 KDB。错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。Windows 当前 88 项测试中有 21 项 Linux Bash/X11 测试按预期 skipped；工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，无文字或控件重叠，截图不提交仓库。

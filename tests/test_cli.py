@@ -150,6 +150,42 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 2)
                 self.assertIn("unrecognized arguments", error.getvalue())
 
+    def test_header_check_can_enable_validation_disabled_by_config(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            specs = root / "specs.csv"
+            specs.write_text(
+                "Wrong,RS_module,RS_inst,position,step,clk,rst,CRG_source\n"
+                "OUT,rs_pipe,PIPE,top.u,1,clk,rst,crg\n",
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["excel"]["validate_headers"] = False
+            config = root / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+
+            with redirect_stdout(StringIO()):
+                self.assertEqual(
+                    main(["validate", "--excel", str(specs), "--config", str(config)]),
+                    0,
+                )
+            error = StringIO()
+            with redirect_stderr(error):
+                code = main(
+                    [
+                        "validate",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--header-check",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("header validation failed", error.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

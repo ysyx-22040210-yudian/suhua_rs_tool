@@ -82,6 +82,33 @@ class NpiRunnerTests(unittest.TestCase):
                     elab_db=elab_db,
                 )
 
+    def test_work_library_and_symlink_alias_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            work_library = root / "work.lib++"
+            work_library.mkdir()
+            candidates = [work_library]
+            alias = root / "renamed-kdb"
+            try:
+                alias.symlink_to(work_library, target_is_directory=True)
+            except OSError:
+                pass
+            else:
+                candidates.append(alias)
+
+            for candidate in candidates:
+                with self.subTest(candidate=candidate), self.assertRaisesRegex(
+                    InventoryError, "not an elaborated KDB"
+                ):
+                    collect_inventory(
+                        collector,
+                        [self._spec()],
+                        RtlConfig(),
+                        elab_db=candidate,
+                    )
+
     def test_existing_elaborated_database_is_the_only_design_argument(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

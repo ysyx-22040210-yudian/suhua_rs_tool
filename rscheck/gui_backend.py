@@ -1,0 +1,516 @@
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from .model import FIELD_NAMES
+
+
+LIVE_SOURCE = "live"
+INVENTORY_SOURCE = "inventory"
+
+
+class GuiInputError(ValueError):
+    """A form value cannot be represented by the supported CLI contract."""
+
+
+class GuiReportError(ValueError):
+    """A CLI result is missing or is not a supported report document."""
+
+
+@dataclass(frozen=True)
+class GuiRunRequest:
+    excel_path: str
+    config_path: str
+    columns: Mapping[str, str] = field(default_factory=dict)
+    sheet: str = ""
+    header_row: str = ""
+    data_start_row: str = ""
+    validate_headers: bool = True
+    source_mode: str = LIVE_SOURCE
+    collector_path: str = ""
+    elab_db_path: str = ""
+    inventory_path: str = ""
+    npi_lib_dir: str = ""
+    npi_timeout: str = ""
+    keep_inventory_path: str = ""
+    json_report_path: str = ""
+    csv_report_path: str = ""
+
+
+@dataclass(frozen=True)
+class LoadedReport:
+    summary: Mapping[str, Any]
+    global_findings: tuple[Mapping[str, Any], ...]
+    rows: tuple[Mapping[str, Any], ...]
+    raw: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    command: tuple[str, ...]
+    returncode: int
+    stdout: str
+    stderr: str
+    cancelled: bool = False
+
+
+def find_project_root() -> Path:
+    configured = os.environ.get("RSCHECK_PROJECT_ROOT", "").strip()
+    candidates = [Path(configured)] if configured else []
+    candidates.extend([Path.cwd(), Path(__file__).resolve().parents[1]])
+    for candidate in candidates:
+        if (candidate / "pyproject.toml").is_file() and (candidate / "rscheck").is_dir():
+            return candidate.resolve()
+    return Path.cwd().resolve()
+
+
+def default_columns() -> dict[str, str]:
+    return {name: str(index) for index, name in enumerate(FIELD_NAMES, start=1)}
+
+
+def resolve_user_path(value: str | Path, *, base: str | Path | None = None) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path(base) / path if base is not None else find_project_root() / path
+    return path.resolve(strict=False)
+
+
+def _path_identity(value: str | Path) -> str:
+    return os.path.normcase(str(resolve_user_path(value)))
+
+
+def _validate_output_paths(
+    request: GuiRunRequest,
+    *,
+    json_report: Path,
+    csv_report: Path | None,
+    keep_inventory: Path | None,
+) -> None:
+    outputs = {"JSON report": json_report}
+    if csv_report is not None:
+        outputs["CSV report"] = csv_report
+    if keep_inventory is not None:
+        outputs["kept inventory"] = keep_inventory
+
+    seen: dict[str, str] = {}
+    for label, path in outputs.items():
+        identity = _path_identity(path)
+        if identity in seen:
+            raise GuiInputError(f"{label} must not use the same path as {seen[identity]}")
+        seen[identity] = label
+
+    protected = {
+        "Excel input": request.excel_path,
+        "configuration input": request.config_path,
+    }
+    if request.source_mode == INVENTORY_SOURCE:
+        protected["inventory input"] = request.inventory_path
+    elif request.source_mode == LIVE_SOURCE:
+        protected["NPI collector"] = request.collector_path
+    protected_identities = {
+        _path_identity(path): label for label, path in protected.items() if str(path).strip()
+    }
+    for label, path in outputs.items():
+        protected_label = protected_identities.get(_path_identity(path))
+        if protected_label:
+            raise GuiInputError(f"{label} must not overwrite {protected_label}")
+
+    protected_directories: list[tuple[str, Path]] = []
+    if request.source_mode == LIVE_SOURCE and request.elab_db_path.strip():
+        protected_directories.append(
+            ("the elaborated KDB", resolve_user_path(request.elab_db_path))
+        )
+    if request.source_mode == LIVE_SOURCE and request.npi_lib_dir.strip():
+        protected_directories.append(
+            ("the NPI library directory", resolve_user_path(request.npi_lib_dir))
+        )
+    for protected_label, protected_directory in protected_directories:
+        for label, path in outputs.items():
+            try:
+                path.relative_to(protected_directory)
+            except ValueError:
+                continue
+            raise GuiInputError(f"{label} must not be written inside {protected_label}")
+
+
+def _required(value: str, label: str) -> str:
+    result = value.strip()
+    if not result:
+        raise GuiInputError(f"{label} is required")
+    return result
+
+
+def _positive_integer(value: str, label: str, *, optional: bool = False) -> str:
+    result = value.strip()
+    if optional and not result:
+        return ""
+    if not result.isdigit() or int(result) < 1:
+        raise GuiInputError(f"{label} must be a positive integer")
+    return str(int(result))
+
+
+def _common_arguments(request: GuiRunRequest) -> list[str]:
+    excel_path = _required(request.excel_path, "Excel path")
+    config_path = _required(request.config_path, "configuration path")
+    missing = [name for name in FIELD_NAMES if name not in request.columns]
+    extra = [name for name in request.columns if name not in FIELD_NAMES]
+    if missing:
+        raise GuiInputError("missing column mappings: " + ", ".join(missing))
+    if extra:
+        raise GuiInputError("unknown column mappings: " + ", ".join(sorted(extra)))
+
+    columns: dict[str, str] = {}
+    reverse: dict[str, list[str]] = {}
+    for field_name in FIELD_NAMES:
+        column = _positive_integer(request.columns[field_name], f"column {field_name}")
+        columns[field_name] = column
+        reverse.setdefault(column, []).append(field_name)
+    collisions = {column: names for column, names in reverse.items() if len(names) > 1}
+    if collisions:
+        detail = "; ".join(
+            f"column {column}: {', '.join(names)}"
+            for column, names in sorted(collisions.items(), key=lambda item: int(item[0]))
+        )
+        raise GuiInputError("column mappings must be unique; " + detail)
+
+    header_row = _positive_integer(request.header_row, "header row", optional=True)
+    data_start_row = _positive_integer(
+        request.data_start_row, "data start row", optional=True
+    )
+    if header_row and data_start_row and int(data_start_row) <= int(header_row):
+        raise GuiInputError("data start row must be after the header row")
+
+    sheet = request.sheet.strip()
+    if sheet.isdigit() and int(sheet) < 1:
+        raise GuiInputError("sheet index must be >= 1")
+
+    arguments = ["--excel", excel_path, "--config", config_path]
+    if sheet:
+        arguments.extend(["--sheet", sheet])
+    if header_row:
+        arguments.extend(["--header-row", header_row])
+    if data_start_row:
+        arguments.extend(["--data-start-row", data_start_row])
+    arguments.append("--header-check" if request.validate_headers else "--no-header-check")
+    for field_name in FIELD_NAMES:
+        arguments.extend(["--column", f"{field_name}={columns[field_name]}"])
+    return arguments
+
+
+def build_validate_command(
+    request: GuiRunRequest, *, python_executable: str | None = None
+) -> list[str]:
+    python = python_executable or sys.executable
+    return [python, "-m", "rscheck", "validate", *_common_arguments(request), "--json"]
+
+
+def build_check_command(
+    request: GuiRunRequest,
+    *,
+    internal_json_report: str | Path | None = None,
+    python_executable: str | None = None,
+) -> list[str]:
+    python = python_executable or sys.executable
+    command = [python, "-m", "rscheck", "check", *_common_arguments(request)]
+
+    if request.source_mode == LIVE_SOURCE:
+        collector = _required(request.collector_path, "NPI collector path")
+        elab_db = _required(request.elab_db_path, "Verdi elaborated KDB path")
+        if Path(elab_db.rstrip("/\\")).name == "work.lib++":
+            raise GuiInputError("work.lib++ is not an elaborated KDB")
+        command.extend(["--collector", collector, "--elab-db", elab_db])
+        npi_timeout = _positive_integer(
+            request.npi_timeout, "NPI timeout", optional=True
+        )
+        if npi_timeout:
+            command.extend(["--npi-timeout", npi_timeout])
+        if request.npi_lib_dir.strip():
+            command.extend(["--npi-lib-dir", request.npi_lib_dir.strip()])
+        keep_inventory = (
+            resolve_user_path(request.keep_inventory_path)
+            if request.keep_inventory_path.strip()
+            else None
+        )
+    elif request.source_mode == INVENTORY_SOURCE:
+        inventory = _required(request.inventory_path, "inventory path")
+        command.extend(["--inventory", inventory])
+        keep_inventory = None
+    else:
+        raise GuiInputError(f"unsupported RTL source mode: {request.source_mode!r}")
+
+    raw_report_path = str(internal_json_report or request.json_report_path).strip()
+    if not raw_report_path:
+        raise GuiInputError("JSON report path is required")
+    report_path = resolve_user_path(raw_report_path)
+    csv_report = (
+        resolve_user_path(request.csv_report_path)
+        if request.csv_report_path.strip()
+        else None
+    )
+    _validate_output_paths(
+        request,
+        json_report=report_path,
+        csv_report=csv_report,
+        keep_inventory=keep_inventory,
+    )
+    if keep_inventory is not None:
+        command.extend(["--keep-inventory", str(keep_inventory)])
+    command.extend(["--json-report", str(report_path)])
+    if csv_report is not None:
+        command.extend(["--csv-report", str(csv_report)])
+    return command
+
+
+def format_command(command: Sequence[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(list(command))
+    return shlex.join(command)
+
+
+def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
+    try:
+        value = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise GuiReportError(
+            f"validation output is not JSON: line {exc.lineno}, column {exc.colno}"
+        ) from exc
+    if not isinstance(value, list):
+        raise GuiReportError("validation output must be a JSON array")
+    rows: list[Mapping[str, Any]] = []
+    required = {"row", *FIELD_NAMES}
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise GuiReportError(f"validation row {index + 1} must be an object")
+        missing = sorted(required - set(item))
+        if missing:
+            raise GuiReportError(
+                f"validation row {index + 1} is missing: {', '.join(missing)}"
+            )
+        rows.append(dict(item))
+    return tuple(rows)
+
+
+def _mapping_array(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+        raise GuiReportError(f"{name} must be an array of objects")
+    return tuple(dict(item) for item in value)
+
+
+def load_report(path: str | Path) -> LoadedReport:
+    report_path = Path(path)
+    try:
+        value = json.loads(report_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise GuiReportError(f"JSON report was not created: {report_path}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise GuiReportError(f"cannot read JSON report {report_path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GuiReportError(
+            f"invalid JSON report {report_path}: line {exc.lineno}, column {exc.colno}"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise GuiReportError("JSON report root must be an object")
+    schema_version = value.get("schema_version")
+    if isinstance(schema_version, bool) or schema_version != 1:
+        raise GuiReportError("unsupported JSON report schema_version")
+    summary = value.get("summary")
+    if not isinstance(summary, Mapping):
+        raise GuiReportError("JSON report summary must be an object")
+    for name in ("passed", "rows", "passed_rows", "failed_rows", "errors", "warnings"):
+        if name not in summary:
+            raise GuiReportError(f"JSON report summary is missing {name!r}")
+    if not isinstance(summary["passed"], bool):
+        raise GuiReportError("JSON report summary.passed must be true or false")
+    for name in ("rows", "passed_rows", "failed_rows", "errors", "warnings"):
+        if (
+            isinstance(summary[name], bool)
+            or not isinstance(summary[name], int)
+            or summary[name] < 0
+        ):
+            raise GuiReportError(
+                f"JSON report summary.{name} must be a non-negative integer"
+            )
+
+    global_findings = _mapping_array(value.get("global_findings"), "global_findings")
+    rows = _mapping_array(value.get("rows"), "rows")
+    if summary["rows"] != len(rows):
+        raise GuiReportError("JSON report summary.rows does not match rows length")
+    if summary["passed_rows"] + summary["failed_rows"] != summary["rows"]:
+        raise GuiReportError(
+            "JSON report passed_rows and failed_rows do not add up to rows"
+        )
+    all_findings = list(global_findings)
+    actual_passed_rows = 0
+    for index, row in enumerate(rows):
+        spec = row.get("spec")
+        if not isinstance(spec, Mapping):
+            raise GuiReportError(f"report row {index + 1}.spec must be an object")
+        missing = [name for name in ("row",) + FIELD_NAMES if name not in spec]
+        if missing:
+            raise GuiReportError(
+                f"report row {index + 1}.spec is missing: {', '.join(missing)}"
+            )
+        if not isinstance(row.get("passed"), bool):
+            raise GuiReportError(f"report row {index + 1}.passed must be true or false")
+        actual_passed_rows += int(row["passed"])
+        _mapping_array(row.get("matched_instances"), f"report row {index + 1}.matched_instances")
+        all_findings.extend(
+            _mapping_array(row.get("findings"), f"report row {index + 1}.findings")
+        )
+    if actual_passed_rows != summary["passed_rows"]:
+        raise GuiReportError("JSON report passed_rows does not match row results")
+    actual_errors = sum(item.get("severity") == "error" for item in all_findings)
+    actual_warnings = sum(item.get("severity") == "warning" for item in all_findings)
+    if actual_errors != summary["errors"] or actual_warnings != summary["warnings"]:
+        raise GuiReportError("JSON report finding counts do not match summary")
+    if summary["passed"] != (actual_errors == 0 and summary["failed_rows"] == 0):
+        raise GuiReportError("JSON report passed state does not match row findings")
+    return LoadedReport(
+        summary=dict(summary),
+        global_findings=global_findings,
+        rows=rows,
+        raw=dict(value),
+    )
+
+
+class ProcessController:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._process: subprocess.Popen[str] | None = None
+        self._starting = False
+        self._cancel_requested = False
+
+    @property
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._starting or self._process is not None
+
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> ProcessResult:
+        with self._lock:
+            if self._starting or self._process is not None:
+                raise RuntimeError("another GUI command is already running")
+            self._starting = True
+            self._cancel_requested = False
+
+        child_environment = os.environ.copy()
+        if environment:
+            child_environment.update(environment)
+        child_environment["PYTHONUTF8"] = "1"
+        child_environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        options: dict[str, Any] = {
+            "cwd": str(cwd) if cwd is not None else None,
+            "env": child_environment,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "shell": False,
+        }
+        if os.name == "nt":
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            options["start_new_session"] = True
+
+        try:
+            process = subprocess.Popen(list(command), **options)
+        except Exception:
+            with self._lock:
+                self._starting = False
+            raise
+        with self._lock:
+            self._process = process
+            self._starting = False
+            cancel_now = self._cancel_requested
+        if cancel_now:
+            self._request_process_stop(process)
+        try:
+            stdout, stderr = process.communicate()
+            with self._lock:
+                cancelled = self._cancel_requested
+            return ProcessResult(
+                command=tuple(command),
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                cancelled=cancelled,
+            )
+        finally:
+            with self._lock:
+                if self._process is process:
+                    self._process = None
+                self._cancel_requested = False
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if not self._starting and self._process is None:
+                return False
+            self._cancel_requested = True
+            process = self._process
+        if process is not None and process.poll() is None:
+            self._request_process_stop(process)
+        return True
+
+    @staticmethod
+    def _request_process_stop(process: subprocess.Popen[str]) -> None:
+        if os.name == "nt":
+            # CTRL_BREAK cannot be relied on for GUI-launched process groups.
+            # taskkill /T /F is the deterministic way to stop both the CLI and
+            # a collector child before communicate() waits for inherited pipes.
+            ProcessController._terminate(process, force=True)
+            return
+        ProcessController._terminate(process)
+        threading.Thread(
+            target=ProcessController._force_after_timeout,
+            args=(process,),
+            name="rscheck-gui-force-kill",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _force_after_timeout(process: subprocess.Popen[str]) -> None:
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            ProcessController._terminate(process, force=True)
+
+    @staticmethod
+    def _terminate(process: subprocess.Popen[str], *, force: bool = False) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                arguments = ["taskkill", "/PID", str(process.pid), "/T"]
+                if force:
+                    arguments.append("/F")
+                completed = subprocess.run(
+                    arguments,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=5,
+                )
+                if completed.returncode != 0 and process.poll() is None:
+                    process.kill() if force else process.terminate()
+            else:
+                os.killpg(
+                    os.getpgid(process.pid), signal.SIGKILL if force else signal.SIGTERM
+                )
+        except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+            if process.poll() is None:
+                process.kill() if force else process.terminate()

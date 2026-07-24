@@ -11,6 +11,7 @@ dependencies = []
 
 [project.scripts]
 rtl-rs-check = "rscheck.cli:main"
+rtl-rs-check-gui = "rscheck.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["rscheck*"]

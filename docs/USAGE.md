@@ -1,6 +1,6 @@
 # RTL 打拍例化检查工具使用手册
 
-本文档说明如何准备规格表、配置检查规则、验证输入、使用可信 inventory 做离线检查，以及使用 Verdi elaborated KDB 做在线 NPI 检查。
+本文档说明如何通过命令行（CLI）或工具自带的 Tkinter 桌面 GUI 准备规格表、配置检查规则、验证输入、使用可信 inventory 做离线检查，以及使用 Verdi elaborated KDB 做在线 NPI 检查。
 
 > **重要约束：在线 NPI 只接受 `elabcom` 生成的 elaborated KDB 目录。**
 >
@@ -8,12 +8,13 @@
 
 ## 1. 安装与依赖
 
-### 1.1 Python 前端
+### 1.1 Python CLI 和工具自带 GUI
 
-Python 前端负责读取 Excel/CSV、加载配置、执行规则检查和生成报告。
+Python 前端负责读取 Excel/CSV、加载配置、执行规则检查和生成报告，同时提供 CLI 与工具自带桌面 GUI。
 
 - Python 版本：3.8 或更高。
-- Python 运行时依赖：无第三方依赖。
+- CLI 没有第三方 Python 运行时依赖。
+- GUI 使用标准库 Tkinter；最小化 Linux 安装通常要另装与当前 Python 解释器匹配的 Tk 包。
 - 支持的规格文件：`.xlsx`、`.xlsm`、`.csv`、`.tsv`。
 - 不支持旧二进制 `.xls`；请先另存为 `.xlsx` 或 CSV。
 - 离线 inventory 模式不需要 Verdi、NPI license 或 C++ 编译器。
@@ -39,7 +40,7 @@ Windows PowerShell 做离线检查时，虚拟环境激活命令为：
 python -m rscheck --help
 ```
 
-本文后续统一使用 `python -m rscheck`；安装后可等价替换为 `rtl-rs-check`。
+本文后续 CLI 统一使用 `python -m rscheck`；安装后可等价替换为 `rtl-rs-check`。GUI 可使用 `python -m rscheck gui` 或安装入口 `rtl-rs-check-gui`。
 
 ### 1.2 在线 NPI 环境
 
@@ -55,17 +56,40 @@ python -m rscheck --help
 
 已验证组合为 CentOS 7.9、Python 3.8.13、G++ 11.2.1、Verdi/NPI O-2018.09-SP2、`NPI_PLATFORM=LINUX64`。
 
-### 1.3 Verdi GUI 环境
+### 1.3 Linux 图形环境与 Tkinter
 
-Verdi GUI 需要一个能通过 `xdpyinfo` 访问的 X11 DISPLAY。以下方式均可：
+工具自带 GUI 和 Verdi GUI 都需要一个能通过 `xdpyinfo` 访问的 X11 DISPLAY。以下方式均可：
 
 - 在 Linux 本地图形桌面的终端中运行；
 - 在 VNC/XRDP 桌面内的终端中运行；
 - 从已启动 X server 的客户端使用 `ssh -Y` 登录，并保持 SSH 连接开启。
 
-GNOME 不是必需条件。KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 会话都可使用；Wayland 会话必须启用 Xwayland。Debian/Ubuntu 需安装 `x11-utils`，RHEL/CentOS 需安装 `xorg-x11-utils`，以提供 GUI 探测所需的 `xdpyinfo` 和完整测试所需的 `xwininfo`。
+GNOME 不是必需条件。KDE、Xfce、MATE、Cinnamon、LXQt 等 X11 会话都可使用；Wayland 会话必须启用 Xwayland。按系统安装依赖，并确保 Tk 包与实际启动 GUI 的 Python 版本匹配：
 
-应优先在图形会话所属用户的终端中运行，并将仓库和 KDB 放在该用户可读取的位置。root 读取其他用户 `/proc/<PID>/environ` 的跨用户探测仅作为旧部署兼容回退，不保证在启用 SELinux、`hidepid` 或严格 Xauthority 权限时可用。
+Debian/Ubuntu：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-tk x11-utils
+```
+
+RHEL/CentOS 的系统 Python：
+
+```bash
+sudo yum install -y python3-tkinter xorg-x11-utils
+```
+
+CentOS/RHEL Software Collections 的 Python 3.8：
+
+```bash
+sudo yum install -y rh-python38-python-tkinter xorg-x11-utils
+source /opt/rh/rh-python38/enable
+python3 -c 'import tkinter; print(tkinter.TkVersion)'
+```
+
+若发行版使用带版本号的包名，应安装与 `python3 --version` 和 `python3 -c 'import sys; print(sys.executable)'` 对应的 `python3-tkinter` 包。`x11-utils`/`xorg-x11-utils` 提供 GUI 探测和测试所需的 `xdpyinfo`、`xprop` 与 `xwininfo`。
+
+应优先在图形会话所属用户的终端中运行，并将仓库和 KDB 放在该用户可读取的位置。root 读取其他用户 `/proc/<PID>/environ` 的跨用户探测仅作为旧部署兼容回退，不保证在启用 SELinux、`hidepid` 或严格 Xauthority 权限时可用。Windows 和 macOS 可直接运行工具自带 GUI；macOS 只支持 Excel 验证和离线 inventory 检查，真实 NPI collector/Verdi KDB 在线检查只支持 Linux。
 
 ## 2. 规格表要求
 
@@ -259,11 +283,71 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `--header-row N` | 覆盖表头行 |
 | `--data-start-row N` | 覆盖数据起始行 |
 | `--column FIELD=INDEX` | 覆盖一个字段的列号，可重复 |
+| `--header-check` | 本次运行显式开启表头校验；GUI 会按复选框状态传入该参数或 `--no-header-check` |
 | `--no-header-check` | 本次运行关闭表头校验 |
 
 `--no-header-check` 只应在表头不可控且列映射已经独立确认时使用；它会降低发现错列的能力。
 
-## 5. 先运行 `validate`
+## 5. 工具自带桌面 GUI
+
+### 5.1 启动方式
+
+Windows PowerShell 和 macOS 终端在仓库根目录执行：
+
+```bash
+python -m rscheck gui
+```
+
+执行 `python -m pip install -e .` 后也可使用安装入口：
+
+```bash
+rtl-rs-check-gui
+```
+
+macOS 可使用 GUI 验证 Excel 和执行离线 inventory 检查，但 Synopsys NPI collector、`libNPI.so` 和真实 elaborated KDB 在线加载只支持 Linux。
+
+Linux 不建议直接猜测 `DISPLAY` 或硬编码登录时生成的 Xauthority 路径。启动器与 Verdi launcher 共用 X11/Xwayland 会话发现逻辑：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/launch_rscheck_gui.sh --probe-only
+bash scripts/launch_rscheck_gui.sh
+```
+
+`--probe-only` 只检查有效显示会话，不导入 Tkinter、不启动窗口，也不要求 Verdi 或 license。无参数启动会确认 Tkinter 可导入，然后以前台方式执行 `python -m rscheck gui`。若使用非默认 Python，可设置 `PYTHON_BIN`；SCL Python 3.8 默认会自动 source `/opt/rh/rh-python38/enable`，也可用 `PYTHON_ENABLE` 指定其他 enable 脚本。
+
+### 5.2 “检查配置”页
+
+| 区域 | GUI 字段 | 说明 |
+|---|---|---|
+| 规格输入 | `Excel / CSV` | `.xlsx`、`.xlsm`、`.csv` 或 `.tsv` 规格路径 |
+| 规格输入 | `配置 JSON`、`加载` | 选择配置；“加载”把 sheet、行号及八列映射载入界面 |
+| 规格输入 | `工作表` | 工作表名或 1-based 序号；CSV/TSV 不使用 sheet |
+| 规格输入 | `表头行`、`数据起始行` | 均为 1-based 正整数，数据起始行必须晚于表头行 |
+| 规格输入 | `校验映射表头` | 开启时八个映射列的表头必须与字段名精确一致 |
+| Excel 列映射 | 八个列号 | `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`；均从 1 开始、必须互不重复，其他列忽略 |
+| 报告输出 | `JSON` | 必填；结构化检查报告，GUI 也从它读取结果 |
+| 报告输出 | `CSV` | 可选；UTF-8 BOM 明细报告，可直接由 Excel 打开 |
+
+数据源使用单选项切换：
+
+- `在线 NPI（elaborated KDB）`：填写 `Collector`、`Elab KDB`，可选填写 `NPI 库目录`、`保存 Inventory`，并设置正整数 `超时（秒）`。
+- `离线 Inventory`：只选择已有 `Inventory JSON`。它适合回归和问题复现，但不证明 inventory 与当前 RTL 同步。
+
+在线模式严格构造现有 CLI 的 `--collector ... --elab-db ...` 命令。GUI 没有 RTL、filelist、top、编译选项或 passthrough 输入框，也不会在检查时调用 `vericom/elabcom`；`Elab KDB` 必须是生产流程预先生成的 elaborated KDB，不能是 `work.lib++`。
+
+### 5.3 执行、结果和取消
+
+- `验证 Excel`：在后台运行 `validate --json`，只检查配置、表头、列映射和规格行；成功后切到“检查结果”页并显示 `VALID`。
+- `运行 RTL 检查`：在后台运行与当前界面等价的 `check` 命令；返回 `0` 显示 `PASS`，返回 `1` 显示 `FAIL` 和差异，基础设施错误显示 `ERROR`。
+- `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
+- `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
+
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示 Excel 行、`Intf_type`、`position`、`RS_inst`、实例数和 finding 数。选中一行后，下方列出 finding 的级别、代码、实例和说明；再选 finding 可在证据面板查看 expected/actual、匹配实例、端口连接、clk 来源及源文件/行号等报告内容。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际执行命令、stdout、stderr 和退出码，便于复现 GUI 问题。
+
+GUI 在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+
+## 6. 先运行 `validate`
 
 `validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。
 
@@ -292,7 +376,7 @@ python -m rscheck validate \
 
 建议在每次调整列映射、sheet、表头行、数据起始行或 suffix 规则后先执行 `validate`。注意：`validate` 成功只说明规格输入合法，不代表 RTL 检查会通过。
 
-## 6. 可信离线 inventory 模式
+## 7. 可信离线 inventory 模式
 
 离线模式从已有的 schema v1 inventory 读取 elaborated 层次快照，不启动 collector：
 
@@ -307,7 +391,7 @@ python -m rscheck check \
 
 `--inventory` 与 `--collector` 互斥。离线模式不能使用 `--elab-db`、`--keep-inventory` 或 `--npi-lib-dir`。
 
-### 6.1 信任边界和新鲜度警告
+### 7.1 信任边界和新鲜度警告
 
 > **离线 inventory 是受信任输入，不提供 KDB 来源或新鲜度证明。**
 
@@ -328,7 +412,7 @@ schema v1 不记录 RTL commit、elabcom 命令、top、宏、include 路径、K
 inventory.top.<rtl-commit>.<kdb-timestamp>.json
 ```
 
-### 6.2 inventory 基本结构
+### 7.2 inventory 基本结构
 
 ```json
 {
@@ -369,7 +453,7 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 
 加载器要求 `schema_version=1`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并检查实例 `name/full_name` 一致性和 `full_name` 唯一性。inventory 中任何 `warnings` 都会转换为全局 `NPI_UNRESOLVED` 硬错误，避免不完整采集误报 PASS。
 
-## 7. 构建 NPI collector
+## 8. 构建 NPI collector
 
 从仓库根目录执行，避免改变后续命令的工作目录：
 
@@ -434,9 +518,9 @@ npi/build/rs_npi_collector \
   --elab-db /absolute/path/to/kdb.elab++
 ```
 
-## 8. 生产 elaborated KDB 输入
+## 9. 生产 elaborated KDB 输入
 
-### 8.1 接受和拒绝的输入
+### 9.1 接受和拒绝的输入
 
 在线模式接受：
 
@@ -455,7 +539,7 @@ npi/build/rs_npi_collector \
 
 即使生产准备流程内部使用 filelist，它也只能用于工具外部的 `vericom/elabcom` 阶段，不能传给本工具的 `check` 或 collector 命令。
 
-### 8.2 为仓库示例生成 KDB
+### 9.2 为仓库示例生成 KDB
 
 以下命令从仓库根目录开始，并使用独立临时输出目录，避免旧 `work.lib++` 污染结果：
 
@@ -479,7 +563,7 @@ printf 'KDB: %s\n' "$ELAB_ROOT/kdb.elab++"
 
 `vericom` 在当前目录生成默认编译库 `work.lib++`；紧接着在同一目录运行 `elabcom`，它读取该编译库并生成真正的 elaborated KDB。`-elab` 可指定自定义 KDB 目录名，collector 不强制 `.elab++` 后缀。
 
-## 9. 在线 `check`
+## 10. 在线 `check`
 
 在上一步同一个 shell 中，可直接使用 `$ELAB_ROOT`：
 
@@ -518,9 +602,9 @@ python -m rscheck check \
 
 不要在命令末尾添加 `-- -f ...`、`-- -sv ...` 或其他 Verdi 参数；argparse 会直接拒绝这些参数。
 
-### 9.1 打开同一个 KDB 的 Verdi GUI
+### 10.1 打开同一个 KDB 的 Verdi GUI
 
-`rscheck` 是 CLI。需要人工查看 hierarchy、实例或连线时，使用严格的跨设备启动器；它只接受现存 elaborated KDB 目录，并且实际调用固定为 `verdi -elab <KDB>`。
+这里启动的是 Verdi GUI，不是第 5 节的 `rscheck` 自带 GUI。需要人工查看 hierarchy、实例或连线时，使用严格的跨设备启动器；它只接受现存 elaborated KDB 目录，并且实际调用固定为 `verdi -elab <KDB>`。
 
 先在当前图形 shell 中验证 GUI：
 
@@ -560,9 +644,9 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 
 完整端到端测试 `scripts/test_vm_verdi_gui.sh` 还支持 `PYTHON_BIN`、`CXX`、`NPI_INC_DIR` 和 `NPI_LIB_DIR`，分别覆盖 Python、C++ 编译器、`npi.h` 所在目录和 `libNPI.so` 所在目录。详见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。
 
-## 10. 报告和退出码
+## 11. 报告和退出码
 
-### 10.1 控制台
+### 11.1 控制台
 
 控制台首先输出整体结果，再逐行输出匹配数和 findings：
 
@@ -572,7 +656,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances)
 ```
 
-### 10.2 JSON 报告
+### 11.2 JSON 报告
 
 `--json-report` 写 UTF-8 JSON，包含：
 
@@ -584,7 +668,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 
 输出目录不存在时会自动创建。
 
-### 10.3 CSV 报告
+### 11.3 CSV 报告
 
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
@@ -594,7 +678,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 
 无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
 
-### 10.4 Python CLI 退出码
+### 11.4 Python CLI 退出码
 
 | 退出码 | 含义 |
 |---:|---|
@@ -602,7 +686,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | `1` | RTL/规格检查失败，或出现 fail-closed 全局错误 |
 | `2` | 命令参数、配置、规格表、inventory、collector、KDB、NPI 加载或报告输出失败 |
 
-### 10.5 直接运行 collector 的退出码
+### 11.5 直接运行 collector 的退出码
 
 | 退出码 | 含义 |
 |---:|---|
@@ -618,7 +702,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 
 通过 Python runner 使用 collector 时，collector 的非零退出会被转换为 Python CLI 的基础设施错误，通常返回 `2`。
 
-## 11. 常见错误与处理
+## 12. 常见错误与处理
 
 | 错误或 finding | 常见原因 | 处理建议 |
 |---|---|---|
@@ -636,7 +720,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
 | `unexpected argument` / `unrecognized arguments` | 仍在使用旧 `-- -f/-sv/-lib` 透传 | 删除透传，先在外部流程生成 KDB，再只传 `--elab-db` |
 | `npi_init failed` | NPI 环境、license 或版本问题 | 检查 license、Verdi 安装和平台库 |
-| `npi_load_design failed` | 传入了 `work.lib++`、KDB 损坏、版本不兼容、未完成 elaboration 或 top 错误 | 确认输入是 `elabcom -elab` 产物；用相同 Verdi 流程重新生成 KDB 并验证 top |
+| `npi_load_design failed` | KDB 损坏、版本不兼容、未完成 elaboration 或 top 错误 | 确认输入是 `elabcom -elab` 产物；用相同 Verdi 流程重新生成 KDB 并验证 top；`work.lib++` 会在启动 collector 前被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
 | `POSITION_NOT_FOUND` | Excel 路径不属于当前 elaborated top，或层次名错误 | 在同一 KDB 中核对完整实例层次和 `position` |
 | `GROUP_NOT_FOUND` | 没有实例同时满足前缀和 suffix regex | 核对 `RS_inst` 和 `rtl.suffix_regex` |
@@ -656,9 +740,9 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
 | `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
 | `multiple usable X11 displays` | 自动探测到多个有效 DISPLAY | 设置 `GUI_DISPLAY`，必要时同时设置 `GUI_USER` 或 `GUI_XAUTHORITY` |
-| `no active gnome-session-binary session` | 使用了仓库旧版或外部旧启动脚本 | 更新仓库并改用 `scripts/launch_verdi_gui.sh --probe-only`；当前实现不要求 GNOME |
+| `no active gnome-session-binary session` | 使用了仓库旧版或外部旧启动脚本 | 更新仓库；工具 GUI 用 `scripts/launch_rscheck_gui.sh --probe-only`，Verdi 用 `scripts/launch_verdi_gui.sh --probe-only`；当前实现不要求 GNOME |
 
-## 12. 当前边界
+## 13. 当前边界
 
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
 - 当前八字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
@@ -673,7 +757,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 - 离线 inventory 是可信快照例外，不包含来源证明；它不能替代新鲜 KDB 的在线采集。
 - NPI 真实构建和在线运行依赖特定 Synopsys 版本、平台动态库和 license；离线 Python 测试不能覆盖这些环境因素。
 
-## 13. 推荐操作顺序
+## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
 2. 配置八字段的 1-based 列映射。

@@ -29,11 +29,20 @@ def _common_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--header-row", type=int, help="override header row")
     parser.add_argument("--data-start-row", type=int, help="override first data row")
-    parser.add_argument(
-        "--no-header-check",
+    header_check = parser.add_mutually_exclusive_group()
+    header_check.add_argument(
+        "--header-check",
+        dest="header_check",
         action="store_true",
+        help="require mapped header cells to equal field names",
+    )
+    header_check.add_argument(
+        "--no-header-check",
+        dest="header_check",
+        action="store_false",
         help="do not require mapped header cells to equal field names",
     )
+    parser.set_defaults(header_check=None)
     return parser
 
 
@@ -43,6 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Check register-slice RTL instances against an Excel specification.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("gui", help="open the desktop graphical interface")
 
     validate = subparsers.add_parser(
         "validate",
@@ -135,7 +146,11 @@ def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig
         sheet=sheet,
         header_row=header_row,
         data_start_row=data_start_row,
-        validate_headers=False if args.no_header_check else config.excel.validate_headers,
+        validate_headers=(
+            config.excel.validate_headers
+            if args.header_check is None
+            else args.header_check
+        ),
         columns=columns,
     )
     return replace(config, excel=excel)
@@ -197,6 +212,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(raw_argv)
+    if args.command == "gui":
+        from .gui import main as gui_main
+
+        return gui_main()
     try:
         config = _apply_overrides(load_config(args.config), args)
         if args.command == "validate":

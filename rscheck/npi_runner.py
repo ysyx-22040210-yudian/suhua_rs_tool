@@ -64,6 +64,10 @@ def collect_inventory(
         raise InventoryError(
             f"Verdi elaborated database must be a directory: {elab_db_path}"
         )
+    if elab_db_path.name == "work.lib++":
+        raise InventoryError(
+            "work.lib++ is a compiled Verdi library, not an elaborated KDB"
+        )
     positions = sorted({spec.position for spec in specs})
     try:
         with tempfile.TemporaryDirectory(prefix="rtl-rs-check-") as temp_name:
