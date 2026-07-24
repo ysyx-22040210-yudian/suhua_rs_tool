@@ -14,7 +14,10 @@ FIELD_NAMES = (
     "clk",
     "rst",
     "CRG_source",
+    "RS_CFG_EN",
 )
+
+REQUIRED_ROW_FIELDS = tuple(name for name in FIELD_NAMES if name != "RS_CFG_EN")
 
 
 class RsCheckError(Exception):
@@ -76,6 +79,7 @@ class SpecRow:
     clk: str
     rst: str
     crg_source: str
+    rs_cfg_en: str
 
     @property
     def key(self) -> tuple[str, str]:
@@ -94,6 +98,7 @@ class SpecRow:
             "clk": self.clk,
             "rst": self.rst,
             "CRG_source": self.crg_source,
+            "RS_CFG_EN": self.rs_cfg_en,
         }
 
 
@@ -134,11 +139,27 @@ class ActualInstance:
     module: str
     file: str
     line: int | None
+    parameters: Mapping[str, str | None]
     ports: Mapping[str, PortConnection]
     clk_sources: tuple[DriverSource, ...]
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ActualInstance":
+        if "parameters" not in value:
+            raise InventoryError("instance 'parameters' is required by schema_version 2")
+        raw_parameters = value.get("parameters")
+        if not isinstance(raw_parameters, Mapping):
+            raise InventoryError("instance 'parameters' must be an object")
+        parameters: dict[str, str | None] = {}
+        for raw_name, raw_value in raw_parameters.items():
+            name = str(raw_name)
+            if not name:
+                raise InventoryError("instance parameter names must not be empty")
+            if raw_value is not None and not isinstance(raw_value, str):
+                raise InventoryError(
+                    f"instance parameter {name!r} value must be a string or null"
+                )
+            parameters[name] = raw_value
         raw_ports = value.get("ports", {})
         if not isinstance(raw_ports, Mapping):
             raise InventoryError("instance 'ports' must be an object")
@@ -158,6 +179,7 @@ class ActualInstance:
             module=str(value.get("module", "")),
             file=str(value.get("file", "")),
             line=line,
+            parameters=parameters,
             ports={str(k): PortConnection.from_value(v) for k, v in raw_ports.items()},
             clk_sources=tuple(DriverSource.from_mapping(v) for v in raw_sources),
         )
@@ -183,6 +205,7 @@ class Finding:
     row_number: int | None = None
     position: str = ""
     rs_inst: str = ""
+    rs_cfg_en: str = ""
     instance: str = ""
     expected: Any = None
     actual: Any = None
@@ -195,6 +218,7 @@ class Finding:
             "row": self.row_number,
             "position": self.position,
             "RS_inst": self.rs_inst,
+            "RS_CFG_EN": self.rs_cfg_en,
             "instance": self.instance,
             "expected": self.expected,
             "actual": self.actual,

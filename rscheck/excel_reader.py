@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 from xml.etree import ElementTree as ET
 
-from .model import FIELD_NAMES, ExcelConfig, SpecRow, WorkbookError
+from .model import FIELD_NAMES, REQUIRED_ROW_FIELDS, ExcelConfig, SpecRow, WorkbookError
 
 
 _CELL_REF_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
@@ -109,7 +109,9 @@ def _rows_to_specs(
         }
         if not any(values.values()):
             continue
-        missing = [field_name for field_name in FIELD_NAMES if not values[field_name]]
+        missing = [
+            field_name for field_name in REQUIRED_ROW_FIELDS if not values[field_name]
+        ]
         if missing:
             errors.append(f"row {row_number}: blank required fields: {', '.join(missing)}")
             continue
@@ -131,6 +133,7 @@ def _rows_to_specs(
             clk=values["clk"],
             rst=values["rst"],
             crg_source=values["CRG_source"],
+            rs_cfg_en=values["RS_CFG_EN"],
         )
         if not spec.position:
             errors.append(f"row {row_number}: position cannot be empty")

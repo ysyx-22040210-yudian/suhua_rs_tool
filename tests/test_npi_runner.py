@@ -26,6 +26,7 @@ class NpiRunnerTests(unittest.TestCase):
             clk="clk",
             rst="rst",
             crg_source="crg",
+            rs_cfg_en="",
         )
 
     def test_verdi_home_npi_library_is_prepended(self) -> None:
@@ -119,11 +120,12 @@ class NpiRunnerTests(unittest.TestCase):
 
             def completed(command, **kwargs):
                 self.assertEqual(Path(command[2]).read_text("utf-8"), "top.u\n")
+                self.assertEqual(Path(kwargs["cwd"]), Path(command[2]).parent)
                 output = Path(command[command.index("--output") + 1])
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 1,
+                            "schema_version": 2,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },

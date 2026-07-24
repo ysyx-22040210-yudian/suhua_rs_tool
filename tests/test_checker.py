@@ -8,7 +8,7 @@ from pathlib import Path
 
 from rscheck.checker import check_specs
 from rscheck.excel_reader import read_spec_rows
-from rscheck.inventory import load_inventory
+from rscheck.inventory import inventory_to_dict, load_inventory
 from rscheck.model import ConfigError, InventoryError, RtlConfig
 
 
@@ -22,6 +22,7 @@ COLUMNS = {
     "clk": 6,
     "rst": 7,
     "CRG_source": 8,
+    "RS_CFG_EN": 9,
 }
 
 
@@ -51,6 +52,198 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, self.inventory, self.rtl)
         self.assertTrue(report.passed)
         self.assertEqual(report.error_count, 0)
+
+    def test_rs_cfg_en_truth_matrix(self) -> None:
+        missing = object()
+        cases = (
+            ("zero_false_gate", "0", "假门控", True, set()),
+            ("wide_zero_false_gate", "000", "假门控", True, set()),
+            (
+                "invalid_internal_whitespace",
+                "0 0",
+                "假门控",
+                False,
+                {"RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            ("negative_zero_false_gate", "-0", "假门控", True, set()),
+            ("missing_blank", missing, "", True, set()),
+            (
+                "missing_false_gate",
+                missing,
+                "假门控",
+                False,
+                {"RS_CFG_EN_PARAMETER_MISSING"},
+            ),
+            (
+                "missing_other_label",
+                missing,
+                "真门控",
+                False,
+                {"RS_CFG_EN_PARAMETER_MISSING"},
+            ),
+            (
+                "zero_blank",
+                "0",
+                "",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH"},
+            ),
+            (
+                "zero_other_label",
+                "0",
+                "真门控",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH"},
+            ),
+            (
+                "one_false_gate",
+                "1",
+                "假门控",
+                False,
+                {"RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            (
+                "one_blank",
+                "1",
+                "",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            (
+                "one_other_label",
+                "1",
+                "真门控",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            (
+                "x_false_gate",
+                "x",
+                "假门控",
+                False,
+                {"RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            (
+                "z_false_gate",
+                "Z",
+                "假门控",
+                False,
+                {"RS_CFG_EN_VALUE_MISMATCH"},
+            ),
+            (
+                "unresolved_false_gate",
+                None,
+                "假门控",
+                False,
+                {"RS_CFG_EN_VALUE_UNRESOLVED"},
+            ),
+            (
+                "unresolved_blank",
+                None,
+                "",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_UNRESOLVED"},
+            ),
+            (
+                "unresolved_other_label",
+                None,
+                "真门控",
+                False,
+                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_UNRESOLVED"},
+            ),
+        )
+        for name, parameter_value, excel_value, passed, expected_codes in cases:
+            with self.subTest(name=name):
+                def mutate(raw) -> None:
+                    instances = raw["positions"]["top.u_tile"]["instances"][:2]
+                    for instance in instances:
+                        if parameter_value is missing:
+                            instance["parameters"].pop("RS_CFG_EN", None)
+                        else:
+                            instance["parameters"]["RS_CFG_EN"] = parameter_value
+
+                spec = replace(self.specs[0], rs_cfg_en=excel_value)
+                report = check_specs([spec], self._mutated_inventory(mutate), self.rtl)
+                self.assertEqual(report.passed, passed)
+                codes = {item.code for item in report.rows[0].findings}
+                self.assertEqual(codes, expected_codes)
+
+    def test_rs_cfg_en_checks_every_instance_in_group(self) -> None:
+        def mutate(raw) -> None:
+            instances = raw["positions"]["top.u_tile"]["instances"]
+            instances[1]["parameters"]["RS_CFG_EN"] = "1"
+
+        report = check_specs([self.specs[0]], self._mutated_inventory(mutate), self.rtl)
+        self.assertFalse(report.passed)
+        mismatches = [
+            item
+            for item in report.rows[0].findings
+            if item.code == "RS_CFG_EN_VALUE_MISMATCH"
+        ]
+        self.assertEqual(len(mismatches), 1)
+        self.assertEqual(mismatches[0].instance, "top.u_tile.AAAA_BBB_C1")
+
+    def test_unrelated_parameters_do_not_change_no_parameter_semantics(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"][:2]:
+                instance["parameters"].pop("RS_CFG_EN")
+                instance["parameters"]["SOME_OTHER_PARAMETER"] = None
+
+        spec = replace(self.specs[0], rs_cfg_en="")
+        report = check_specs([spec], self._mutated_inventory(mutate), self.rtl)
+        self.assertTrue(report.passed)
+
+    def test_inventory_parameters_round_trip(self) -> None:
+        raw = inventory_to_dict(self.inventory)
+        instance = raw["positions"]["top.u_tile"]["instances"][0]
+        self.assertEqual(raw["schema_version"], 2)
+        self.assertEqual(instance["parameters"]["RS_CFG_EN"], "0")
+        self.assertEqual(instance["parameters"]["WIDTH"], "1")
+
+    def test_old_inventory_schema_is_rejected(self) -> None:
+        for schema_version in (1, 2.0, True, "2"):
+            with self.subTest(schema_version=schema_version):
+                def mutate(raw) -> None:
+                    raw["schema_version"] = schema_version
+
+                with self.assertRaisesRegex(InventoryError, "schema_version.*expected 2"):
+                    self._mutated_inventory(mutate)
+
+    def test_missing_inventory_warnings_is_rejected(self) -> None:
+        def mutate(raw) -> None:
+            del raw["warnings"]
+
+        with self.assertRaisesRegex(InventoryError, "warnings.*required"):
+            self._mutated_inventory(mutate)
+
+    def test_missing_or_malformed_parameter_inventory_is_rejected(self) -> None:
+        mutations = (
+            ("missing", lambda instance: instance.pop("parameters")),
+            ("array", lambda instance: instance.__setitem__("parameters", [])),
+            (
+                "numeric_value",
+                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": 0}),
+            ),
+            (
+                "boolean_value",
+                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": False}),
+            ),
+            (
+                "object_value",
+                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": {}}),
+            ),
+            (
+                "empty_name",
+                lambda instance: instance.__setitem__("parameters", {"": "0"}),
+            ),
+        )
+        for name, mutation in mutations:
+            with self.subTest(name=name):
+                def mutate(raw) -> None:
+                    mutation(raw["positions"]["top.u_tile"]["instances"][0])
+
+                with self.assertRaisesRegex(InventoryError, "parameters|parameter"):
+                    self._mutated_inventory(mutate)
 
     def test_step_module_and_clock_mismatches_are_all_reported(self) -> None:
         def mutate(raw) -> None:

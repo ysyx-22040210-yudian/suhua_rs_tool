@@ -95,6 +95,7 @@ def collect_inventory(
                     capture_output=True,
                     timeout=timeout_seconds,
                     env=_collector_environment(npi_lib_dir),
+                    cwd=str(temp_dir),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise InventoryError(

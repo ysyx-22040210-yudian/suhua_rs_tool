@@ -93,13 +93,13 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 
 ## 2. 规格表要求
 
-### 2.1 八个必需字段
+### 2.1 九个映射字段
 
-每个有效数据行必须提供以下八个字段，名称区分大小写：
+规格表必须映射以下九个字段，名称区分大小写。前八个字段的数据单元格始终必填；`RS_CFG_EN` 的表头和列映射必需，但数据单元格按 RTL 参数是否存在而条件填写：
 
 | 字段 | 含义 | 检查方式 |
 |---|---|---|
-| `Intf_type` | 该组打拍 interface 的业务标签 | v1 仅写入报告，不参与 RTL 判定 |
+| `Intf_type` | 该组打拍 interface 的业务标签 | 当前仅写入报告，不参与 RTL 判定 |
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
 | `RS_inst` | 一组打拍实例的本地实例名前缀 | 对 `position` 直接子实例做前缀和后缀规则匹配 |
 | `position` | 该组实例的直接父 scope 完整 NPI 层次路径 | 必须能在 elaborated 层次中找到；首尾 `.` 会被去除 |
@@ -107,19 +107,20 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
 | `CRG_source` | clk 预期的唯一上游来源 | 按 `rtl.crg_match` 与上游 module definition 或实例名比较 |
+| `RS_CFG_EN` | 该组是否预期为假门控 | 逐实例读取 elaborated/effective 参数；存在时必须为 `0` 且本格精确填写 `假门控`，不存在时本格必须留空 |
 
 一行定义一组，唯一组键是 `(position, RS_inst)`。同一个 `position` 下可以有多组，每组占一行；相同组键重复出现会被拒绝。
 
 ### 2.2 任意额外列和非连续列映射
 
-规格表可以包含任意数量的额外列。八个必需字段可以乱序、彼此不连续，并位于任意正数列号。列号从 **1** 开始，八个映射必须互不重复；未映射列会被忽略，即使其中包含公式也不会参与读取。
+规格表可以包含任意数量的额外列。九个映射字段可以乱序、彼此不连续，并位于任意正数列号。列号从 **1** 开始，九个映射必须互不重复；未映射列会被忽略，即使其中包含公式也不会参与读取。
 
 例如，一个 13 列工作表可以这样排列：
 
 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Owner | position | Review_note | rst | Intf_type | Spare | CRG_source | RS_inst | step | Ticket | RS_module | clk | Comment |
-| alice | top.u_tile | checked | rst_n | OUT_IF | - | crg_core | AAAA_BBB | 2 | HW-101 | rs_pipe | clk_rs | first group |
+| Owner | position | Review_note | rst | Intf_type | RS_CFG_EN | CRG_source | RS_inst | step | Ticket | RS_module | clk | Comment |
+| alice | top.u_tile | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 2 | HW-101 | rs_pipe | clk_rs | first group |
 
 对应配置为：
 
@@ -133,7 +134,8 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
     "step": 9,
     "clk": 12,
     "rst": 4,
-    "CRG_source": 7
+    "CRG_source": 7,
+    "RS_CFG_EN": 6
   }
 }
 ```
@@ -147,6 +149,7 @@ python -m rscheck validate \
   --column position=2 \
   --column rst=4 \
   --column Intf_type=5 \
+  --column RS_CFG_EN=6 \
   --column CRG_source=7 \
   --column RS_inst=8 \
   --column step=9 \
@@ -154,14 +157,15 @@ python -m rscheck validate \
   --column clk=12
 ```
 
-覆盖后仍会检查八个列号是否为正数且互不重复。
+覆盖后仍会检查九个列号是否为正数且互不重复。
 
 ### 2.3 单元格和行规则
 
 - 映射字段会去除首尾空白。
-- 八个字段均为必填。整行八个字段都为空时跳过；部分为空时报错。
+- 除 `RS_CFG_EN` 外的八个字段均为必填；这些字段和 `RS_CFG_EN` 全部为空时跳过整行，八个必填字段中只有部分为空时报错。
+- `RS_CFG_EN` 可以为空或填写文本。是否应为空、是否必须精确为 `假门控` 只有加载 schema v2 inventory 或在线采集 RTL 后才能判定；其他非空文本会保留到 RTL 检查阶段，再按参数是否存在和值是否为零产生对应 finding。
 - `step` 接受 `2` 或 Excel 常见的 `2.0`，但不接受 `0`、负数、小数或科学计数法。
-- 默认会在 `excel.header_row` 对八个映射单元格做精确表头校验。
+- 默认会在 `excel.header_row` 对九个映射单元格做精确表头校验，包括即使数据格允许留空也必须存在的 `RS_CFG_EN` 表头。
 - XLSX/XLSM 映射字段中的公式单元格会被拒绝，防止使用未刷新的 Excel 缓存值；CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
 - `.xlsm` 中的宏不会执行。
 - CSV 优先按 UTF-8 BOM/UTF-8 读取，失败后尝试 GB18030；CSV 可探测逗号、分号或制表符，`.tsv` 固定使用制表符。
@@ -212,6 +216,23 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 推断出的 primitive gate/buffer 会继续向上穿透；只有它在 Netlist 中表现为 module cell 时才会作为 `CRG_source` 候选。
 
+### 3.4 `RS_CFG_EN` effective 参数
+
+`RS_CFG_EN` 按组内匹配实例逐一检查，读取 elaboration 后的 effective 参数值，因此实例级 parameter override 优先于模块声明中的默认值。collector 会枚举每个匹配 `RS_module` 实例可访问的全部 effective parameters；inventory schema v2 把它们记录在实例的 `parameters` 对象中，而当前通过/失败规则消费其中的 `RS_CFG_EN`。键存在表示实例具有该参数，值类型为 `string|null`；字符串保留 collector 得到的值表示，`null` 表示 collector 找到了该参数但无法可靠解析其 effective 值。检查器把十进制有符号零、全零宽值、`'0` 和 Verilog 二/八/十六进制的全零形式都视为数值 `0`。
+
+| 实例参数状态 | Excel `RS_CFG_EN` | 结果 |
+|---|---|---|
+| 不存在 `RS_CFG_EN` 键 | 空白 | 通过该实例检查 |
+| 不存在 `RS_CFG_EN` 键 | 任意非空文本 | `RS_CFG_EN_PARAMETER_MISSING` |
+| 字符串表示数值 `0` | 精确 `假门控` | 通过该实例检查 |
+| 字符串表示数值 `0` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` |
+| 字符串表示非零/非数值 | 精确 `假门控` | `RS_CFG_EN_VALUE_MISMATCH` |
+| 字符串表示非零/非数值 | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_MISMATCH` |
+| 值为 `null` | 精确 `假门控` | `RS_CFG_EN_VALUE_UNRESOLVED` |
+| 值为 `null` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_UNRESOLVED` |
+
+同一 Excel 行匹配多个实例时，每个实例都必须通过；任一实例失败都会使该行 FAIL。参数不存在与参数值无法解析是两种不同状态，旧 inventory 缺少参数证据时不得按“不存在”处理。
+
 ## 4. 配置文件完整说明
 
 配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl` 三个键。未知键、错误类型和未知列名都会被拒绝。
@@ -234,7 +255,8 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
     "step": 9,
     "clk": 12,
     "rst": 4,
-    "CRG_source": 7
+    "CRG_source": 7,
+    "RS_CFG_EN": 6
   },
   "rtl": {
     "clk_port": "clk",
@@ -255,11 +277,11 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `excel.sheet` | 非空字符串或正整数 | `1` | XLSX/XLSM 的工作表名或 1-based 工作表序号；CSV/TSV 没有工作表 |
 | `excel.header_row` | 正整数 | `1` | 表头所在行 |
 | `excel.data_start_row` | 正整数 | `2` | 第一条数据所在行，必须大于 `header_row` |
-| `excel.validate_headers` | JSON 布尔值 | `true` | 是否要求映射表头精确等于八个字段名 |
+| `excel.validate_headers` | JSON 布尔值 | `true` | 是否要求映射表头精确等于九个字段名 |
 
 ### 4.2 `columns`
 
-`columns` 必须恰好包含八个字段：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`。每个值都是正整数形式的 1-based 列号；也接受只包含十进制数字的 JSON 字符串。列号必须唯一，不要求连续或按字段顺序排列。
+`columns` 必须恰好包含九个字段：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。每个值都是正整数形式的 1-based 列号；也接受只包含十进制数字的 JSON 字符串。列号必须唯一，不要求连续或按字段顺序排列。
 
 ### 4.3 `rtl`
 
@@ -321,11 +343,11 @@ bash scripts/launch_rscheck_gui.sh
 | 区域 | GUI 字段 | 说明 |
 |---|---|---|
 | 规格输入 | `Excel / CSV` | `.xlsx`、`.xlsm`、`.csv` 或 `.tsv` 规格路径 |
-| 规格输入 | `配置 JSON`、`加载` | 选择配置；“加载”把 sheet、行号及八列映射载入界面 |
+| 规格输入 | `配置 JSON`、`加载` | 选择配置；“加载”把 sheet、行号及九列映射载入界面 |
 | 规格输入 | `工作表` | 工作表名或 1-based 序号；CSV/TSV 不使用 sheet |
 | 规格输入 | `表头行`、`数据起始行` | 均为 1-based 正整数，数据起始行必须晚于表头行 |
-| 规格输入 | `校验映射表头` | 开启时八个映射列的表头必须与字段名精确一致 |
-| Excel 列映射 | 八个列号 | `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`；均从 1 开始、必须互不重复，其他列忽略 |
+| 规格输入 | `校验映射表头` | 开启时九个映射列的表头必须与字段名精确一致 |
+| Excel 列映射 | 九个列号 | `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；均从 1 开始、必须互不重复，其他列忽略 |
 | 报告输出 | `JSON` | 必填；结构化检查报告，GUI 也从它读取结果 |
 | 报告输出 | `CSV` | 可选；UTF-8 BOM 明细报告，可直接由 Excel 打开 |
 
@@ -343,13 +365,13 @@ bash scripts/launch_rscheck_gui.sh
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
 
-“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示 Excel 行、`Intf_type`、`position`、`RS_inst`、实例数和 finding 数。选中一行后，下方列出 finding 的级别、代码、实例和说明；再选 finding 可在证据面板查看 expected/actual、匹配实例、端口连接、clk 来源及源文件/行号等报告内容。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际执行命令、stdout、stderr 和退出码，便于复现 GUI 问题。
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示 Excel 行、`Intf_type`、`position`、`RS_inst`、`RS_CFG_EN`、实例数和 finding 数。选中一行后，下方列出 finding 的级别、代码、实例和说明，证据面板同时显示该行规格及 matched instances 的端口、clk 来源、effective `parameters` 和源文件/行号；再选具体 finding 会切换为它的 expected/actual。由此可同时核对 Excel 标签、具体失败实例和实际参数值。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际执行命令、stdout、stderr 和退出码，便于复现 GUI 问题。
 
 GUI 在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
-`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。
+`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它可以确认 `RS_CFG_EN` 映射和表头存在，但不能判断数据格应为空还是应填写 `假门控`；该判断只在 `check` 阶段执行。
 
 ```bash
 python -m rscheck validate \
@@ -378,7 +400,7 @@ python -m rscheck validate \
 
 ## 7. 可信离线 inventory 模式
 
-离线模式从已有的 schema v1 inventory 读取 elaborated 层次快照，不启动 collector：
+离线模式从已有的 schema v2 inventory 读取 elaborated 层次快照和逐实例 effective 参数，不启动 collector：
 
 ```bash
 python -m rscheck check \
@@ -395,7 +417,7 @@ python -m rscheck check \
 
 > **离线 inventory 是受信任输入，不提供 KDB 来源或新鲜度证明。**
 
-schema v1 不记录 RTL commit、elabcom 命令、top、宏、include 路径、KDB 哈希、生成时间或 collector 版本。工具只验证 JSON 结构和部分内部一致性；手工修改、由旧流程生成或已经过期的 inventory 仍可能产生看似正常的 PASS。
+schema v2 不记录 RTL commit、elabcom 命令、top、宏、include 路径、KDB 哈希、生成时间或 collector 版本。工具只验证 JSON 结构和部分内部一致性；手工修改、由旧流程生成或已经过期的 inventory 仍可能产生看似正常的 PASS。schema v1 没有逐实例参数证据，会被当前加载器拒绝；不能把其缺失的 `parameters` 当作“模块没有 `RS_CFG_EN`”。
 
 只应在以下条件全部满足时复用 inventory：
 
@@ -416,7 +438,7 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "positions": {
     "top.u_tile": {
       "found": true,
@@ -427,6 +449,9 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 10,
+          "parameters": {
+            "RS_CFG_EN": "0"
+          },
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -451,7 +476,7 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 }
 ```
 
-加载器要求 `schema_version=1`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并检查实例 `name/full_name` 一致性和 `full_name` 唯一性。inventory 中任何 `warnings` 都会转换为全局 `NPI_UNRESOLVED` 硬错误，避免不完整采集误报 PASS。
+加载器要求 `schema_version=2`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。inventory 中任何 `warnings` 都会转换为全局 `NPI_UNRESOLVED` 硬错误，避免不完整采集误报 PASS。
 
 ## 8. 构建 NPI collector
 
@@ -586,8 +611,8 @@ python -m rscheck check \
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
 5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；
-6. collector 遍历层次、端口和 clk driver，生成 schema v1 inventory；
-7. Python 加载 inventory，执行组、拍数、模块、clk/rst 和 CRG 检查；
+6. collector 遍历层次、端口、逐实例 effective parameters 和 clk driver，生成 schema v2 inventory；
+7. Python 加载 inventory，执行组、拍数、模块、clk/rst、CRG 和 `RS_CFG_EN` 检查；
 8. 可选保存 inventory 和 JSON/CSV 报告。
 
 在线专用参数：
@@ -642,7 +667,7 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 | `GUI_XAUTHORITY` | 为显式 DISPLAY 指定 Xauthority 文件 |
 | `GUI_SESSION_PID` | 从指定图形进程读取 DISPLAY 和会话环境 |
 
-完整端到端测试 `scripts/test_vm_verdi_gui.sh` 还支持 `PYTHON_BIN`、`CXX`、`NPI_INC_DIR` 和 `NPI_LIB_DIR`，分别覆盖 Python、C++ 编译器、`npi.h` 所在目录和 `libNPI.so` 所在目录。详见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。
+完整端到端测试 `scripts/test_vm_verdi_gui.sh` 还支持 `PYTHON_BIN`、`CXX`、`NPI_INC_DIR` 和 `NPI_LIB_DIR`，分别覆盖 Python、C++ 编译器、`npi.h` 所在目录和 `libNPI.so` 所在目录。脚本默认在退出时关闭本次启动的 Verdi；仅在需要保留窗口人工检查时设置 `KEEP_VERDI_GUI=1`。详见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。
 
 ## 11. 报告和退出码
 
@@ -652,18 +677,19 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances)
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances)
+[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances) RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances) RS_CFG_EN=假门控
 ```
 
 ### 11.2 JSON 报告
 
 `--json-report` 写 UTF-8 JSON，包含：
 
+- `schema_version`：固定为 `2`；旧 report schema 不包含当前参数证据；
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`；
-- `rows[].spec`：规范化后的八字段规格和源行号；
-- `rows[].matched_instances`：实例路径、模块、文件/行号、端口连线和 clk 来源证据；
+- `rows[].spec`：规范化后的九字段规格和源行号，其中 `RS_CFG_EN` 可以是空字符串；
+- `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线和 clk 来源证据；`parameters` 的值类型为 `string|null`；
 - `rows[].findings`：code、message、expected、actual 等诊断信息。
 
 输出目录不存在时会自动创建。
@@ -673,10 +699,11 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
 ```text
-status,row,position,RS_inst,instance,code,message,expected,actual
+status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 ```
 
 无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
+`RS_CFG_EN` 失败沿用通用的 `expected` / `actual` 列，其中包含 Excel 标签、参数存在状态和 effective 参数值；逐实例完整 `parameters` 证据保存在 JSON 报告中。
 
 ### 11.4 Python CLI 退出码
 
@@ -707,9 +734,9 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | 错误或 finding | 常见原因 | 处理建议 |
 |---|---|---|
 | `header validation failed` | 列号错、表头行错、字段大小写不一致 | 用 `validate` 和 `--json` 检查规范化结果；修正映射，不要优先关闭表头检查 |
-| `missing/unknown column mappings` | 八字段映射不完整或拼写错误 | `columns` 必须恰好包含八个规定字段 |
+| `missing/unknown column mappings` | 九字段映射不完整或拼写错误 | `columns` 必须恰好包含九个规定字段 |
 | `column mappings must be unique` | 两个字段映射到同一列 | 调整为互不重复的 1-based 列号 |
-| `blank required fields` | 数据行只填写了部分映射字段 | 补齐八字段，或清空整行使其被跳过 |
+| `blank required fields` | 除 `RS_CFG_EN` 外的八个必填字段只填写了一部分 | 补齐八个始终必填字段，或清空整行使其被跳过；不要仅为消除此错误而填写 `RS_CFG_EN` |
 | `step must be a positive integer` | `step` 为 0、负数、小数或科学计数法 | 改为正整数，如 `2` |
 | `duplicate group` | 同一 `(position, RS_inst)` 出现多行 | 合并或修改重复组 |
 | `sheet ... not found` | sheet 名/序号不对 | 用实际工作表名或 1-based 序号覆盖 `--sheet` |
@@ -736,6 +763,10 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 | `CRG_SOURCE_UNRESOLVED` | 顶层输入、无 driver、无法到达 module cell | 补充可识别来源或接受该 fail-closed 结果 |
 | `MULTIPLE_CLK_SOURCES` | clk 存在多个唯一上游 module source | 消除多驱动或修正结构 |
 | `CRG_SOURCE_MISMATCH` | 唯一来源与 `CRG_source` 不一致 | 核对 `rtl.crg_match` 和 Excel 来源字段 |
+| `RS_CFG_EN_PARAMETER_MISSING` | Excel 非空，但匹配实例没有 `RS_CFG_EN` 参数 | 无该参数的组应把 Excel 单元格留空，或核对是否匹配了错误模块/实例 |
+| `RS_CFG_EN_LABEL_MISMATCH` | 实例有该参数，但 Excel 规范化后的文本不是精确的 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；参数非零时还会同时报告 value mismatch |
+| `RS_CFG_EN_VALUE_MISMATCH` | 实例有 `RS_CFG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
+| `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到参数但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CFG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst` 前缀 | 重新设计互不重叠的组前缀 |
 | `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
 | `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
@@ -745,12 +776,13 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 ## 13. 当前边界
 
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
-- 当前八字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
+- 当前九字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
 - 默认只按数量检查 `step`；只有启用 `require_contiguous_indices` 才检查数字 stage 连续性。
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
 - SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 风格，需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
 - CRG 追踪要求唯一 module cell 来源；顶层输入、多驱动和无法解析的 primitive 网络会 fail-closed。
+- `RS_CFG_EN` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
 - `allow_leaf_signal_match=true` 会放宽层次比较，可能让不同 scope 的同名信号误匹配。
 - 任意 collector warning 都会升级为 `NPI_UNRESOLVED` error。
 - 在线模式只消费现有 elaborated KDB，不接收 RTL/filelist，也不负责 RTL 编译或 elaboration。
@@ -760,7 +792,7 @@ status,row,position,RS_inst,instance,code,message,expected,actual
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置八字段的 1-based 列映射。
+2. 配置九字段的 1-based 列映射，并按 RTL 预期为 `RS_CFG_EN` 留空或填写精确文本 `假门控`。
 3. 执行 `validate`，确认 sheet、表头、列和规范化内容。
 4. 使用 `--collector + --elab-db` 做在线检查。
 5. 同时输出 JSON/CSV，并用 `--keep-inventory` 保存可审计快照。

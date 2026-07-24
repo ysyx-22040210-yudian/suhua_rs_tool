@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "positions": {
     "top.u_tile": {
       "found": true,
@@ -10,6 +10,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 10,
+          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -24,6 +25,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 20,
+          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -38,6 +40,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 30,
+          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_aux", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -52,6 +55,7 @@
           "module": "crg_core",
           "file": "rs_top.sv",
           "line": 2,
+          "parameters": {},
           "ports": {},
           "clk_sources": []
         }
@@ -60,4 +64,3 @@
   },
   "warnings": []
 }
-

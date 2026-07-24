@@ -4,7 +4,7 @@
 
 | 界面 | 用途 | 启动器 | 设计输入 |
 |---|---|---|---|
-| **rscheck 自带 GUI** | 选择 Excel/配置、设置八列映射、运行检查、查看结果/证据/日志 | `scripts/launch_rscheck_gui.sh` | 离线 inventory，或 collector + elaborated KDB |
+| **rscheck 自带 GUI** | 选择 Excel/配置、设置九列映射、运行检查、查看结果/证据/日志 | `scripts/launch_rscheck_gui.sh` | schema v2 离线 inventory，或 collector + elaborated KDB |
 | **Verdi GUI** | 人工浏览 hierarchy、实例和连线 | `scripts/launch_verdi_gui.sh` | `verdi -elab <elaborated KDB>` |
 
 `rscheck` 同时提供 CLI 和自带 Tkinter GUI；GUI 不是 Verdi 的包装窗口。两个 GUI 可以查看同一份检查对象，但职责不同。
@@ -19,7 +19,7 @@
 - `scripts/test_rscheck_gui_smoke.py`：可见离线正例、反例、批量压力和在线 KDB smoke。
 - `scripts/lib/gui_session.sh`：两个 launcher 共用的 DISPLAY/Xauthority 发现与 `xdpyinfo` 探测。
 - `scripts/launch_verdi_gui.sh`：只用 `verdi -elab <KDB>` 打开 Verdi GUI。
-- `scripts/test_vm_verdi_gui.sh`：运行测试、构建 collector、生成示例 KDB、打开 Verdi 并执行在线正例。
+- `scripts/test_vm_verdi_gui.sh`：运行测试、构建 collector、生成示例 KDB、打开 Verdi 并执行在线正例；默认退出时关闭本次 Verdi。
 - `tests/test_gui_backend.py`、`tests/test_gui_lifecycle.py`：GUI 命令、报告、取消和生命周期回归。
 - `tests/test_rscheck_gui_launcher.py`、`tests/test_gui_session_probe.py`、`tests/test_verdi_gui_launcher.py`：Linux 启动器和跨桌面会话回归。
 
@@ -170,18 +170,20 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 - `Excel / CSV`、`配置 JSON` 和配置“加载”按钮；
 - `工作表`、`表头行`、`数据起始行`、`校验映射表头`；
-- 八个独立的 1-based 列映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`；
+- 九个独立的 1-based 列映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；
 - 数据源单选项 `在线 NPI（elaborated KDB）` 和 `离线 Inventory`；
 - 在线字段 `Collector`、`Elab KDB`、`NPI 库目录`、`保存 Inventory`、`超时（秒）`；
 - 离线字段 `Inventory JSON`；
 - `JSON` 和可选 `CSV` 报告路径；
 - `验证 Excel`、`运行 RTL 检查`、`取消`、`打开报告目录`。
 
-“检查结果”页应显示 PASS/FAIL、总行数、通过/失败数、error/warning 数，以及状态、Excel 行、interface、position、`RS_inst`、实例数和 finding 数。选择行后应显示 finding 表；选择 finding 后应显示 expected/actual、实例路径、端口、clk 来源、源文件/行号等证据。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
+`RS_CFG_EN` 的映射和精确表头始终必需，数据格按 RTL 条件填写：匹配实例存在该 effective 参数时，只有值为 `0` 且数据格精确填写 `假门控` 才通过；实例无该参数时，只有数据格留空才通过。同组每个实例都要单独满足规则。
+
+“检查结果”页应显示 PASS/FAIL、总行数、通过/失败数、error/warning 数，以及状态、Excel 行、interface、position、`RS_inst`、`RS_CFG_EN`、实例数和 finding 数。选择结果行后应显示 finding 表，并在证据面板显示规格、实例路径、port、clk 来源、effective `parameters`、源文件/行号；选择具体 finding 后面板切换为 expected/actual。`RS_CFG_EN` 失败必须能据此核对具体实例、Excel 标签和实际参数值。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
 
 运行期间输入控件和两个启动按钮应禁用，“取消”应启用。取消后状态应显示 `CANCELLED`，CLI 和 collector 进程组都应退出；关闭正在运行的窗口时应先出现取消确认。
 
-Windows 布局记录：2026-07-24 已把工具自带 GUI 缩小到实现规定的最小尺寸 `980x680` 并完成截图验收，八列映射、数据源、报告和操作控件均可见且无重叠。截图只用于本地验收，不提交仓库。
+Windows 布局要求仍以最小尺寸 `980x680` 验收九列映射、数据源、报告和操作控件无重叠或截断。2026-07-24 已分别对当前九列版本的配置页和结果页完成截图验收，截图仍只用于本地检查、不提交仓库。
 
 ## 6. VM 可见验证、离线 smoke、负载与取消测试
 
@@ -225,7 +227,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、结果页 2 行 PASS、0 error、0 warning。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、结果页 2 行 PASS、0 error、0 warning。离线输入必须是 schema v2，matched instances 的 `parameters` 值只能为 `string|null`。
 
 可见离线反例：
 
@@ -259,7 +261,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x...
 ```
 
-CentOS 最终测量为 1.98–2.08 秒墙钟时间、最大 RSS 150060–150148 KiB、0 error、0 warning。该区间是已验证基线，不是不同设备的硬门槛。脚本会生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+当前九列版本在 CentOS VM 的最终测量为 2.12 秒墙钟时间、最大 RSS 175,612 KiB、0 error、0 warning。该结果是已验证基线，不是不同设备的硬门槛。脚本会生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -333,7 +335,7 @@ gui_session_resolve
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 elaborated KDB；最终 GUI 结果页应为 PASS、行数 2、通过 2、失败 0、错误 0、警告 0。smoke 会读取 GUI 运行日志并检查实际命令：必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough；否则脚本返回非零。
+3 轮中的每一轮都必须通过真实 collector 加载该 elaborated KDB；最终 GUI 结果页应为 PASS、行数 2、通过 2、失败 0、错误 0、警告 0。smoke 还必须断言 inventory/report 为 schema v2，并确认每个示例 `rs_pipe` 实例的 `parameters.RS_CFG_EN` 是字符串 `"0"`，从而证明检查的是 elaboration 后的逐实例 effective 值。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough；否则脚本返回非零。
 
 ## 8. 打开 Verdi GUI
 
@@ -406,10 +408,10 @@ cd "$HOME/suhua_rs_tool"
 python3 -m unittest discover -v
 ```
 
-当前预期为：
+当前预期为；测试数量以当前分支实际发现结果为准：
 
 ```text
-Ran 89 tests in ...
+Ran ... tests in ...
 OK
 ```
 
@@ -430,17 +432,17 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT` 和 `OUTPUT_BASE`。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`OUTPUT_BASE` 和 `KEEP_VERDI_GUI`。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`。默认 `KEEP_VERDI_GUI=0`，脚本成功、失败或被信号终止时都会关闭它本次启动的 Verdi；设置为 `1` 才在成功后保留窗口供人工检查。
 
 成功输出应包含：
 
 ```text
-Ran 89 tests in ...
+Ran ... tests in ...
 OK
 Verdi GUI window detected ...
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances)
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances)
+[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances) RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances) RS_CFG_EN=假门控
 PASS: Verdi GUI launch and online NPI check completed.
 ```
 
@@ -462,8 +464,15 @@ PASS: Verdi GUI launch and online NPI check completed.
 - `npi.h` 或 `libNPI.so` 找不到：设置 `NPI_INC_DIR` 和 `NPI_LIB_DIR`；后者必须直接包含 `libNPI.so`。
 - `npi_load_design failed`：确认 KDB 来自 `elabcom -elab`、内容完整，并与当前 Verdi/NPI 版本兼容；`work.lib++` 及其符号链接别名会更早被 Python runner 拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
+- `RS_CFG_EN_PARAMETER_MISSING`：实例无该参数但 Excel 非空；无参数时必须留空。
+- `RS_CFG_EN_LABEL_MISMATCH`：实例参数存在，但 Excel 未精确填写 `假门控`；参数非零时还会同时报告 value mismatch。
+- `RS_CFG_EN_VALUE_MISMATCH`：effective 字符串不表示数值 `0`；检查实例 override 和本次 KDB。
+- `RS_CFG_EN_VALUE_UNRESOLVED`：schema v2 `parameters.RS_CFG_EN` 为 `null`；检查 NPI 参数遍历和 KDB，不能把它当作无参数。
+- schema v1 inventory：旧格式没有逐实例参数证据，必须用当前 collector 重新生成 schema v2 文件。
 
 ## 12. 2026-07-24 验证记录
+
+当前九字段版本的实际结果见 `TEST_RESULTS_RS_CFG_EN_2026-07-24.md`。以下内容仍是引入 `RS_CFG_EN` 前的八字段历史基线，只用于对照。
 
 - CentOS 89 项全量自动测试通过，无 skipped。
 - CentOS 7.9、Python 3.8.13、G++ 11.2.1、Verdi/NPI O-2018.09-SP2 环境完成真实 collector/KDB 正向链路验证。

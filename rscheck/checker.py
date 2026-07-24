@@ -16,6 +16,9 @@ from .model import (
 )
 
 
+_FAKE_GATING_LABEL = "假门控"
+
+
 def _leaf_name(name: str) -> str:
     value = name.strip().rstrip(".")
     return value.rsplit(".", 1)[-1]
@@ -57,10 +60,75 @@ def _row_finding(
         row_number=spec.row_number,
         position=spec.position,
         rs_inst=spec.rs_inst,
+        rs_cfg_en=spec.rs_cfg_en,
         instance=instance,
         expected=expected,
         actual=actual,
     )
+
+
+def _parameter_value_is_zero(value: str) -> bool:
+    compact = value.strip().replace("_", "").lower()
+    if re.fullmatch(r"[+-]?0+", compact):
+        return True
+    if compact == "'0":
+        return True
+    return re.fullmatch(r"(?:[0-9]+)?'s?[bodh]0+", compact) is not None
+
+
+def _check_rs_cfg_en(spec: SpecRow, instance: ActualInstance) -> list[Finding]:
+    findings: list[Finding] = []
+    parameter_name = "RS_CFG_EN"
+    if parameter_name not in instance.parameters:
+        if spec.rs_cfg_en:
+            findings.append(
+                _row_finding(
+                    spec,
+                    "RS_CFG_EN_PARAMETER_MISSING",
+                    f"{instance.full_name}: Excel marks RS_CFG_EN but the RTL parameter is missing",
+                    instance=instance.full_name,
+                    expected={"Excel": "", "parameter": None},
+                    actual={"Excel": spec.rs_cfg_en, "parameter": None},
+                )
+            )
+        return findings
+
+    if spec.rs_cfg_en != _FAKE_GATING_LABEL:
+        findings.append(
+            _row_finding(
+                spec,
+                "RS_CFG_EN_LABEL_MISMATCH",
+                f"{instance.full_name}: RS_CFG_EN parameter exists but Excel is not marked as fake gating",
+                instance=instance.full_name,
+                expected=_FAKE_GATING_LABEL,
+                actual=spec.rs_cfg_en,
+            )
+        )
+
+    value = instance.parameters[parameter_name]
+    if value is None:
+        findings.append(
+            _row_finding(
+                spec,
+                "RS_CFG_EN_VALUE_UNRESOLVED",
+                f"{instance.full_name}: RS_CFG_EN parameter value could not be resolved",
+                instance=instance.full_name,
+                expected="0",
+                actual=None,
+            )
+        )
+    elif not _parameter_value_is_zero(value):
+        findings.append(
+            _row_finding(
+                spec,
+                "RS_CFG_EN_VALUE_MISMATCH",
+                f"{instance.full_name}: RS_CFG_EN parameter is not zero",
+                instance=instance.full_name,
+                expected="0",
+                actual=value,
+            )
+        )
+    return findings
 
 
 def _match_group(
@@ -299,6 +367,7 @@ def _check_row(
                     actual=instance.module,
                 )
             )
+        findings.extend(_check_rs_cfg_en(spec, instance))
         findings.extend(_check_ports_and_sources(spec, instance, config))
 
     return RowResult(

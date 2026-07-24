@@ -26,12 +26,32 @@ PYTHON_ENABLE_IS_SET="${PYTHON_ENABLE+x}"
 GCC_ENABLE_IS_SET="${GCC_ENABLE+x}"
 PYTHON_ENABLE="${PYTHON_ENABLE-}"
 GCC_ENABLE="${GCC_ENABLE-}"
+KEEP_VERDI_GUI="${KEEP_VERDI_GUI:-0}"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/gui_session.sh"
 
 TEST_ROOT=""
 GUI_PROBE_ONLY=0
+VERDI_LAUNCH_PID=""
+
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  if [ "$KEEP_VERDI_GUI" = 0 ] && [ -n "$VERDI_LAUNCH_PID" ] &&
+     kill -0 "$VERDI_LAUNCH_PID" 2>/dev/null; then
+    kill "$VERDI_LAUNCH_PID" 2>/dev/null || true
+    for _ in {1..30}; do
+      kill -0 "$VERDI_LAUNCH_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$VERDI_LAUNCH_PID" 2>/dev/null; then
+      kill -KILL "$VERDI_LAUNCH_PID" 2>/dev/null || true
+    fi
+    wait "$VERDI_LAUNCH_PID" 2>/dev/null || true
+  fi
+  exit "$rc"
+}
 
 fail() {
   echo "ERROR: $*" >&2
@@ -47,6 +67,7 @@ on_error() {
   exit "$rc"
 }
 
+trap cleanup EXIT
 trap 'on_error $LINENO' ERR
 
 usage() {
@@ -59,6 +80,11 @@ case "${1-}" in
   *) usage; fail "unexpected argument: $1" ;;
 esac
 [ "$#" -le 1 ] || { usage; fail "only one optional argument is supported"; }
+
+case "$KEEP_VERDI_GUI" in
+  0|1) ;;
+  *) fail "KEEP_VERDI_GUI must be 0 or 1" ;;
+esac
 
 for numeric_setting in "$GUI_START_TIMEOUT" "$VERDI_GENERIC_READY_DELAY"; do
   case "$numeric_setting" in
@@ -213,8 +239,20 @@ pgrep -f '[v]erdi|[N]ovas|[d]ebussy' |
 
 nohup "$VERDI_BIN" -elab "$ELAB_DB" >"$VERDI_LOG" 2>&1 </dev/null &
 VERDI_LAUNCH_PID=$!
-disown "$VERDI_LAUNCH_PID" 2>/dev/null || true
 echo "Verdi launch PID=$VERDI_LAUNCH_PID"
+
+verdi_launch_uses_elab_db() {
+  local argument
+  local previous=""
+  [ -r "/proc/$VERDI_LAUNCH_PID/cmdline" ] || return 1
+  while IFS= read -r -d '' argument; do
+    if [ "$previous" = "-elab" ] && [ "$argument" = "$ELAB_DB" ]; then
+      return 0
+    fi
+    previous="$argument"
+  done <"/proc/$VERDI_LAUNCH_PID/cmdline"
+  return 1
+}
 
 elapsed=0
 VERDI_WINDOWS=""
@@ -231,7 +269,8 @@ while [ "$elapsed" -lt "$GUI_START_TIMEOUT" ]; do
     VERDI_TITLE_CONFIRMED=1
     break
   fi
-  if [ -n "$VERDI_WINDOWS" ] && [ "$elapsed" -ge "$VERDI_GENERIC_READY_DELAY" ]; then
+  if [ -n "$VERDI_WINDOWS" ] && [ "$elapsed" -ge "$VERDI_GENERIC_READY_DELAY" ] &&
+     verdi_launch_uses_elab_db; then
     VERDI_READY=1
     break
   fi
@@ -284,12 +323,23 @@ POS_CSV="$TEST_ROOT/positive_report.csv"
 [ -s "$POS_REPORT" ] || fail "positive JSON report was not written"
 [ -s "$POS_CSV" ] || fail "positive CSV report was not written"
 
-"$PYTHON_BIN" - "$POS_REPORT" <<'PY'
+"$PYTHON_BIN" - "$POS_REPORT" "$POS_INVENTORY" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as stream:
-    summary = json.load(stream)["summary"]
+    report = json.load(stream)
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    inventory = json.load(stream)
+
+if report.get("schema_version") != 2:
+    raise SystemExit("unexpected report schema: {!r}".format(report.get("schema_version")))
+if inventory.get("schema_version") != 2:
+    raise SystemExit(
+        "unexpected inventory schema: {!r}".format(inventory.get("schema_version"))
+    )
+
+summary = report["summary"]
 
 expected = {
     "passed": True,
@@ -301,7 +351,43 @@ expected = {
 }
 if summary != expected:
     raise SystemExit("unexpected positive summary: {!r}".format(summary))
+
+instances = {
+    instance["name"]: instance
+    for instance in inventory["positions"]["top.u_tile"]["instances"]
+}
+for name in ("AAAA_BBB_C0", "AAAA_BBB_C1", "CTRL_RS_D0"):
+    parameters = instances[name].get("parameters")
+    if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+        raise SystemExit(
+            "instance {} does not expose final RS_CFG_EN=0: {!r}".format(
+                name, parameters
+            )
+        )
+    if parameters.get("WIDTH") != "1":
+        raise SystemExit(
+            "instance {} did not expose unrelated WIDTH=1: {!r}".format(
+                name, parameters
+            )
+        )
+for name in ("u_crg", "u_aux_crg"):
+    if instances[name].get("parameters") != {}:
+        raise SystemExit(
+            "parameterless instance {} did not produce an empty map: {!r}".format(
+                name, instances[name].get("parameters")
+            )
+        )
+
+for row in report["rows"]:
+    if row["spec"].get("RS_CFG_EN") != "假门控":
+        raise SystemExit("report lost RS_CFG_EN Excel evidence: {!r}".format(row["spec"]))
+    for instance in row["matched_instances"]:
+        if instance.get("parameters", {}).get("RS_CFG_EN") != "0":
+            raise SystemExit(
+                "report lost RS_CFG_EN parameter evidence: {!r}".format(instance)
+            )
 print("positive summary OK:", summary)
+print("RS_CFG_EN inventory/report evidence OK")
 PY
 
 trap - ERR
@@ -311,9 +397,17 @@ echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
-    echo "Verdi uses SSH X11 forwarding on DISPLAY=$DISPLAY; keep this SSH connection open."
+    if [ "$KEEP_VERDI_GUI" = 1 ]; then
+      echo "Verdi uses SSH X11 forwarding on DISPLAY=$DISPLAY; keep this SSH connection open."
+    else
+      echo "Verdi used SSH X11 forwarding on DISPLAY=$DISPLAY and will now be closed."
+    fi
     ;;
   *)
-    echo "Verdi remains open on DISPLAY=$DISPLAY for manual hierarchy inspection."
+    if [ "$KEEP_VERDI_GUI" = 1 ]; then
+      echo "Verdi remains open on DISPLAY=$DISPLAY for manual hierarchy inspection."
+    else
+      echo "Verdi was visible on DISPLAY=$DISPLAY and will now be closed."
+    fi
     ;;
 esac

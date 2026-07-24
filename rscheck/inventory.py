@@ -22,9 +22,10 @@ def load_inventory(path: str | Path) -> Inventory:
         ) from exc
     if not isinstance(raw, Mapping):
         raise InventoryError("inventory root must be a JSON object")
-    if raw.get("schema_version") != 1:
+    schema_version = raw.get("schema_version")
+    if type(schema_version) is not int or schema_version != 2:
         raise InventoryError(
-            f"unsupported inventory schema_version {raw.get('schema_version')!r}; expected 1"
+            f"unsupported inventory schema_version {schema_version!r}; expected 2"
         )
 
     raw_positions = raw.get("positions")
@@ -74,7 +75,9 @@ def load_inventory(path: str | Path) -> Inventory:
             instances=tuple(instances),
         )
 
-    raw_warnings = raw.get("warnings", [])
+    if "warnings" not in raw:
+        raise InventoryError("inventory 'warnings' is required by schema_version 2")
+    raw_warnings = raw.get("warnings")
     if not isinstance(raw_warnings, list):
         raise InventoryError("inventory 'warnings' must be an array")
     return Inventory(
@@ -85,7 +88,7 @@ def load_inventory(path: str | Path) -> Inventory:
 
 def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "positions": {
             position: {
                 "found": value.found,
@@ -96,6 +99,7 @@ def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
                         "module": instance.module,
                         "file": instance.file,
                         "line": instance.line,
+                        "parameters": dict(instance.parameters),
                         "ports": {
                             name: {
                                 "connection": port.connection,

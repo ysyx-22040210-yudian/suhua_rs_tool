@@ -107,6 +107,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--visible-seconds", type=float, default=2.0)
     parser.add_argument("--start-delay", type=float, default=0.1)
+    parser.add_argument(
+        "--visible-tab",
+        choices=("config", "results", "log"),
+        default="results",
+        help="tab left visible after the smoke assertions pass",
+    )
     parser.add_argument("--negative", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
     return parser
@@ -128,6 +134,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                 "clk",
                 "rst",
                 "CRG_source",
+                "RS_CFG_EN",
             )
         )
         for index in range(row_count):
@@ -144,6 +151,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                     "clk_rs",
                     "rst_n",
                     "crg_core",
+                    "假门控",
                 )
             )
             positions[position] = {
@@ -155,6 +163,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                         "module": "rs_pipe",
                         "file": "generated_rs_top.sv",
                         "line": index + 1,
+                        "parameters": {"RS_CFG_EN": "0", "WIDTH": "1"},
                         "ports": {
                             "clk": {
                                 "connection": f"{position}.clk_rs",
@@ -176,7 +185,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
             }
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
-            {"schema_version": 1, "positions": positions, "warnings": []},
+            {"schema_version": 2, "positions": positions, "warnings": []},
             stream,
             ensure_ascii=True,
         )
@@ -202,6 +211,7 @@ def main() -> int:
 
     root = tk.Tk()
     app = RsCheckApp(root)
+    root.geometry("980x680")
     root.title("RTL RS Check GUI Smoke")
     modal_errors: list[str] = []
 
@@ -315,6 +325,55 @@ def main() -> int:
             )
             root.destroy()
             return
+        if not args.validate_only:
+            expected_label = "真门控" if args.negative else "假门控"
+            for record in app._result_records.values():
+                spec = record.get("spec", {})
+                if not isinstance(spec, dict) or spec.get("RS_CFG_EN") != expected_label:
+                    failed = True
+                    print("GUI_SMOKE_FAIL: RS_CFG_EN spec evidence mismatch", file=sys.stderr)
+                    root.destroy()
+                    return
+                for instance in record.get("matched_instances", []):
+                    parameters = instance.get("parameters")
+                    if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+                        failed = True
+                        print(
+                            "GUI_SMOKE_FAIL: RS_CFG_EN parameter evidence mismatch",
+                            file=sys.stderr,
+                        )
+                        root.destroy()
+                        return
+            try:
+                evidence = json.loads(app.evidence_text.get("1.0", "end"))
+            except (json.JSONDecodeError, TypeError):
+                failed = True
+                print("GUI_SMOKE_FAIL: evidence panel is not JSON", file=sys.stderr)
+                root.destroy()
+                return
+            evidence_spec = evidence.get("spec")
+            evidence_instances = evidence.get("matched_instances")
+            if (
+                not isinstance(evidence_spec, dict)
+                or evidence_spec.get("RS_CFG_EN") != expected_label
+                or not isinstance(evidence_instances, list)
+                or not evidence_instances
+            ):
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: evidence panel lost row or instance context",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
+            if args.negative and not isinstance(evidence.get("finding"), dict):
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: finding evidence lost row context",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
         if app.summary_rows_var.get() != f"行数 {expected_rows}":
             failed = True
             print(
@@ -402,7 +461,12 @@ def main() -> int:
             f"{' contract=elab-only' if online else ''}",
             flush=True,
         )
-        app.notebook.select(app.results_tab)
+        visible_tabs = {
+            "config": app.setup_tab,
+            "results": app.results_tab,
+            "log": app.log_tab,
+        }
+        app.notebook.select(visible_tabs[args.visible_tab])
         root.after(max(100, int(args.visible_seconds * 1000)), root.destroy)
 
     root.after(max(0, int(args.start_delay * 1000)), poll)

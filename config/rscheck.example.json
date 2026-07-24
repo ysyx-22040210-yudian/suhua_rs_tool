@@ -13,7 +13,8 @@
     "step": 5,
     "clk": 6,
     "rst": 7,
-    "CRG_source": 8
+    "CRG_source": 8,
+    "RS_CFG_EN": 9
   },
   "rtl": {
     "clk_port": "clk",

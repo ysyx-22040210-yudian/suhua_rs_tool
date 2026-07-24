@@ -306,6 +306,16 @@ def _mapping_array(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
     return tuple(dict(item) for item in value)
 
 
+def _validate_finding_severities(
+    findings: Sequence[Mapping[str, Any]], name: str
+) -> None:
+    for index, finding in enumerate(findings, start=1):
+        if finding.get("severity") not in {"error", "warning"}:
+            raise GuiReportError(
+                f"{name} item {index}.severity must be 'error' or 'warning'"
+            )
+
+
 def load_report(path: str | Path) -> LoadedReport:
     report_path = Path(path)
     try:
@@ -321,7 +331,7 @@ def load_report(path: str | Path) -> LoadedReport:
     if not isinstance(value, Mapping):
         raise GuiReportError("JSON report root must be an object")
     schema_version = value.get("schema_version")
-    if isinstance(schema_version, bool) or schema_version != 1:
+    if type(schema_version) is not int or schema_version != 2:
         raise GuiReportError("unsupported JSON report schema_version")
     summary = value.get("summary")
     if not isinstance(summary, Mapping):
@@ -342,6 +352,7 @@ def load_report(path: str | Path) -> LoadedReport:
             )
 
     global_findings = _mapping_array(value.get("global_findings"), "global_findings")
+    _validate_finding_severities(global_findings, "global_findings")
     rows = _mapping_array(value.get("rows"), "rows")
     if summary["rows"] != len(rows):
         raise GuiReportError("JSON report summary.rows does not match rows length")
@@ -360,13 +371,47 @@ def load_report(path: str | Path) -> LoadedReport:
             raise GuiReportError(
                 f"report row {index + 1}.spec is missing: {', '.join(missing)}"
             )
+        if not isinstance(spec["RS_CFG_EN"], str):
+            raise GuiReportError(
+                f"report row {index + 1}.spec.RS_CFG_EN must be a string"
+            )
         if not isinstance(row.get("passed"), bool):
             raise GuiReportError(f"report row {index + 1}.passed must be true or false")
         actual_passed_rows += int(row["passed"])
-        _mapping_array(row.get("matched_instances"), f"report row {index + 1}.matched_instances")
-        all_findings.extend(
-            _mapping_array(row.get("findings"), f"report row {index + 1}.findings")
+        matched_instances = _mapping_array(
+            row.get("matched_instances"),
+            f"report row {index + 1}.matched_instances",
         )
+        for instance_index, instance in enumerate(matched_instances, start=1):
+            parameters = instance.get("parameters")
+            if not isinstance(parameters, Mapping):
+                raise GuiReportError(
+                    f"report row {index + 1} instance {instance_index}.parameters "
+                    "must be an object"
+                )
+            for name, parameter_value in parameters.items():
+                if not isinstance(name, str) or not name:
+                    raise GuiReportError(
+                        f"report row {index + 1} instance {instance_index} "
+                        "parameter names must not be empty"
+                    )
+                if parameter_value is not None and not isinstance(parameter_value, str):
+                    raise GuiReportError(
+                        f"report row {index + 1} instance {instance_index} "
+                        f"parameter {name!r} must be a string or null"
+                    )
+        row_findings = _mapping_array(
+            row.get("findings"), f"report row {index + 1}.findings"
+        )
+        _validate_finding_severities(
+            row_findings, f"report row {index + 1}.findings"
+        )
+        row_has_error = any(item.get("severity") == "error" for item in row_findings)
+        if row["passed"] != (not row_has_error):
+            raise GuiReportError(
+                f"report row {index + 1}.passed does not match its error findings"
+            )
+        all_findings.extend(row_findings)
     if actual_passed_rows != summary["passed_rows"]:
         raise GuiReportError("JSON report passed_rows does not match row results")
     actual_errors = sum(item.get("severity") == "error" for item in all_findings)

@@ -10,22 +10,23 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 89 tests`、`OK` |
-| L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
-| L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
-| L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，包含五类核心 finding |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | 当前测试全部运行并输出 `OK` |
+| L2 | Windows + Microsoft Excel | 真实 XLSX 九字段乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
+| L3 | 通用本地环境 | schema v2 离线正例 inventory | `0` | 两个规格组均 PASS，逐实例 `parameters.RS_CFG_EN="0"` |
+| L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，包含五类原有差异和 `RS_CFG_EN_LABEL_MISMATCH` |
+| L5 | 通用本地环境 | `RS_CFG_EN` 参数/标签规则和旧 inventory | `0` | 参数不存在、0、非0、`null`、逐实例差异及 schema v1 拒绝用例全部通过 |
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
-| R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS、0 error、0 warning |
+| R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS、0 error、0 warning，并保留 schema v2 参数证据 |
 | R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
 | C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
 | V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 检测到新的 Verdi X11 窗口 |
-| N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning |
-| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、9 error、5 类核心 finding |
+| N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过、0 error、0 warning，schema v2 含 effective 参数证据 |
+| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error、至少 6 类核心 finding |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
 | G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
@@ -46,7 +47,7 @@
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 89 项测试
+### 3.1 全量测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -62,15 +63,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 ```
 
-预期末尾输出：
+预期末尾输出；测试总数以当前分支实际发现的用例为准，不固定为历史数字：
 
 ```text
-Ran 89 tests in ...
+Ran ... tests in ...
 
-OK (skipped=22)
+OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、GUI 命令构造与生命周期、包含忽略 SIGTERM 后代的进程组取消、跨桌面 GUI 会话发现，以及严格的 rscheck/Verdi launcher 参数。Windows 实测总共发现 89 项，其中 21 项仅适用于 Linux Bash/X11，另有 1 项仅适用于 POSIX 进程组，按预期 skipped，其余 67 项全部通过；macOS 预期只跳过 21 项 Linux-only 测试。CentOS 应运行全部 89 项并显示 `OK`，不能跳过 Linux launcher 回归。
+这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、条件空值、实例分组、clk/rst、CRG、多源、逐实例 `RS_CFG_EN` effective 值、schema v2 inventory/report、旧 schema 拒绝、elab-only CLI 契约、GUI 命令构造与生命周期、包含忽略 SIGTERM 后代的进程组取消、跨桌面 GUI 会话发现，以及严格的 rscheck/Verdi launcher 参数。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上 launcher、进程组和 NPI 相关的适用用例不得意外 skipped。
 
 ### 3.2 Windows 工具自带 GUI 启动和布局检查
 
@@ -93,11 +94,11 @@ python -m pip install -e .
 rtl-rs-check-gui
 ```
 
-窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查以下内容均可见、文字未截断且控件不重叠：八个 1-based 列映射、在线/离线数据源选择、JSON/CSV 输出、“验证 Excel”“运行 RTL 检查”“取消”和三个页签。2026-07-24 已在 Windows 通过该最小尺寸截图检查；截图是本地验收证据，不提交仓库。
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查以下内容均可见、文字未截断且控件不重叠：九个 1-based 列映射（包括 `RS_CFG_EN`）、在线/离线数据源选择、JSON/CSV 输出、“验证 Excel”“运行 RTL 检查”“取消”和三个页签。2026-07-24 已分别对当前九列版本的配置页和结果页完成截图验收；截图只用于本地视觉检查，不提交仓库。
 
 ### 3.3 使用 Excel 生成“乱序列 + 额外列”XLSX
 
-本节需要安装桌面版 Microsoft Excel。脚本生成一个真实 `.xlsx`，其中八个目标字段被打乱，并在首尾各加入一个无关列。
+本节需要安装桌面版 Microsoft Excel。脚本生成一个真实 `.xlsx`，其中九个目标字段被打乱，并在首尾各加入一个无关列。
 
 ```powershell
 $ProjectRoot = "C:\path\to\suhua_rs_tool"
@@ -117,11 +118,11 @@ try {
 
     $headers = @(
         "unused", "RS_inst", "clk", "Intf_type", "CRG_source",
-        "step", "position", "rst", "RS_module", "notes"
+        "step", "position", "rst", "RS_module", "RS_CFG_EN", "notes"
     )
     $values = @(
         "ignore", "PIPE_X", "clk_i", "IN_IF", "my_crg",
-        1, "top.u", "rst_n", "my_pipe", "extra column"
+        1, "top.u", "rst_n", "my_pipe", "假门控", "extra column"
     )
 
     for ($column = 1; $column -le $headers.Count; $column++) {
@@ -160,7 +161,8 @@ $ValidateArgs = @(
     "--column", "step=6",
     "--column", "clk=3",
     "--column", "rst=8",
-    "--column", "CRG_source=5"
+    "--column", "CRG_source=5",
+    "--column", "RS_CFG_EN=10"
 )
 
 python -m rscheck @ValidateArgs
@@ -218,7 +220,24 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 }
 ```
 
-预期 finding 至少包含 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。
+预期 finding 至少包含 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH`、`CRG_SOURCE_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`。
+
+### 3.5 `RS_CFG_EN` 合同回归
+
+全量测试必须独立覆盖下列情况；不能只依赖一个同时触发多种 finding 的反例：
+
+| matched instance 的 schema v2 `parameters` | Excel 单元格 | 预期 |
+|---|---|---|
+| 无 `RS_CFG_EN` 键 | 空白 | PASS |
+| 无 `RS_CFG_EN` 键 | `假门控` 或其他非空文本 | `RS_CFG_EN_PARAMETER_MISSING` |
+| `{"RS_CFG_EN": "0"}` | `假门控` | PASS |
+| `{"RS_CFG_EN": "0"}` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` |
+| `{"RS_CFG_EN": "1"}` | `假门控` | `RS_CFG_EN_VALUE_MISMATCH` |
+| `{"RS_CFG_EN": "1"}` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_MISMATCH` |
+| `{"RS_CFG_EN": null}` | `假门控` | `RS_CFG_EN_VALUE_UNRESOLVED` |
+| `{"RS_CFG_EN": null}` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_UNRESOLVED` |
+
+还必须覆盖同一组多个实例的 effective 值不同，并断言 finding 指向具体失败实例；任一实例不通过时整行 FAIL。schema v1、缺少实例 `parameters`、参数值不是 `string|null` 的 inventory 必须被拒绝，不能按“参数不存在”继续检查。JSON report 必须声明 `schema_version=2`，且 matched instance 中保留完整 `parameters` 证据。
 
 ## 4. 通用 POSIX 本地测试
 
@@ -234,7 +253,7 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-当前预期是 `Ran 89 tests` 和 `OK`。Windows 实测有 21 项 Linux Bash/X11 测试及 1 项 POSIX 进程组测试 skipped；macOS 预期只跳过 21 项 Linux-only 测试；CentOS 应执行全部 89 项，GUI 会话和 launcher 回归不应 skipped。
+当前预期是全量发现的测试均完成并输出 `OK`；不要把历史 `89` 当成固定门槛。Windows/macOS 可以跳过明确的 Linux Bash/X11 或 POSIX-only 用例，Linux 上 GUI 会话、launcher 和进程组回归不应 skipped。
 
 macOS 可直接启动工具自带 GUI，验证 Excel 或使用 inventory 做离线检查：
 
@@ -411,7 +430,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-CentOS 最终测量的墙钟时间为 1.98–2.08 秒，最大 RSS 为 150060–150148 KiB，结果均为 10,000 行、0 error、0 warning。该区间用于记录已验证基线，不应作为不同 CPU、存储或桌面环境上的硬性性能门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+当前九列版本在 CentOS VM 的最终测量为 2.12 秒墙钟时间、最大 RSS 175,612 KiB，结果为 10,000 行、0 error、0 warning。该结果用于记录已验证基线，不应作为不同 CPU、存储或桌面环境上的硬性性能门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -553,7 +572,7 @@ POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
 
 set +e
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/examples/specs.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --sheet 1 \
@@ -580,20 +599,33 @@ test -s "$POS_CSV"
 
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances)
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances)
+[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances) RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances) RS_CFG_EN=假门控
 ```
 
-### 8.1 正例 JSON 摘要断言
+### 8.1 正例 schema、摘要和参数证据断言
 
 ```bash
-python3 - "$POS_REPORT" <<'PY'
+"$PYTHON_BIN" - "$POS_REPORT" "$POS_INVENTORY" <<'PY'
 import json
 import sys
 
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as stream:
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
     report = json.load(stream)
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    inventory = json.load(stream)
+
+if report.get("schema_version") != 2 or inventory.get("schema_version") != 2:
+    raise SystemExit("report/inventory must both use schema_version 2")
+
+instances = {
+    instance["name"]: instance
+    for instance in inventory["positions"]["top.u_tile"]["instances"]
+}
+for name in ("AAAA_BBB_C0", "AAAA_BBB_C1", "CTRL_RS_D0"):
+    parameters = instances[name].get("parameters")
+    if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+        raise SystemExit("inventory lost effective RS_CFG_EN for {}: {!r}".format(name, parameters))
 
 expected = {
     "passed": True,
@@ -606,11 +638,18 @@ expected = {
 actual = report["summary"]
 if actual != expected:
     raise SystemExit("unexpected positive summary: {!r}".format(actual))
-print("positive summary OK:", actual)
+for row in report["rows"]:
+    if row["spec"].get("RS_CFG_EN") != "假门控":
+        raise SystemExit("report lost RS_CFG_EN Excel evidence: {!r}".format(row["spec"]))
+    for instance in row["matched_instances"]:
+        parameters = instance.get("parameters")
+        if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+            raise SystemExit("report lost effective parameter evidence: {!r}".format(instance))
+print("positive schema/summary/RS_CFG_EN evidence OK:", actual)
 PY
 ```
 
-预期输出 `positive summary OK`，Python 返回 `0`。
+预期输出 `positive schema/summary/RS_CFG_EN evidence OK`，Python 返回 `0`。
 
 ### 8.2 VM 上工具自带 GUI 的在线 KDB smoke
 
@@ -702,11 +741,11 @@ grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
 )
 ```
 
-成功标准是 `wait` 返回 `0`；`xwininfo` 对 smoke 自己输出的 client `window_id` 显示 `IsViewable`、标题 wrapper 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...` 和 `contract=elab-only`。smoke 还直接读取“运行日志”，要求实际命令包含 `--collector` 和 `--elab-db`，并拒绝 inventory、filelist、top 和 passthrough 选项。3 轮中的每一轮都使用真实 collector 加载同一个 elaborated KDB；最终 GUI 结果页应显示 `PASS`、行数 2、通过 2、失败 0、错误 0、警告 0。2026-07-24 的 CentOS/Verdi 实测满足该结果。在线 smoke 创建的报告和临时 inventory 位于系统临时目录，脚本退出后自动清理。
+成功标准是 `wait` 返回 `0`；`xwininfo` 对 smoke 自己输出的 client `window_id` 显示 `IsViewable`、标题 wrapper 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...` 和 `contract=elab-only`。smoke 还直接读取“运行日志”，要求实际命令包含 `--collector` 和 `--elab-db`，并拒绝 inventory、filelist、top 和 passthrough 选项。3 轮中的每一轮都使用真实 collector 加载同一个 elaborated KDB；最终 GUI 结果页应显示 `PASS`、行数 2、通过 2、失败 0、错误 0、警告 0，并断言 inventory/report 都是 schema v2、每个示例 `rs_pipe` 实例的 `parameters.RS_CFG_EN` 为字符串 `"0"`。2026-07-24 的实测早于 `RS_CFG_EN` 功能，不能作为这项断言的证据；九字段版本必须重新运行。在线 smoke 创建的报告和临时 inventory 位于系统临时目录，脚本退出后自动清理。
 
 ## 9. 在线反例
 
-反例复用同一个 `$ELAB_DB`，只把 Excel/CSV 规格替换为 `tests/fixtures/specs_negative.csv`。该规格故意写错拍数、模块名、clk、rst 和 CRG source。
+反例复用同一个 `$ELAB_DB`，只把 Excel/CSV 规格替换为 `tests/fixtures/specs_negative.csv`。该规格故意写错拍数、模块名、clk、rst、CRG source，并把 effective `RS_CFG_EN=0` 的标签写成 `真门控`。
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -715,7 +754,7 @@ NEG_REPORT="$TEST_ROOT/negative_report.json"
 NEG_LOG="$TEST_ROOT/negative_console.log"
 
 set +e
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/tests/fixtures/specs_negative.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --sheet 1 \
@@ -740,18 +779,19 @@ sed -n '1,160p' "$NEG_LOG"
 预期：
 
 - 退出码严格为 `1`，不是 `0` 或 `2`。
-- 控制台首行为 `RESULT: FAIL | rows=1 errors=9 warnings=0`。
-- finding 至少包含以下五类：
+- 控制台首行为 `RESULT: FAIL | rows=1 errors=<正整数> warnings=0`；不要固定历史 error 总数。
+- finding 至少包含以下六类：
   - `STEP_MISMATCH`
   - `RS_MODULE_MISMATCH`
   - `CLK_CONNECTION_MISMATCH`
   - `RST_CONNECTION_MISMATCH`
   - `CRG_SOURCE_MISMATCH`
+  - `RS_CFG_EN_LABEL_MISMATCH`
 
 ### 9.1 反例 JSON 摘要和 finding 断言
 
 ```bash
-python3 - "$NEG_REPORT" <<'PY'
+"$PYTHON_BIN" - "$NEG_REPORT" <<'PY'
 import json
 import sys
 
@@ -759,17 +799,18 @@ path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as stream:
     report = json.load(stream)
 
-expected_summary = {
+actual_summary = report["summary"]
+expected_fields = {
     "passed": False,
     "rows": 1,
     "passed_rows": 0,
     "failed_rows": 1,
-    "errors": 9,
     "warnings": 0,
 }
-actual_summary = report["summary"]
-if actual_summary != expected_summary:
+if any(actual_summary.get(key) != value for key, value in expected_fields.items()):
     raise SystemExit("unexpected negative summary: {!r}".format(actual_summary))
+if actual_summary.get("errors", 0) <= 0:
+    raise SystemExit("negative report must contain at least one error: {!r}".format(actual_summary))
 
 expected_codes = {
     "STEP_MISMATCH",
@@ -777,6 +818,7 @@ expected_codes = {
     "CLK_CONNECTION_MISMATCH",
     "RST_CONNECTION_MISMATCH",
     "CRG_SOURCE_MISMATCH",
+    "RS_CFG_EN_LABEL_MISMATCH",
 }
 actual_codes = {
     finding["code"]
@@ -799,7 +841,7 @@ cd "$PROJECT_ROOT"
 
 LEGACY_LOG="$TEST_ROOT/legacy_filelist.log"
 set +e
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/examples/specs.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --sheet 1 \
@@ -836,7 +878,7 @@ cd "$PROJECT_ROOT"
 
 WORKLIB_LOG="$TEST_ROOT/work_lib_as_elab.log"
 set +e
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/examples/specs.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --sheet 1 \
@@ -872,7 +914,7 @@ cat "$WORKLIB_LOG"
 cd "$PROJECT_ROOT"
 
 set +e
-python3 -m rscheck check \
+"$PYTHON_BIN" -m rscheck check \
   --excel tests/fixtures/specs.csv \
   --config config/rscheck.example.json \
   --sheet 1 \
@@ -912,19 +954,19 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 89
+### 14.1 本地测试数量与当前分支不一致
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
 - Windows 和 macOS 允许 Linux Bash/X11 测试 skipped；Linux 上应确认这些测试实际运行。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 89。
+- 测试总数会随合法回归用例增长；应核对当前分支发现的测试名称和 skipped 原因，不要强行保持历史 `89`。
 
 ### 14.2 `header validation failed`
 
 - 检查 `--sheet`、`header_row` 和 `data_start_row`。
-- 检查八个 `--column FIELD=INDEX` 是否全部为 1-based 正整数且互不重复。
-- 确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`。
+- 检查九个 `--column FIELD=INDEX` 是否全部为 1-based 正整数且互不重复。
+- 确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。
 
 ### 14.3 `NPI collector executable not found`
 
@@ -971,11 +1013,20 @@ work_lib_as_elab.log
 - collector 的 traversal/driver warning 会 fail-closed，不应通过忽略 warning 来获得 PASS。
 - 检查 clock gate/buffer 后实际被追踪到的第一个模块是否与 `CRG_source` 一致。
 
-### 14.10 反例返回 2，而不是 1
+### 14.10 `RS_CFG_EN` 参数检查失败
 
-退出码 `2` 说明检查尚未进入 RTL 差异判定，通常是 KDB、collector、动态库、license、Excel 或配置错误。先解决日志中的基础设施错误，再验证反例的五类 finding。
+- `RS_CFG_EN_PARAMETER_MISSING`：实例的 `parameters` 中没有该键，但 Excel 非空；无该参数的组必须留空。
+- `RS_CFG_EN_LABEL_MISMATCH`：实例参数存在，但 Excel 没有精确填写 `假门控`；若参数同时非零，还会报告 value mismatch。
+- `RS_CFG_EN_VALUE_MISMATCH`：实例参数字符串不表示数值 `0`；检查实例 override 和本次 elaborated KDB，不能只改 Excel 标签。
+- `RS_CFG_EN_VALUE_UNRESOLVED`：inventory 中该键为 `null`；检查 collector/NPI 参数遍历和 KDB，不能把 `null` 当作参数不存在。
+- schema v1 或实例缺少整个 `parameters` 对象属于输入契约错误，应重新使用当前 collector 生成 schema v2 inventory。
+- 同组多个实例时检查 finding 的实例路径；每个实例使用自己的 effective 值，任一失败都会使整行 FAIL。
 
-### 14.11 旧 `-- -f` 命令没有返回 2
+### 14.11 反例返回 2，而不是 1
+
+退出码 `2` 说明检查尚未进入 RTL 差异判定，通常是 KDB、collector、动态库、license、Excel 或配置错误。先解决日志中的基础设施错误，再验证反例的六类 finding。
+
+### 14.12 旧 `-- -f` 命令没有返回 2
 
 - 确认运行的是当前仓库中的 `rscheck`，而不是系统中已安装的旧版本。
 - 执行 `python3 -c 'import rscheck; print(rscheck.__file__)'` 检查导入位置。
@@ -1037,7 +1088,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：89 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
+`scripts/test_vm_verdi_gui.sh` 自动执行：当前分支的全量 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例，以及 schema v2/JSON summary/逐实例参数证据断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认在退出时关闭它启动的 Verdi；需要在成功后保留窗口时使用 `KEEP_VERDI_GUI=1 bash scripts/test_vm_verdi_gui.sh`。
 
 在已设置 Verdi 和 license 环境的图形 shell 中执行：
 
@@ -1060,4 +1111,4 @@ bash scripts/test_vm_verdi_gui.sh
 
 端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
 
-2026-07-24 实测：CentOS 89 项全量测试通过；清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后自动发现 `DISPLAY=:0`；“验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning；10,000 行 GUI 负载最终测量为 1.98–2.08 秒、最大 RSS 150060–150148 KiB、0 error、0 warning；取消启动竞态 100 轮约 15.3 秒；真实 elaborated KDB 在线 GUI smoke 3 轮均为 2 行 PASS、0 error、0 warning。Windows 实测发现 89 项，其中 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项通过；macOS 预期只跳过 21 项 Linux-only 测试。工具自带 GUI 在 Windows 最小窗口 `980x680` 完成截图布局验收，截图不纳入仓库。
+当前九字段版本的实测结果记录在 `TEST_RESULTS_RS_CFG_EN_2026-07-24.md`：Windows/Linux 102 项测试、10,000 行压力、980×680 布局、真实 KDB 和在线 GUI 正反例均已执行。原 `TEST_RESULTS_2026-07-24.md` 仍保留为引入 `RS_CFG_EN` 前的八字段历史基线。

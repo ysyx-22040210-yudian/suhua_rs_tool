@@ -58,6 +58,25 @@ class WorkerOutcome:
     error: str = ""
 
 
+def _evidence_payload(
+    record: Mapping[str, Any], finding: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "spec": record.get("spec", {}),
+        "matched_instances": record.get("matched_instances", []),
+    }
+    if finding is not None:
+        evidence["finding"] = {
+            "severity": finding.get("severity"),
+            "code": finding.get("code"),
+            "message": finding.get("message"),
+            "instance": finding.get("instance"),
+            "expected": finding.get("expected"),
+            "actual": finding.get("actual"),
+        }
+    return evidence
+
+
 class RsCheckApp:
     def __init__(self, root: Any) -> None:
         self.root = root
@@ -245,9 +264,10 @@ class RsCheckApp:
         columns_group.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
         columns_group.columnconfigure(1, weight=1)
         columns_group.columnconfigure(3, weight=1)
+        rows_per_block = (len(FIELD_NAMES) + 1) // 2
         for index, name in enumerate(FIELD_NAMES):
-            row = index % 4
-            block = index // 4
+            row = index % rows_per_block
+            block = index // rows_per_block
             label_column = block * 2
             ttk.Label(columns_group, text=name).grid(
                 row=row,
@@ -419,7 +439,16 @@ class RsCheckApp:
         result_frame.grid(row=1, column=0, sticky="nsew")
         result_frame.rowconfigure(0, weight=1)
         result_frame.columnconfigure(0, weight=1)
-        columns = ("status", "row", "interface", "position", "rs_inst", "instances", "findings")
+        columns = (
+            "status",
+            "row",
+            "interface",
+            "position",
+            "rs_inst",
+            "rs_cfg_en",
+            "instances",
+            "findings",
+        )
         self.result_tree = ttk.Treeview(
             result_frame,
             columns=columns,
@@ -432,17 +461,19 @@ class RsCheckApp:
             "interface": "Interface",
             "position": "Position",
             "rs_inst": "RS_inst",
+            "rs_cfg_en": "RS_CFG_EN",
             "instances": "实例数",
             "findings": "Finding",
         }
         widths = {
             "status": 78,
             "row": 74,
-            "interface": 120,
-            "position": 290,
-            "rs_inst": 190,
-            "instances": 88,
-            "findings": 105,
+            "interface": 100,
+            "position": 230,
+            "rs_inst": 150,
+            "rs_cfg_en": 110,
+            "instances": 82,
+            "findings": 95,
         }
         for name in columns:
             self.result_tree.heading(name, text=headings[name])
@@ -910,6 +941,7 @@ class RsCheckApp:
                     spec.get("Intf_type", ""),
                     spec.get("position", ""),
                     spec.get("RS_inst", ""),
+                    spec.get("RS_CFG_EN", ""),
                     f"-/{spec.get('step', '')}",
                     "0",
                 ),
@@ -932,7 +964,14 @@ class RsCheckApp:
 
         if report.global_findings:
             global_record: Mapping[str, Any] = {
-                "spec": {"row": "-", "Intf_type": "GLOBAL", "position": "", "RS_inst": "", "step": ""},
+                "spec": {
+                    "row": "-",
+                    "Intf_type": "GLOBAL",
+                    "position": "",
+                    "RS_inst": "",
+                    "RS_CFG_EN": "",
+                    "step": "",
+                },
                 "passed": False,
                 "matched_instances": [],
                 "findings": list(report.global_findings),
@@ -972,6 +1011,7 @@ class RsCheckApp:
                 spec.get("Intf_type", ""),
                 spec.get("position", ""),
                 spec.get("RS_inst", ""),
+                spec.get("RS_CFG_EN", ""),
                 f"{len(instances)}/{spec.get('step', '')}",
                 f"{errors}E/{warnings}W",
             ),
@@ -1019,22 +1059,24 @@ class RsCheckApp:
         finding = self._finding_records.get(selection[0])
         if finding is None:
             return
-        detail = {
-            "severity": finding.get("severity"),
-            "code": finding.get("code"),
-            "message": finding.get("message"),
-            "instance": finding.get("instance"),
-            "expected": finding.get("expected"),
-            "actual": finding.get("actual"),
-        }
-        self._set_evidence(json.dumps(detail, ensure_ascii=False, indent=2))
+        result_selection = self.result_tree.selection()
+        record = (
+            self._result_records.get(result_selection[0], {})
+            if result_selection
+            else {}
+        )
+        self._set_evidence(
+            json.dumps(
+                _evidence_payload(record, finding),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
 
     def _show_record_evidence(self, record: Mapping[str, Any]) -> None:
-        evidence = {
-            "spec": record.get("spec", {}),
-            "matched_instances": record.get("matched_instances", []),
-        }
-        self._set_evidence(json.dumps(evidence, ensure_ascii=False, indent=2))
+        self._set_evidence(
+            json.dumps(_evidence_payload(record), ensure_ascii=False, indent=2)
+        )
 
     def _set_evidence(self, value: str) -> None:
         self.evidence_text.configure(state="normal")

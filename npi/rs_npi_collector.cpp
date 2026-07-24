@@ -54,6 +54,13 @@ struct DriverSource {
   std::string module;
 };
 
+struct ParameterInfo {
+  std::string value;
+  bool has_value;
+
+  ParameterInfo() : has_value(false) {}
+};
+
 struct InstanceInfo {
   std::string name;
   std::string full_name;
@@ -62,6 +69,7 @@ struct InstanceInfo {
   int line;
   bool has_line;
   std::map<std::string, PortInfo> ports;
+  std::map<std::string, ParameterInfo> parameters;
   std::vector<DriverSource> clk_sources;
 
   InstanceInfo() : line(0), has_line(false) {}
@@ -495,6 +503,41 @@ class Collector {
     return result;
   }
 
+  std::map<std::string, ParameterInfo> collect_parameters(npiHandle module) {
+    std::map<std::string, ParameterInfo> result;
+
+    npiHandle iterator = npi_iterate(npiParameter, module);
+    if (iterator == NULL) {
+      return result;
+    }
+
+    npiHandle parameter = NULL;
+    while ((parameter = npi_scan(iterator)) != NULL) {
+      const std::string name = language_string(npiName, parameter);
+      ParameterInfo info;
+      npiValue value;
+      std::memset(&value, 0, sizeof(value));
+      value.format = npiBinStrVal;
+      if (npi_get_value(parameter, value, false) != 0 &&
+          value.value.str != NULL) {
+        // NPI reuses its value buffer on the next API call.
+        info.value = value.value.str;
+        info.has_value = true;
+      }
+
+      if (name.empty()) {
+        add_warning("NPI parameter is missing its name in module instance: " +
+                    language_string(npiFullName, module));
+      } else if (!result.insert(std::make_pair(name, info)).second) {
+        add_warning("NPI returned duplicate parameter name " + name +
+                    " in module instance: " +
+                    language_string(npiFullName, module));
+      }
+      npi_release_handle(parameter);
+    }
+    return result;
+  }
+
   npiNlHandle owning_instance(npiNlHandle inst_port) {
     npiNlHandle instance = npi_nl_handle(npiNlInst, inst_port);
     if (instance != NULL) {
@@ -644,6 +687,7 @@ class Collector {
     }
 
     result.ports = collect_ports(module);
+    result.parameters = collect_parameters(module);
     std::map<std::string, PortInfo>::const_iterator clock =
         result.ports.find(clk_port_);
     if (clock != result.ports.end() && !clock->second.connection.empty() &&
@@ -736,6 +780,27 @@ void write_instance(std::ostream& out, const InstanceInfo& instance,
   }
   out << indent << "  },\n";
 
+  out << indent << "  \"parameters\": {";
+  if (!instance.parameters.empty()) {
+    out << '\n';
+  }
+  std::map<std::string, ParameterInfo>::const_iterator parameter =
+      instance.parameters.begin();
+  for (; parameter != instance.parameters.end(); ++parameter) {
+    out << indent << "    ";
+    write_json_string(out, parameter->first);
+    out << ": ";
+    if (parameter->second.has_value) {
+      write_json_string(out, parameter->second.value);
+    } else {
+      out << "null";
+    }
+    std::map<std::string, ParameterInfo>::const_iterator next = parameter;
+    ++next;
+    out << (next == instance.parameters.end() ? "\n" : ",\n");
+  }
+  out << indent << "  },\n";
+
   out << indent << "  \"clk_sources\": [";
   if (!instance.clk_sources.empty()) {
     out << '\n';
@@ -766,7 +831,7 @@ bool write_inventory(const std::string& path, const PositionResults& positions,
     return false;
   }
 
-  out << "{\n  \"schema_version\": 1,\n  \"positions\": {";
+  out << "{\n  \"schema_version\": 2,\n  \"positions\": {";
   if (!positions.empty()) {
     out << '\n';
   }

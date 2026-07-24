@@ -66,6 +66,7 @@ class GuiBackendTests(unittest.TestCase):
             "clk": "34",
             "rst": "3",
             "CRG_source": "55",
+            "RS_CFG_EN": "89",
         }
         command = build_validate_command(
             self._request(columns=columns), python_executable="python-under-test"
@@ -84,6 +85,11 @@ class GuiBackendTests(unittest.TestCase):
         command = build_validate_command(self._request(validate_headers=False))
         self.assertIn("--no-header-check", command)
         self.assertNotIn("--header-check", command)
+
+    def test_default_columns_include_rs_cfg_en_as_ninth_mapping(self) -> None:
+        columns = default_columns()
+        self.assertEqual(len(columns), 9)
+        self.assertEqual(columns["RS_CFG_EN"], "9")
 
     def test_duplicate_and_invalid_columns_are_rejected(self) -> None:
         duplicate = default_columns()
@@ -259,7 +265,7 @@ class GuiBackendTests(unittest.TestCase):
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
         }
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "summary": {
                 "passed": True,
                 "rows": 1,
@@ -273,7 +279,18 @@ class GuiBackendTests(unittest.TestCase):
                 {
                     "spec": spec,
                     "passed": True,
-                    "matched_instances": [],
+                    "matched_instances": [
+                        {
+                            "name": "PIPE_S0",
+                            "full_name": "top.u.PIPE_S0",
+                            "module": "pipe",
+                            "file": "pipe.sv",
+                            "line": 1,
+                            "parameters": {"RS_CFG_EN": "0", "UNRESOLVED": None},
+                            "ports": {},
+                            "clk_sources": [],
+                        }
+                    ],
                     "findings": [],
                 }
             ],
@@ -281,7 +298,50 @@ class GuiBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
-            self.assertTrue(load_report(path).summary["passed"])
+            loaded = load_report(path)
+            self.assertTrue(loaded.summary["passed"])
+            self.assertEqual(
+                loaded.rows[0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
+                "0",
+            )
+
+            parameters = report["rows"][0]["matched_instances"][0].pop("parameters")
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "parameters"):
+                load_report(path)
+            report["rows"][0]["matched_instances"][0]["parameters"] = parameters
+
+            parameters["RS_CFG_EN"] = 0
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "string or null"):
+                load_report(path)
+            parameters["RS_CFG_EN"] = "0"
+
+            parameters[""] = "0"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "names must not be empty"):
+                load_report(path)
+            del parameters[""]
+
+            spec["RS_CFG_EN"] = None
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "RS_CFG_EN must be a string"):
+                load_report(path)
+            spec["RS_CFG_EN"] = "value-8"
+
+            report["rows"][0]["passed"] = False
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "passed does not match"):
+                load_report(path)
+            report["rows"][0]["passed"] = True
+
+            report["rows"][0]["findings"] = [
+                {"severity": "ERROR", "code": "BROKEN_SEVERITY"}
+            ]
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "severity"):
+                load_report(path)
+            report["rows"][0]["findings"] = []
 
             report["summary"]["rows"] = 2
             path.write_text(json.dumps(report), encoding="utf-8")
@@ -293,11 +353,14 @@ class GuiBackendTests(unittest.TestCase):
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(GuiReportError, "finding counts"):
                 load_report(path)
+            report["summary"]["warnings"] = 0
 
-            report["schema_version"] = 2
-            path.write_text(json.dumps(report), encoding="utf-8")
-            with self.assertRaisesRegex(GuiReportError, "schema_version"):
-                load_report(path)
+            for unsupported_version in (1, 2.0, True, "2", 3):
+                with self.subTest(schema_version=unsupported_version):
+                    report["schema_version"] = unsupported_version
+                    path.write_text(json.dumps(report), encoding="utf-8")
+                    with self.assertRaisesRegex(GuiReportError, "schema_version"):
+                        load_report(path)
 
     def test_cli_gui_subcommand_dispatches_without_loading_a_config(self) -> None:
         with patch("rscheck.gui.main", return_value=0) as gui_main:

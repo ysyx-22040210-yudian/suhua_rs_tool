@@ -10,6 +10,7 @@ npi/build/
 output/
 outputs/
 .tmp/
+tmp/
 .env
 .env.*
 !.env.example

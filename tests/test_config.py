@@ -16,6 +16,7 @@ class ConfigTests(unittest.TestCase):
     def test_example_config_loads(self) -> None:
         config = load_config(ROOT / "config" / "rscheck.example.json")
         self.assertEqual(config.excel.columns["RS_inst"], 3)
+        self.assertEqual(config.excel.columns["RS_CFG_EN"], 9)
         self.assertEqual(config.rtl.crg_match, "module")
         self.assertFalse(config.rtl.require_contiguous_indices)
 
@@ -26,6 +27,15 @@ class ConfigTests(unittest.TestCase):
             path = Path(name) / "bad.json"
             path.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(ConfigError, "must be unique"):
+                load_config(path)
+
+    def test_rs_cfg_en_column_mapping_is_required(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        del raw["columns"]["RS_CFG_EN"]
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "missing_rs_cfg_en.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "missing column mappings: RS_CFG_EN"):
                 load_config(path)
 
     def test_suffix_regex_requires_index_group(self) -> None:

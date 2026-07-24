@@ -12,7 +12,10 @@ module crg_aux (
     assign clk_out = ref_clk;
 endmodule
 
-module rs_pipe (
+module rs_pipe #(
+    parameter logic RS_CFG_EN = 1'b1,
+    parameter logic WIDTH = 1'b1
+) (
     input  logic clk,
     input  logic rst,
     input  logic d,
@@ -21,7 +24,7 @@ module rs_pipe (
     always_ff @(posedge clk or negedge rst) begin
         if (!rst) begin
             q <= 1'b0;
-        end else begin
+        end else if (!RS_CFG_EN && WIDTH) begin
             q <= d;
         end
     end
@@ -48,21 +51,27 @@ module tile (
         .clk_out (clk_aux)
     );
 
-    rs_pipe AAAA_BBB_C0 (
+    rs_pipe #(
+        .RS_CFG_EN (1'b0)
+    ) AAAA_BBB_C0 (
         .clk (clk_rs),
         .rst (rst_n),
         .d   (data_in),
         .q   (stage_0)
     );
 
-    rs_pipe AAAA_BBB_C1 (
+    rs_pipe #(
+        .RS_CFG_EN (1'b0)
+    ) AAAA_BBB_C1 (
         .clk (clk_rs),
         .rst (rst_n),
         .d   (stage_0),
         .q   (data_out)
     );
 
-    rs_pipe CTRL_RS_D0 (
+    rs_pipe #(
+        .RS_CFG_EN (1'b0)
+    ) CTRL_RS_D0 (
         .clk (clk_aux),
         .rst (rst_n),
         .d   (data_in),
@@ -85,4 +94,3 @@ module top (
         .ctrl_out (ctrl_out)
     );
 endmodule
-

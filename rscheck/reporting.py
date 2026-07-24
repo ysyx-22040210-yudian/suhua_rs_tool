@@ -10,7 +10,7 @@ from .model import CheckReport, Finding, OutputError
 
 def report_to_dict(report: CheckReport) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "summary": {
             "passed": report.passed,
             "rows": len(report.rows),
@@ -31,6 +31,7 @@ def report_to_dict(report: CheckReport) -> dict[str, Any]:
                         "module": instance.module,
                         "file": instance.file,
                         "line": instance.line,
+                        "parameters": dict(instance.parameters),
                         "ports": {
                             name: {
                                 "connection": port.connection,
@@ -71,6 +72,7 @@ def _finding_row(finding: Finding, passed: bool) -> dict[str, Any]:
         "row": finding.row_number if finding.row_number is not None else "",
         "position": finding.position,
         "RS_inst": finding.rs_inst,
+        "RS_CFG_EN": finding.rs_cfg_en,
         "instance": finding.instance,
         "code": finding.code,
         "message": finding.message,
@@ -94,6 +96,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "row",
         "position",
         "RS_inst",
+        "RS_CFG_EN",
         "instance",
         "code",
         "message",
@@ -114,6 +117,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "row": row.spec.row_number,
                             "position": row.spec.position,
                             "RS_inst": row.spec.rs_inst,
+                            "RS_CFG_EN": row.spec.rs_cfg_en,
                             "instance": ", ".join(item.full_name for item in row.instances),
                             "code": "",
                             "message": "all checks passed",
@@ -142,7 +146,8 @@ def format_console_report(report: CheckReport) -> str:
         lines.append(
             f"[{'PASS' if row.passed else 'FAIL'}] row {row.spec.row_number} "
             f"{row.spec.intf_type} | {row.spec.position} / {row.spec.rs_inst} "
-            f"({len(row.instances)}/{row.spec.step} instances)"
+            f"({len(row.instances)}/{row.spec.step} instances) "
+            f"RS_CFG_EN={row.spec.rs_cfg_en or '<blank>'}"
         )
         for finding in row.findings:
             lines.append(f"  [{finding.severity.upper()}] {finding.code}: {finding.message}")

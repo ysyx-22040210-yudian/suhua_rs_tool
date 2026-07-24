@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import unittest
@@ -54,11 +55,23 @@ class CliTests(unittest.TestCase):
             self.assertIn("RESULT: PASS", output.getvalue())
             self.assertTrue(json_report.is_file())
             self.assertTrue(csv_report.is_file())
-            self.assertTrue(json.loads(json_report.read_text("utf-8"))["summary"]["passed"])
+            report = json.loads(json_report.read_text("utf-8"))
+            self.assertEqual(report["schema_version"], 2)
+            self.assertTrue(report["summary"]["passed"])
+            self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "假门控")
+            self.assertEqual(
+                report["rows"][0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
+                "0",
+            )
+            with csv_report.open(encoding="utf-8-sig", newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+            self.assertEqual(csv_rows[0]["status"], "PASS")
+            self.assertEqual(csv_rows[0]["RS_CFG_EN"], "假门控")
 
     def test_offline_mismatch_returns_one_and_reports_all_core_fields(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             json_report = Path(name) / "negative.json"
+            csv_report = Path(name) / "negative.csv"
             output = StringIO()
             with redirect_stdout(output):
                 code = main(
@@ -74,6 +87,8 @@ class CliTests(unittest.TestCase):
                         str(ROOT / "tests" / "fixtures" / "inventory.json"),
                         "--json-report",
                         str(json_report),
+                        "--csv-report",
+                        str(csv_report),
                     ]
                 )
             self.assertEqual(code, 1)
@@ -86,8 +101,30 @@ class CliTests(unittest.TestCase):
                     "CLK_CONNECTION_MISMATCH",
                     "RST_CONNECTION_MISMATCH",
                     "CRG_SOURCE_MISMATCH",
+                    "RS_CFG_EN_LABEL_MISMATCH",
                 }.issubset(codes)
             )
+            with csv_report.open(encoding="utf-8-sig", newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+            self.assertTrue(csv_rows)
+            self.assertTrue(all(row["RS_CFG_EN"] == "真门控" for row in csv_rows))
+
+    def test_validate_json_contains_optional_rs_cfg_en_value(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(
+                [
+                    "validate",
+                    "--excel",
+                    str(ROOT / "tests" / "fixtures" / "specs.csv"),
+                    "--config",
+                    str(ROOT / "config" / "rscheck.example.json"),
+                    "--json",
+                ]
+            )
+        self.assertEqual(code, 0)
+        rows = json.loads(output.getvalue())
+        self.assertEqual(rows[0]["RS_CFG_EN"], "假门控")
 
     def test_collector_requires_elaborated_database(self) -> None:
         error = StringIO()
@@ -110,6 +147,32 @@ class CliTests(unittest.TestCase):
             )
         self.assertEqual(code, 2)
         self.assertIn("--elab-db requires --collector", error.getvalue())
+
+    def test_old_or_incomplete_inventory_fails_closed(self) -> None:
+        source = json.loads(
+            (ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8")
+        )
+        mutations = (
+            ("old_schema", lambda raw: raw.__setitem__("schema_version", 1), "expected 2"),
+            (
+                "missing_parameters",
+                lambda raw: raw["positions"]["top.u_tile"]["instances"][0].pop(
+                    "parameters"
+                ),
+                "parameters",
+            ),
+        )
+        for name, mutation, expected_message in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                raw = json.loads(json.dumps(source))
+                mutation(raw)
+                inventory = Path(directory) / "inventory.json"
+                inventory.write_text(json.dumps(raw), encoding="utf-8")
+                error = StringIO()
+                with redirect_stderr(error):
+                    code = main(self._check_args() + ["--inventory", str(inventory)])
+                self.assertEqual(code, 2)
+                self.assertIn(expected_message, error.getvalue())
 
     def test_collector_forwards_elaborated_database(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -155,8 +218,8 @@ class CliTests(unittest.TestCase):
             root = Path(name)
             specs = root / "specs.csv"
             specs.write_text(
-                "Wrong,RS_module,RS_inst,position,step,clk,rst,CRG_source\n"
-                "OUT,rs_pipe,PIPE,top.u,1,clk,rst,crg\n",
+                "Wrong,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "OUT,rs_pipe,PIPE,top.u,1,clk,rst,crg,\n",
                 encoding="utf-8",
             )
             raw_config = json.loads(

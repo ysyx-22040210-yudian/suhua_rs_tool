@@ -68,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="run checks with an existing inventory or the NPI collector",
     )
     source = check.add_mutually_exclusive_group(required=True)
-    source.add_argument("--inventory", help="existing schema_version=1 NPI inventory JSON")
+    source.add_argument("--inventory", help="existing schema_version=2 NPI inventory JSON")
     source.add_argument("--collector", help="NPI collector executable")
     check.add_argument(
         "--elab-db",
