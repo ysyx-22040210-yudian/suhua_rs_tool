@@ -69,7 +69,7 @@ source /opt/rh/rh-python38/enable
 python3 -c 'import tkinter; print("Tk", tkinter.TkVersion)'
 ```
 
-若发行版使用带版本号的包名，必须安装与实际 `python3` 可执行文件匹配的 Tkinter 包。`xdpyinfo` 用于验证显示访问；`xprop` 的 `_NET_CLIENT_LIST` 用于确认新窗口已经映射；`xwininfo` 供 Verdi 端到端脚本使用。
+若发行版使用带版本号的包名，必须安装与实际 `python3` 可执行文件匹配的 Tkinter 包。`xdpyinfo` 用于验证显示访问；GUI smoke 输出自身的 X11 client ID，`xwininfo -tree -stats` 用于确认 rscheck 和 Verdi 窗口已经映射，不依赖 EWMH `_NET_CLIENT_LIST`。
 
 Verdi/NPI 在线测试还需要 Bash 4.2+、Python 3.8+、支持 C++11 的编译器、GNU Make、Verdi/NPI 和组织批准的 license。不要把 VM 地址、SSH 密码、license 地址、token 或会话生成的 Xauthority 路径写入仓库。
 
@@ -213,7 +213,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 5
 ```
 
-预期为 2 行 VALID、0 error、0 warning，末行包含 `mode=validate case=positive iterations=20`。
+预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...`。
 
 可见离线正例连续 100 轮：
 
@@ -225,7 +225,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100`、结果页 2 行 PASS、0 error、0 warning。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、结果页 2 行 PASS、0 error、0 warning。
 
 可见离线反例：
 
@@ -256,10 +256,10 @@ cd "$PROJECT_ROOT"
 预期末行：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1
+GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x...
 ```
 
-CentOS 实测为 4.10 秒墙钟时间、最大 RSS 150080 KiB、0 error、0 warning。该数值是已验证基线，不是不同设备的硬门槛。脚本会生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+CentOS 最终测量为 1.98–2.08 秒墙钟时间、最大 RSS 150060–150148 KiB、0 error、0 warning。该区间是已验证基线，不是不同设备的硬门槛。脚本会生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -276,9 +276,9 @@ CANCEL_ELAPSED="$(( $(date +%s) - CANCEL_START_SECONDS ))"
 printf 'cancel-during-start: 100/100 PASS in %s seconds\n' "$CANCEL_ELAPSED"
 ```
 
-CentOS 实测 100 轮在 9 秒内完成。完整测试套件还覆盖运行中取消和完整子进程树清理。
+CentOS 实测 100 轮通过，总耗时约 15.3 秒。完整测试套件还覆盖运行中取消，以及组长先退出、后代忽略 SIGTERM 时的三秒后进程组强制清理。
 
-需要自动证明 smoke 窗口确实映射到桌面时，应在启动前后比较 `xprop -root _NET_CLIENT_LIST` 的 window ID。不要按窗口标题 grep；C locale 下 `xwininfo` 读取中文标题可能输出 conversion failure。完整带 PID、新增 window ID、等待和日志断言的复制块见 [测试指南](TESTING.md#41-linux-工具自带-gui-可见-smoke稳定性与负载测试)。
+smoke 本身会要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`。需要额外的桌面证据时，执行 `xwininfo -id <XID> -tree -stats`：client 必须是 `IsViewable`，同一树中必须出现标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper，并显示有效 Width/Height。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 可能缺失的 `_NET_WM_PID`。完整复制块见 [测试指南](TESTING.md#41-linux-工具自带-gui-可见-smoke稳定性与负载测试)。
 
 ## 7. VM 在线 KDB GUI smoke
 
@@ -330,10 +330,10 @@ gui_session_resolve
 成功判据：脚本返回 `0` 并打印：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 elaborated KDB；最终 GUI 结果页应为 PASS、行数 2、通过 2、失败 0、错误 0、警告 0。日志中的实际检查命令必须只含 `--collector`、`--elab-db` 和运行配置，不得出现 RTL、filelist、`-top` 或 `--` passthrough。
+3 轮中的每一轮都必须通过真实 collector 加载该 elaborated KDB；最终 GUI 结果页应为 PASS、行数 2、通过 2、失败 0、错误 0、警告 0。smoke 会读取 GUI 运行日志并检查实际命令：必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough；否则脚本返回非零。
 
 ## 8. 打开 Verdi GUI
 
@@ -409,7 +409,7 @@ python3 -m unittest discover -v
 当前预期为：
 
 ```text
-Ran 88 tests in ...
+Ran 89 tests in ...
 OK
 ```
 
@@ -435,7 +435,7 @@ bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 成功输出应包含：
 
 ```text
-Ran 88 tests in ...
+Ran 89 tests in ...
 OK
 Verdi GUI window detected ...
 RESULT: PASS | rows=2 errors=0 warnings=0
@@ -465,14 +465,14 @@ PASS: Verdi GUI launch and online NPI check completed.
 
 ## 12. 2026-07-24 验证记录
 
-- CentOS 88 项全量自动测试通过，无 skipped。
+- CentOS 89 项全量自动测试通过，无 skipped。
 - CentOS 7.9、Python 3.8.13、G++ 11.2.1、Verdi/NPI O-2018.09-SP2 环境完成真实 collector/KDB 正向链路验证。
 - 清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后，GUI 会话发现仍自动选中 `DISPLAY=:0`，不依赖 `gnome-session-binary`。
 - GUI “验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning。
-- 10,000 行 GUI 负载单轮用时 4.10 秒，最大 RSS 150080 KiB，0 error、0 warning。
-- 取消启动竞态 100 轮在 9 秒内通过。
+- 10,000 行 GUI 负载最终测量为 1.98–2.08 秒，最大 RSS 150060–150148 KiB，0 error、0 warning。
+- 取消启动竞态连续 100 轮通过，总耗时约 15.3 秒。
 - Verdi launcher 能打开真实 elaborated KDB；同一 KDB 的在线 GUI smoke 连续 3 轮均为 2 行 PASS、0 error、0 warning。
-- Windows 当前发现 88 项自动测试，其中 21 项 Linux Bash/X11 测试按预期 skipped，其余通过。
+- Windows 实测发现 89 项自动测试，其中 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项通过；macOS 预期只跳过 21 项 Linux-only 测试。
 - Windows 工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，无文字/控件重叠；截图没有提交仓库。
 
 具体 VM 每次压力和在线 smoke 的终端输出应随提交一起记录在测试说明或提交信息中，但不得包含主机、密码、license 或会话认证路径。

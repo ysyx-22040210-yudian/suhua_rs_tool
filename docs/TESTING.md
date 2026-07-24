@@ -10,7 +10,7 @@
 
 | 编号 | 环境 | 测试目标 | 预期退出码 | 关键预期结果 |
 |---|---|---|---:|---|
-| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 88 tests`、`OK` |
+| L1 | Windows / Linux / macOS | 全量 Python 自动测试 | `0` | `Ran 89 tests`、`OK` |
 | L2 | Windows + Microsoft Excel | 真实 XLSX 列乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | 离线正例 inventory | `0` | 两个规格组均 PASS |
 | L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，包含五类核心 finding |
@@ -46,7 +46,7 @@
 
 ## 3. Windows 本地测试
 
-### 3.1 全量 88 项测试
+### 3.1 全量 89 项测试
 
 在 PowerShell 中执行。先把占位符改为实际仓库路径：
 
@@ -65,12 +65,12 @@ if ($LASTEXITCODE -ne 0) {
 预期末尾输出：
 
 ```text
-Ran 88 tests in ...
+Ran 89 tests in ...
 
-OK (skipped=21)
+OK (skipped=22)
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、GUI 命令构造与生命周期、进程树取消、跨桌面 GUI 会话发现，以及严格的 rscheck/Verdi launcher 参数。Windows 当前总共发现 88 项，其中 21 项仅适用于 Linux Bash/X11，按预期 skipped；其余全部通过。CentOS 应运行全部 88 项并显示 `OK`，不能跳过 Linux launcher 回归。
+这些测试覆盖配置校验、XLSX/CSV/TSV 解析、列映射、实例分组、clk/rst、CRG、多源、报告、elab-only CLI 契约、GUI 命令构造与生命周期、包含忽略 SIGTERM 后代的进程组取消、跨桌面 GUI 会话发现，以及严格的 rscheck/Verdi launcher 参数。Windows 实测总共发现 89 项，其中 21 项仅适用于 Linux Bash/X11，另有 1 项仅适用于 POSIX 进程组，按预期 skipped，其余 67 项全部通过；macOS 预期只跳过 21 项 Linux-only 测试。CentOS 应运行全部 89 项并显示 `OK`，不能跳过 Linux launcher 回归。
 
 ### 3.2 Windows 工具自带 GUI 启动和布局检查
 
@@ -234,7 +234,7 @@ python3 -m unittest discover -v
 test "$?" -eq 0
 ```
 
-当前预期是 `Ran 88 tests` 和 `OK`。Windows 有 21 项 Linux Bash/X11 测试 skipped；CentOS 应执行全部 88 项，GUI 会话和 launcher 回归不应 skipped。
+当前预期是 `Ran 89 tests` 和 `OK`。Windows 实测有 21 项 Linux Bash/X11 测试及 1 项 POSIX 进程组测试 skipped；macOS 预期只跳过 21 项 Linux-only 测试；CentOS 应执行全部 89 项，GUI 会话和 launcher 回归不应 skipped。
 
 macOS 可直接启动工具自带 GUI，验证 Excel 或使用 inventory 做离线检查：
 
@@ -305,21 +305,23 @@ cd "$PROJECT_ROOT"
 预期末行包含：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped
 ```
 
 2026-07-24 的 CentOS 可见窗口实测中，20 轮全部通过。
 
-离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。窗口映射通过根窗口 `_NET_CLIENT_LIST` 中新增的 X11 window ID 验证，不依赖本地化标题：
+离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
 ```bash
+(
+set -e
 cd "$PROJECT_ROOT"
 POS_GUI_LOG="$(mktemp /tmp/rscheck_gui_positive.XXXXXX.log)"
-GUI_WINDOWS_BEFORE="$(mktemp /tmp/rscheck_windows_before.XXXXXX)"
-GUI_WINDOWS_CURRENT="$(mktemp /tmp/rscheck_windows_current.XXXXXX)"
-GUI_WINDOWS_NEW="$(mktemp /tmp/rscheck_windows_new.XXXXXX)"
-xprop -root _NET_CLIENT_LIST 2>/dev/null \
-  | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$GUI_WINDOWS_BEFORE" || true
+GUI_WINDOW_INFO="$(mktemp /tmp/rscheck_window_info.XXXXXX)"
+cleanup_positive_window_files() {
+  rm -f "$GUI_WINDOW_INFO"
+}
+trap cleanup_positive_window_files EXIT
 
 "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
   --project-root "$PROJECT_ROOT" \
@@ -328,20 +330,36 @@ xprop -root _NET_CLIENT_LIST 2>/dev/null \
   >"$POS_GUI_LOG" 2>&1 &
 POS_GUI_PID=$!
 
+WINDOW_DETECTED=0
+GUI_WINDOW_ID=""
 for _ in $(seq 1 50); do
-  xprop -root _NET_CLIENT_LIST 2>/dev/null \
-    | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$GUI_WINDOWS_CURRENT" || true
-  comm -13 "$GUI_WINDOWS_BEFORE" "$GUI_WINDOWS_CURRENT" >"$GUI_WINDOWS_NEW"
-  test -s "$GUI_WINDOWS_NEW" && break
+  GUI_WINDOW_ID="$(
+    sed -n 's/.*window_id=\(0x[0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' "$POS_GUI_LOG" \
+      | tail -n 1
+  )"
+  if [ -n "$GUI_WINDOW_ID" ] && \
+     xwininfo -id "$GUI_WINDOW_ID" -tree -stats >"$GUI_WINDOW_INFO" 2>&1 && \
+     grep -Fq 'Map State: IsViewable' "$GUI_WINDOW_INFO" && \
+     grep -Fq 'RTL RS Check GUI Smoke' "$GUI_WINDOW_INFO"; then
+    WINDOW_DETECTED=1
+    break
+  fi
+  kill -0 "$POS_GUI_PID" 2>/dev/null || break
   sleep 0.2
 done
-test -s "$GUI_WINDOWS_NEW"
-printf 'new rscheck GUI window ID(s):\n'
-cat "$GUI_WINDOWS_NEW"
+printf 'rscheck GUI window ID: %s\n' "$GUI_WINDOW_ID"
+cat "$GUI_WINDOW_INFO"
+set +e
 wait "$POS_GUI_PID"
+POS_GUI_RC=$?
+set -e
 cat "$POS_GUI_LOG"
-grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=100' "$POS_GUI_LOG"
-rm -f "$GUI_WINDOWS_BEFORE" "$GUI_WINDOWS_CURRENT" "$GUI_WINDOWS_NEW"
+test "$WINDOW_DETECTED" -eq 1
+test "$POS_GUI_RC" -eq 0
+grep -F 'Width:' "$GUI_WINDOW_INFO"
+grep -F 'Height:' "$GUI_WINDOW_INFO"
+grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=100 window=mapped' "$POS_GUI_LOG"
+)
 ```
 
 2026-07-24 的 CentOS 可见窗口实测中，100 轮全部通过，最终结果为 2 行 PASS、0 error、0 warning。
@@ -349,23 +367,33 @@ rm -f "$GUI_WINDOWS_BEFORE" "$GUI_WINDOWS_CURRENT" "$GUI_WINDOWS_NEW"
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
 ```bash
+(
+set -e
 cd "$PROJECT_ROOT"
 NEG_GUI_LOG="$(mktemp /tmp/rscheck_gui_negative.XXXXXX.log)"
+set +e
 "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
   --project-root "$PROJECT_ROOT" \
   --negative \
   --iterations 1 \
   --visible-seconds 5 \
   >"$NEG_GUI_LOG" 2>&1
+NEG_GUI_RC=$?
+set -e
 cat "$NEG_GUI_LOG"
-grep -F 'mode=offline case=negative iterations=1' "$NEG_GUI_LOG"
+test "$NEG_GUI_RC" -eq 0
+grep -F 'mode=offline case=negative iterations=1 window=mapped' "$NEG_GUI_LOG"
+)
 ```
 
 10,000 行负载测试会在临时目录生成规格和对应 inventory，通过 GUI 后台进程、JSON 报告解析及 10,000 行 Treeview 渲染路径。命令使用 GNU `time` 同时记录墙钟时间和最大常驻内存：
 
 ```bash
+(
+set -e
 cd "$PROJECT_ROOT"
 LOAD_GUI_LOG="$(mktemp /tmp/rscheck_gui_load.XXXXXX.log)"
+set +e
 /usr/bin/time -f 'GUI_LOAD wall=%e sec max_rss=%M KiB' \
   "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
   --project-root "$PROJECT_ROOT" \
@@ -374,18 +402,23 @@ LOAD_GUI_LOG="$(mktemp /tmp/rscheck_gui_load.XXXXXX.log)"
   --timeout 180 \
   --visible-seconds 0 \
   >"$LOAD_GUI_LOG" 2>&1
+LOAD_GUI_RC=$?
+set -e
 cat "$LOAD_GUI_LOG"
-grep -F 'rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1' "$LOAD_GUI_LOG"
+test "$LOAD_GUI_RC" -eq 0
+grep -F 'rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped' "$LOAD_GUI_LOG"
 grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
+)
 ```
 
-CentOS 实测墙钟时间为 4.10 秒，最大 RSS 为 150080 KiB，结果为 10,000 行、0 error、0 warning。该数值用于记录已验证基线，不应作为不同 CPU、存储或桌面环境上的硬性性能门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+CentOS 最终测量的墙钟时间为 1.98–2.08 秒，最大 RSS 为 150060–150148 KiB，结果均为 10,000 行、0 error、0 warning。该区间用于记录已验证基线，不应作为不同 CPU、存储或桌面环境上的硬性性能门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
 ```bash
-cd "$PROJECT_ROOT"
+(
 set -e
+cd "$PROJECT_ROOT"
 CANCEL_START_SECONDS="$(date +%s)"
 for _ in $(seq 1 100); do
   "$PYTHON_BIN" -m unittest \
@@ -394,9 +427,10 @@ for _ in $(seq 1 100); do
 done
 CANCEL_ELAPSED="$(( $(date +%s) - CANCEL_START_SECONDS ))"
 printf 'cancel-during-start: 100/100 PASS in %s seconds\n' "$CANCEL_ELAPSED"
+)
 ```
 
-CentOS 实测 100 轮在 9 秒内完成。完整测试套件还覆盖运行中取消，验证不会只结束 Python CLI 而遗留 collector 子进程。
+CentOS 实测连续 100 轮通过，总耗时约 15.3 秒。完整测试套件还覆盖运行中取消，以及组长先退出、后代忽略 SIGTERM 时的三秒后进程组强制清理，验证不会只结束 Python CLI 而遗留 collector 子进程。
 
 手工验收时可在较慢的在线检查开始后点击“取消”，结果状态应变为 `CANCELLED`，日志停止增长，`pgrep -af rs_npi_collector` 不应出现本次 collector。不要用 `kill -9` 代替 GUI 取消按钮进行这项功能验收。
 
@@ -583,6 +617,8 @@ PY
 以下块不包含主机、密码或真实 license。先把前三个占位变量替换为本机受控路径；`ELAB_DB` 必须是已经由 `elabcom` 生成的目录。命令只把 collector 和该 KDB 交给 GUI，不传 RTL、filelist 或 top：
 
 ```bash
+(
+set -e
 export PROJECT_ROOT="/path/to/suhua_rs_tool"
 export VERDI_HOME="/path/to/verdi"
 export ELAB_DB="/absolute/path/to/kdb.elab++"
@@ -616,11 +652,11 @@ source scripts/lib/gui_session.sh
 gui_session_resolve
 
 ONLINE_GUI_LOG="$(mktemp /tmp/rscheck_gui_online.XXXXXX.log)"
-ONLINE_WINDOWS_BEFORE="$(mktemp /tmp/rscheck_online_windows_before.XXXXXX)"
-ONLINE_WINDOWS_CURRENT="$(mktemp /tmp/rscheck_online_windows_current.XXXXXX)"
-ONLINE_WINDOWS_NEW="$(mktemp /tmp/rscheck_online_windows_new.XXXXXX)"
-xprop -root _NET_CLIENT_LIST 2>/dev/null \
-  | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$ONLINE_WINDOWS_BEFORE" || true
+ONLINE_WINDOW_INFO="$(mktemp /tmp/rscheck_online_window_info.XXXXXX)"
+cleanup_online_window_files() {
+  rm -f "$ONLINE_WINDOW_INFO"
+}
+trap cleanup_online_window_files EXIT
 
 "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
   --project-root "$PROJECT_ROOT" \
@@ -633,23 +669,40 @@ xprop -root _NET_CLIENT_LIST 2>/dev/null \
   >"$ONLINE_GUI_LOG" 2>&1 &
 ONLINE_GUI_PID=$!
 
+WINDOW_DETECTED=0
+ONLINE_WINDOW_ID=""
 for _ in $(seq 1 100); do
-  xprop -root _NET_CLIENT_LIST 2>/dev/null \
-    | grep -Eo '0x[0-9a-fA-F]+' | sort -u >"$ONLINE_WINDOWS_CURRENT" || true
-  comm -13 "$ONLINE_WINDOWS_BEFORE" "$ONLINE_WINDOWS_CURRENT" >"$ONLINE_WINDOWS_NEW"
-  test -s "$ONLINE_WINDOWS_NEW" && break
+  ONLINE_WINDOW_ID="$(
+    sed -n 's/.*window_id=\(0x[0-9a-fA-F][0-9a-fA-F]*\).*/\1/p' "$ONLINE_GUI_LOG" \
+      | tail -n 1
+  )"
+  if [ -n "$ONLINE_WINDOW_ID" ] && \
+     xwininfo -id "$ONLINE_WINDOW_ID" -tree -stats >"$ONLINE_WINDOW_INFO" 2>&1 && \
+     grep -Fq 'Map State: IsViewable' "$ONLINE_WINDOW_INFO" && \
+     grep -Fq 'RTL RS Check GUI Smoke' "$ONLINE_WINDOW_INFO"; then
+    WINDOW_DETECTED=1
+    break
+  fi
+  kill -0 "$ONLINE_GUI_PID" 2>/dev/null || break
   sleep 0.2
 done
-test -s "$ONLINE_WINDOWS_NEW"
-printf 'new rscheck GUI window ID(s):\n'
-cat "$ONLINE_WINDOWS_NEW"
+printf 'rscheck GUI window ID: %s\n' "$ONLINE_WINDOW_ID"
+cat "$ONLINE_WINDOW_INFO"
+set +e
 wait "$ONLINE_GUI_PID"
+ONLINE_GUI_RC=$?
+set -e
 cat "$ONLINE_GUI_LOG"
-grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3' "$ONLINE_GUI_LOG"
-rm -f "$ONLINE_WINDOWS_BEFORE" "$ONLINE_WINDOWS_CURRENT" "$ONLINE_WINDOWS_NEW"
+test "$WINDOW_DETECTED" -eq 1
+test "$ONLINE_GUI_RC" -eq 0
+grep -F 'Width:' "$ONLINE_WINDOW_INFO"
+grep -F 'Height:' "$ONLINE_WINDOW_INFO"
+grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x' "$ONLINE_GUI_LOG"
+grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
+)
 ```
 
-成功标准是 `wait` 返回 `0`、`_NET_CLIENT_LIST` 出现新增 window ID，并出现最后一行 `GUI_SMOKE_PASS`。不要按窗口标题 grep：C locale 下 `xwininfo` 读取中文标题可能报告 conversion failure。3 轮中的每一轮都使用真实 collector 加载同一个 elaborated KDB；最终 GUI 结果页应显示 `PASS`、行数 2、通过 2、失败 0、错误 0、警告 0。2026-07-24 的 CentOS/Verdi 实测满足该结果。在线 smoke 创建的报告和临时 inventory 位于系统临时目录，脚本退出后自动清理。
+成功标准是 `wait` 返回 `0`；`xwininfo` 对 smoke 自己输出的 client `window_id` 显示 `IsViewable`、标题 wrapper 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...` 和 `contract=elab-only`。smoke 还直接读取“运行日志”，要求实际命令包含 `--collector` 和 `--elab-db`，并拒绝 inventory、filelist、top 和 passthrough 选项。3 轮中的每一轮都使用真实 collector 加载同一个 elaborated KDB；最终 GUI 结果页应显示 `PASS`、行数 2、通过 2、失败 0、错误 0、警告 0。2026-07-24 的 CentOS/Verdi 实测满足该结果。在线 smoke 创建的报告和临时 inventory 位于系统临时目录，脚本退出后自动清理。
 
 ## 9. 在线反例
 
@@ -859,13 +912,13 @@ work_lib_as_elab.log
 
 ## 14. 故障排查
 
-### 14.1 本地测试数量不是 88
+### 14.1 本地测试数量不是 89
 
 - 确认位于正确仓库根目录。
 - 执行 `python -m unittest discover -v`，不要只运行单个测试文件。
 - 检查 Python 是否为 3.8 或更高版本。
 - Windows 和 macOS 允许 Linux Bash/X11 测试 skipped；Linux 上应确认这些测试实际运行。
-- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 88。
+- 若仓库后续合法增加测试，测试数可能增长；此时应核对新增测试名称，而不是强行保持 89。
 
 ### 14.2 `header validation failed`
 
@@ -984,7 +1037,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：88 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
+`scripts/test_vm_verdi_gui.sh` 自动执行：89 项 Python 测试、collector 构建和动态库检查、示例 `vericom`/`elabcom`、`verdi -elab <kdb.elab++>` GUI 窗口检测、同一 KDB 的在线正例及 JSON summary 断言。`work.lib++` 仅在准备阶段供 `elabcom` 使用；NPI 检查的唯一设计输入始终是 `--elab-db`。
 
 在已设置 Verdi 和 license 环境的图形 shell 中执行：
 
@@ -1007,4 +1060,4 @@ bash scripts/test_vm_verdi_gui.sh
 
 端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
 
-2026-07-24 实测：CentOS 88 项全量测试通过；清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后自动发现 `DISPLAY=:0`；“验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning；10,000 行单轮 GUI 负载为 4.10 秒、最大 RSS 150080 KiB、0 error、0 warning；取消启动竞态 100 轮在 9 秒内通过；真实 elaborated KDB 在线 GUI smoke 3 轮均为 2 行 PASS、0 error、0 warning。Windows 当前发现 88 项，其中 21 项 Linux Bash/X11 测试按预期 skipped；工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，截图不纳入仓库。
+2026-07-24 实测：CentOS 89 项全量测试通过；清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后自动发现 `DISPLAY=:0`；“验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning；10,000 行 GUI 负载最终测量为 1.98–2.08 秒、最大 RSS 150060–150148 KiB、0 error、0 warning；取消启动竞态 100 轮约 15.3 秒；真实 elaborated KDB 在线 GUI smoke 3 轮均为 2 行 PASS、0 error、0 warning。Windows 实测发现 89 项，其中 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项通过；macOS 预期只跳过 21 项 Linux-only 测试。工具自带 GUI 在 Windows 最小窗口 `980x680` 完成截图布局验收，截图不纳入仓库。

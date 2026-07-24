@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -386,8 +387,11 @@ class ProcessController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
+        self._process_group_id: int | None = None
         self._starting = False
         self._cancel_requested = False
+        self._termination_started = False
+        self._termination_done: threading.Event | None = None
 
     @property
     def is_running(self) -> bool:
@@ -406,6 +410,10 @@ class ProcessController:
                 raise RuntimeError("another GUI command is already running")
             self._starting = True
             self._cancel_requested = False
+            self._termination_started = False
+            termination_done = threading.Event()
+            self._termination_done = termination_done
+            self._process_group_id = None
 
         child_environment = os.environ.copy()
         if environment:
@@ -432,17 +440,34 @@ class ProcessController:
         except Exception:
             with self._lock:
                 self._starting = False
+                self._cancel_requested = False
+                self._termination_done = None
             raise
+        termination_target: tuple[subprocess.Popen[str], int | None, threading.Event] | None
         with self._lock:
             self._process = process
+            # start_new_session=True guarantees that the child's PID is the
+            # stable process-group ID even if the group leader exits first.
+            self._process_group_id = process.pid if os.name != "nt" else None
             self._starting = False
-            cancel_now = self._cancel_requested
-        if cancel_now:
-            self._request_process_stop(process)
+            if self._cancel_requested and not self._termination_started:
+                self._termination_started = True
+                termination_target = (
+                    process,
+                    self._process_group_id,
+                    termination_done,
+                )
+            else:
+                termination_target = None
+        if termination_target is not None:
+            self._request_process_stop(*termination_target)
         try:
             stdout, stderr = process.communicate()
             with self._lock:
                 cancelled = self._cancel_requested
+                termination_started = self._termination_started
+            if cancelled and termination_started:
+                termination_done.wait()
             return ProcessResult(
                 command=tuple(command),
                 returncode=process.returncode,
@@ -454,63 +479,135 @@ class ProcessController:
             with self._lock:
                 if self._process is process:
                     self._process = None
+                    self._process_group_id = None
+                    self._termination_started = False
+                    self._termination_done = None
                 self._cancel_requested = False
 
     def cancel(self) -> bool:
+        termination_target: tuple[subprocess.Popen[str], int | None, threading.Event] | None
         with self._lock:
             if not self._starting and self._process is None:
                 return False
             self._cancel_requested = True
             process = self._process
-        if process is not None and process.poll() is None:
-            self._request_process_stop(process)
+            if (
+                process is not None
+                and not self._termination_started
+                and self._termination_done is not None
+            ):
+                self._termination_started = True
+                termination_target = (
+                    process,
+                    self._process_group_id,
+                    self._termination_done,
+                )
+            else:
+                termination_target = None
+        if termination_target is not None:
+            self._request_process_stop(*termination_target)
         return True
 
     @staticmethod
-    def _request_process_stop(process: subprocess.Popen[str]) -> None:
+    def _request_process_stop(
+        process: subprocess.Popen[str],
+        process_group_id: int | None,
+        termination_done: threading.Event,
+    ) -> None:
         if os.name == "nt":
             # CTRL_BREAK cannot be relied on for GUI-launched process groups.
             # taskkill /T /F is the deterministic way to stop both the CLI and
             # a collector child before communicate() waits for inherited pipes.
-            ProcessController._terminate(process, force=True)
+            try:
+                ProcessController._terminate_windows_tree(process)
+            finally:
+                termination_done.set()
             return
-        ProcessController._terminate(process)
-        threading.Thread(
-            target=ProcessController._force_after_timeout,
-            args=(process,),
+        if process_group_id is None:
+            termination_done.set()
+            return
+        worker = threading.Thread(
+            target=ProcessController._terminate_posix_group,
+            args=(process, process_group_id, termination_done),
             name="rscheck-gui-force-kill",
             daemon=True,
-        ).start()
+        )
+        try:
+            worker.start()
+        except RuntimeError:
+            try:
+                ProcessController._signal_process_group(
+                    process_group_id, signal.SIGKILL
+                )
+            finally:
+                termination_done.set()
 
     @staticmethod
-    def _force_after_timeout(process: subprocess.Popen[str]) -> None:
+    def _terminate_posix_group(
+        process: subprocess.Popen[str],
+        process_group_id: int,
+        termination_done: threading.Event,
+    ) -> None:
         try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            ProcessController._terminate(process, force=True)
+            try:
+                ProcessController._signal_process_group(
+                    process_group_id, signal.SIGTERM
+                )
+            except OSError:
+                if process.poll() is None:
+                    process.terminate()
+
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if not ProcessController._process_group_exists(process_group_id):
+                    return
+                time.sleep(0.05)
+
+            try:
+                ProcessController._signal_process_group(
+                    process_group_id, signal.SIGKILL
+                )
+            except OSError:
+                if process.poll() is None:
+                    process.kill()
+
+            # Give init a short opportunity to reap orphaned descendants so a
+            # completed cancellation does not leave a visible process group.
+            reap_deadline = time.monotonic() + 1
+            while (
+                time.monotonic() < reap_deadline
+                and ProcessController._process_group_exists(process_group_id)
+            ):
+                time.sleep(0.02)
+        finally:
+            termination_done.set()
 
     @staticmethod
-    def _terminate(process: subprocess.Popen[str], *, force: bool = False) -> None:
-        if process.poll() is not None:
-            return
+    def _signal_process_group(process_group_id: int, group_signal: int) -> None:
+        os.killpg(process_group_id, group_signal)
+
+    @staticmethod
+    def _process_group_exists(process_group_id: int) -> bool:
         try:
-            if os.name == "nt":
-                arguments = ["taskkill", "/PID", str(process.pid), "/T"]
-                if force:
-                    arguments.append("/F")
-                completed = subprocess.run(
-                    arguments,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=5,
-                )
-                if completed.returncode != 0 and process.poll() is None:
-                    process.kill() if force else process.terminate()
-            else:
-                os.killpg(
-                    os.getpgid(process.pid), signal.SIGKILL if force else signal.SIGTERM
-                )
-        except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _terminate_windows_tree(process: subprocess.Popen[str]) -> None:
+        try:
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            if completed.returncode != 0 and process.poll() is None:
+                process.kill()
+        except (OSError, subprocess.TimeoutExpired):
             if process.poll() is None:
-                process.kill() if force else process.terminate()
+                process.kill()

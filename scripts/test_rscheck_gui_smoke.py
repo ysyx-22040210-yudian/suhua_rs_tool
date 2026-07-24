@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shlex
 import sys
 import tempfile
 import time
@@ -15,6 +16,10 @@ if str(DEFAULT_PROJECT_ROOT) not in sys.path:
 import rscheck.gui as gui_module
 from rscheck.gui import RsCheckApp, tk
 from rscheck.gui_backend import INVENTORY_SOURCE, LIVE_SOURCE
+
+
+def _window_identifier(root: object) -> str:
+    return f"0x{int(root.winfo_id()):x}"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -173,9 +178,24 @@ def main() -> int:
     started = False
     failed = False
     timed_out = False
+    cancel_deadline: float | None = None
+    window_id = ""
+    window_reported = False
+    window_seen = False
 
     def poll() -> None:
-        nonlocal completed, failed, started, timed_out
+        nonlocal cancel_deadline, completed, failed, started, timed_out
+        nonlocal window_id, window_reported, window_seen
+        window_seen = window_seen or bool(
+            root.winfo_ismapped() and root.winfo_viewable()
+        )
+        if window_seen and not window_reported:
+            window_id = _window_identifier(root)
+            print(
+                f"GUI_SMOKE_WINDOW: window=mapped window_id={window_id}",
+                flush=True,
+            )
+            window_reported = True
         if not started:
             started = True
             app._start_operation(operation)
@@ -183,6 +203,13 @@ def main() -> int:
             return
         if timed_out:
             if app.running or app.controller.is_running:
+                if cancel_deadline is not None and time.monotonic() > cancel_deadline:
+                    print(
+                        "GUI_SMOKE_FAIL: cancellation did not finish within 15 seconds",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
                 root.after(100, poll)
                 return
             root.destroy()
@@ -190,6 +217,7 @@ def main() -> int:
         if time.monotonic() > deadline:
             failed = True
             timed_out = True
+            cancel_deadline = time.monotonic() + 15
             print("GUI_SMOKE_FAIL: timeout", file=sys.stderr)
             app._cancel_operation()
             root.after(100, poll)
@@ -250,6 +278,47 @@ def main() -> int:
             )
             root.destroy()
             return
+        if not window_seen:
+            failed = True
+            print("GUI_SMOKE_FAIL: Tk window was never mapped", file=sys.stderr)
+            root.destroy()
+            return
+        if online:
+            command_lines = [
+                line[2:]
+                for line in app.log_text.get("1.0", "end").splitlines()
+                if line.startswith("$ ")
+            ]
+            expected_command_count = completed + 1
+            if len(command_lines) != expected_command_count:
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: online command count mismatch "
+                    f"expected={expected_command_count} actual={len(command_lines)}",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
+            command_tokens = shlex.split(command_lines[-1])
+            missing_options = [
+                option
+                for option in ("--collector", "--elab-db")
+                if command_tokens.count(option) != 1
+            ]
+            forbidden_options = [
+                option
+                for option in ("--inventory", "-f", "-sv", "-lib", "-top", "--")
+                if option in command_tokens
+            ]
+            if missing_options or forbidden_options:
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: online command contract mismatch "
+                    f"missing={missing_options} forbidden={forbidden_options}",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
         completed += 1
         if completed < args.iterations:
             app._start_operation(operation)
@@ -260,7 +329,9 @@ def main() -> int:
             f"rows={app.summary_rows_var.get()} errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'positive'} iterations={completed}",
+            f"case={'negative' if args.negative else 'positive'} iterations={completed} "
+            f"window=mapped window_id={window_id}"
+            f"{' contract=elab-only' if online else ''}",
             flush=True,
         )
         app.notebook.select(app.results_tab)

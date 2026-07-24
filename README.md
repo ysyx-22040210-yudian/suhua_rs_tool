@@ -15,6 +15,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [2026-07-24 GUI 发布验证记录](docs/TEST_RESULTS_2026-07-24.md)
 - [rscheck 自带 GUI 与 Verdi GUI 的 VM 复现指南](docs/VM_GUI_TEST.md)
 - [Excel 输入模板](examples/RS_Check_Excel_Template.xlsx)
 
@@ -77,7 +78,7 @@ Excel 中的简单 `clk`/`rst` 名称相对 `position` 解析，例如 `position
 
 ## 工具自带桌面 GUI
 
-这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动；macOS 支持 Excel 验证和离线 inventory 检查，但不支持真实 NPI 在线采集：
+这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so` 和 elaborated KDB 在线采集只支持 Linux：
 
 ```bash
 python -m rscheck gui
@@ -250,7 +251,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-88 项自动测试覆盖 XLSX/CSV 解析、列映射、公式/空字段/重复组、实例分组、拍数、模块名、clk/rst、CRG、多源、前缀歧义、报告导出、GUI 命令构造/生命周期和 Linux GUI 启动器。真实 NPI 编译与设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。Windows 当前同样发现 88 项，其中 21 项 Linux Bash/X11 测试按预期 skipped，其余全部通过。
+89 项自动测试覆盖 XLSX/CSV 解析、列映射、公式/空字段/重复组、实例分组、拍数、模块名、clk/rst、CRG、多源、前缀歧义、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。真实 NPI 编译与设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。Windows 实测发现 89 项，其中 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项全部通过；macOS 预期只跳过 21 项 Linux-only 测试。
 
 在已登录图形桌面并安装 Verdi/NPI 的 Linux 设备上，可运行完整 GUI 正向链路：
 
@@ -278,4 +279,4 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-CentOS 上 88 项全量测试全部通过。清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后，启动器仍自动发现 `DISPLAY=:0`。工具自带 GUI 的“验证 Excel”连续 20 轮均为 2 行 VALID、0 error、0 warning；离线正例连续 100 轮均为 2 行 PASS、0 error、0 warning；生成 10,000 行的单轮 GUI 负载耗时 4.10 秒、最大 RSS 150080 KiB，仍为 0 error、0 warning；取消发生在进程启动阶段的回归连续 100 轮在 9 秒内通过。真实 elaborated KDB 在线 GUI smoke 连续 3 轮均为 2 行 PASS、0 error、0 warning，Verdi launcher 也能打开同一 KDB。错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。Windows 当前 88 项测试中有 21 项 Linux Bash/X11 测试按预期 skipped；工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，无文字或控件重叠，截图不提交仓库。
+CentOS 上 89 项全量测试全部通过。清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后，启动器仍自动发现 `DISPLAY=:0`。工具自带 GUI 的“验证 Excel”连续 20 轮均为 2 行 VALID、0 error、0 warning；离线正例连续 100 轮均为 2 行 PASS、0 error、0 warning；10,000 行负载的最终测量为 1.98–2.08 秒、最大 RSS 150060–150148 KiB，均为 0 error、0 warning；取消启动竞态 100 轮约 15.3 秒。真实 elaborated KDB 在线 GUI smoke 连续 3 轮均为 2 行 PASS、0 error、0 warning，Verdi launcher 也能打开同一 KDB。错误规格按预期返回退出码 `1`，并报告 `STEP_MISMATCH`、`RS_MODULE_MISMATCH`、`CLK_CONNECTION_MISMATCH`、`RST_CONNECTION_MISMATCH` 和 `CRG_SOURCE_MISMATCH`。Windows 实测 89 项中有 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项全部通过；macOS 预期只跳过 21 项 Linux-only 测试。工具自带 GUI 在 Windows 最小窗口 `980x680` 完成截图布局验收，无文字或控件重叠，截图不提交仓库。

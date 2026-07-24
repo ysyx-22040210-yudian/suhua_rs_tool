@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -257,6 +259,29 @@ class GuiBackendTests(unittest.TestCase):
 
 
 class ProcessControllerTests(unittest.TestCase):
+    @staticmethod
+    def _posix_pid_exists(process_id: int) -> bool:
+        try:
+            status = Path(f"/proc/{process_id}/status").read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            pass
+        else:
+            for line in status.splitlines():
+                if line.startswith("State:"):
+                    fields = line.split()
+                    if len(fields) > 1 and fields[1] == "Z":
+                        return False
+                    break
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
     def test_process_output_and_environment_are_captured(self) -> None:
         controller = ProcessController()
         result = controller.run(
@@ -334,6 +359,65 @@ class ProcessControllerTests(unittest.TestCase):
         self.assertTrue(outcomes[0].cancelled)
         self.assertNotEqual(outcomes[0].returncode, 0)
         self.assertFalse(controller.is_running)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group semantics required")
+    def test_cancel_kills_descendant_after_group_leader_exits(self) -> None:
+        controller = ProcessController()
+        outcomes = []
+        child_pid = None
+        with tempfile.TemporaryDirectory() as name:
+            pid_path = Path(name) / "child.pid"
+            child_code = (
+                "import pathlib,os,signal,time; "
+                "signal.signal(signal.SIGTERM, lambda *_: None); "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii'); "
+                "time.sleep(60)"
+            )
+            parent_code = (
+                "import subprocess,sys,time; "
+                f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+                "time.sleep(60)"
+            )
+
+            def run() -> None:
+                outcomes.append(controller.run([sys.executable, "-c", parent_code]))
+
+            worker = threading.Thread(target=run)
+            worker.start()
+            try:
+                deadline = time.monotonic() + 5
+                while child_pid is None and time.monotonic() < deadline:
+                    try:
+                        raw_pid = pid_path.read_text(encoding="ascii").strip()
+                        if raw_pid:
+                            child_pid = int(raw_pid)
+                    except (FileNotFoundError, ValueError):
+                        pass
+                    if child_pid is None:
+                        time.sleep(0.01)
+                self.assertIsNotNone(child_pid, "descendant did not start")
+                assert child_pid is not None
+                self.assertTrue(controller.cancel())
+                worker.join(timeout=12)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(outcomes), 1)
+                self.assertTrue(outcomes[0].cancelled)
+                self.assertNotEqual(outcomes[0].returncode, 0)
+                self.assertFalse(controller.is_running)
+
+                deadline = time.monotonic() + 3
+                while (
+                    self._posix_pid_exists(child_pid)
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.02)
+                self.assertFalse(self._posix_pid_exists(child_pid))
+            finally:
+                if controller.is_running:
+                    controller.cancel()
+                worker.join(timeout=12)
+                if child_pid is not None and self._posix_pid_exists(child_pid):
+                    os.kill(child_pid, signal.SIGKILL)
 
 
 if __name__ == "__main__":
