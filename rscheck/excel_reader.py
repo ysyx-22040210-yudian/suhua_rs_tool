@@ -48,13 +48,13 @@ def _normalise_text(value: object) -> str:
 
 def _parse_step(value: str, row_number: int) -> int:
     if not re.fullmatch(r"[0-9]+(?:\.0+)?", value):
-        raise WorkbookError(f"row {row_number}: step must be a positive integer, got {value!r}")
+        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}")
     try:
         number = Decimal(value)
     except InvalidOperation as exc:
-        raise WorkbookError(f"row {row_number}: step must be a positive integer, got {value!r}") from exc
-    if not number.is_finite() or number != number.to_integral_value() or number < 1:
-        raise WorkbookError(f"row {row_number}: step must be a positive integer, got {value!r}")
+        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}") from exc
+    if not number.is_finite() or number != number.to_integral_value() or number < 0:
+        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}")
     return int(number)
 
 

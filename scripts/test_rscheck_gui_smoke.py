@@ -109,7 +109,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-delay", type=float, default=0.1)
     parser.add_argument(
         "--visible-tab",
-        choices=("config", "results", "log"),
+        choices=("config", "rules", "results", "log"),
         default="results",
         help="tab left visible after the smoke assertions pass",
     )
@@ -163,7 +163,11 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                         "module": "rs_pipe",
                         "file": "generated_rs_top.sv",
                         "line": index + 1,
-                        "parameters": {"RS_CFG_EN": "0", "WIDTH": "1"},
+                        "parameters": {
+                            "RS_CFG_EN": "0",
+                            "WIDTH": "1",
+                            "rs_mode": "1",
+                        },
                         "ports": {
                             "clk": {
                                 "connection": f"{position}.clk_rs",
@@ -190,6 +194,16 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
             ensure_ascii=True,
         )
     return specs_path, inventory_path
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read {label} JSON {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} JSON root must be an object: {path}")
+    return value
 
 
 def main() -> int:
@@ -219,8 +233,75 @@ def main() -> int:
         modal_errors.append(f"{title}: {message}")
 
     gui_module.messagebox.showerror = capture_error
+    gui_module.messagebox.askyesno = lambda *_args, **_kwargs: True
     temp = tempfile.TemporaryDirectory(prefix="rscheck-gui-smoke-")
     output = Path(temp.name)
+    config_path = output / "rscheck.gui-smoke.json"
+    source_config_text = (project_root / "config" / "rscheck.example.json").read_text(
+        encoding="utf-8"
+    )
+    original_module_rules = json.loads(source_config_text).get("module_rules", {})
+    config_path.write_text(source_config_text, encoding="utf-8")
+    app.config_var.set(str(config_path))
+    app._load_config_from_form()
+    app.module_name_var.set("gui_smoke_rule")
+    app.module_has_rs_cfg_en_var.set(False)
+    app.module_step_parameters_var.set("smoke_mode")
+    app._apply_rule()
+    if not app._module_rules_dirty:
+        raise SystemExit("GUI module rule edit did not set dirty state")
+    app._save_module_rules()
+    if app._module_rules_dirty:
+        raise SystemExit("GUI module rule save did not clear dirty state")
+    app._load_config_from_form()
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if saved_config.get("module_rules", {}).get("gui_smoke_rule") != {
+        "has_rs_cfg_en": False,
+        "step_parameters": ["smoke_mode"],
+    }:
+        raise SystemExit("GUI module rule save/reload failed")
+    app.module_search_var.set("gui_smoke")
+    filtered_rules = app.rule_tree.get_children()
+    if (
+        len(filtered_rules) != 1
+        or app._rule_tree_names.get(filtered_rules[0]) != "gui_smoke_rule"
+    ):
+        raise SystemExit("GUI module rule search did not isolate the saved rule")
+    app.rule_tree.selection_set(filtered_rules[0])
+    app._on_rule_selected()
+    app.module_step_parameters_var.set("smoke_mode, extra_mode")
+    app._apply_rule()
+    if not app._module_rules_dirty:
+        raise SystemExit("GUI module rule update did not set dirty state")
+    app._save_module_rules()
+    if app._module_rules_dirty:
+        raise SystemExit("GUI module rule update save did not clear dirty state")
+    app._load_config_from_form()
+    updated_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if updated_config.get("module_rules", {}).get("gui_smoke_rule") != {
+        "has_rs_cfg_en": False,
+        "step_parameters": ["smoke_mode", "extra_mode"],
+    }:
+        raise SystemExit("GUI module rule update/reload failed")
+    app.module_search_var.set("gui_smoke")
+    filtered_rules = app.rule_tree.get_children()
+    if len(filtered_rules) != 1:
+        raise SystemExit("GUI module rule disappeared before delete")
+    app.rule_tree.selection_set(filtered_rules[0])
+    app._on_rule_selected()
+    app._delete_rule()
+    if not app._module_rules_dirty:
+        raise SystemExit("GUI module rule delete did not set dirty state")
+    app._save_module_rules()
+    if app._module_rules_dirty:
+        raise SystemExit("GUI module rule delete save did not clear dirty state")
+    app._load_config_from_form()
+    restored_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if restored_config.get("module_rules", {}) != original_module_rules:
+        raise SystemExit("GUI module rule delete did not restore the original rule set")
+    app.module_search_var.set("rs_pipe")
+    if len(app.rule_tree.get_children()) != 1:
+        raise SystemExit("GUI module rule search did not find rs_pipe after restore")
     expected_rows = 1 if args.negative else args.generated_rows or 2
     if args.generated_rows:
         excel_path, inventory_path = _write_generated_inputs(
@@ -234,10 +315,13 @@ def main() -> int:
         )
         inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
     app.excel_var.set(str(excel_path))
-    app.config_var.set(str(project_root / "config" / "rscheck.example.json"))
+    app.config_var.set(str(config_path))
     app.sheet_var.set("1")
-    app.json_report_var.set(str(output / "report.json"))
-    app.csv_report_var.set(str(output / "report.csv"))
+    report_path = output / "report.json"
+    csv_report_path = output / "report.csv"
+    kept_inventory_path = output / "inventory.json"
+    app.json_report_var.set(str(report_path))
+    app.csv_report_var.set(str(csv_report_path))
 
     if online:
         app.source_mode_var.set(LIVE_SOURCE)
@@ -245,7 +329,7 @@ def main() -> int:
         app.elab_db_var.set(args.elab_db)
         app.npi_lib_var.set(args.npi_lib_dir or "")
         app.npi_timeout_var.set(str(args.timeout))
-        app.keep_inventory_var.set(str(output / "inventory.json"))
+        app.keep_inventory_var.set(str(kept_inventory_path))
     else:
         app.source_mode_var.set(INVENTORY_SOURCE)
         app.inventory_var.set(str(inventory_path))
@@ -325,18 +409,74 @@ def main() -> int:
             )
             root.destroy()
             return
+        if not args.validate_only and not args.generated_rows:
+            first_result = app.result_tree.get_children()[0]
+            first_values = app.result_tree.item(first_result, "values")
+            expected_step_cell = "5/6" if args.negative else "5/5"
+            if (
+                len(first_values) < 8
+                or str(first_values[4]) != "AAAA_BBB"
+                or str(first_values[6]) != "6"
+                or str(first_values[7]) != expected_step_cell
+            ):
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: first result row does not display "
+                    f"AAAA_BBB physical/effective steps: {first_values!r}",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
         if not args.validate_only:
+            try:
+                raw_report = _read_json_object(report_path, "report")
+                raw_inventory = _read_json_object(
+                    kept_inventory_path if online else inventory_path,
+                    "inventory",
+                )
+            except RuntimeError as exc:
+                failed = True
+                print(f"GUI_SMOKE_FAIL: {exc}", file=sys.stderr)
+                root.destroy()
+                return
+            if raw_report.get("schema_version") != 3:
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: report schema is not v3: "
+                    f"{raw_report.get('schema_version')!r}",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
+            if raw_inventory.get("schema_version") != 2:
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: inventory schema is not v2: "
+                    f"{raw_inventory.get('schema_version')!r}",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
             expected_label = "真门控" if args.negative else "假门控"
             for record in app._result_records.values():
                 spec = record.get("spec", {})
-                if not isinstance(spec, dict) or spec.get("RS_CFG_EN") != expected_label:
+                if (
+                    not isinstance(spec, dict)
+                    or spec.get("RS_CFG_EN") != expected_label
+                ):
                     failed = True
-                    print("GUI_SMOKE_FAIL: RS_CFG_EN spec evidence mismatch", file=sys.stderr)
+                    print(
+                        "GUI_SMOKE_FAIL: RS_CFG_EN spec evidence mismatch",
+                        file=sys.stderr,
+                    )
                     root.destroy()
                     return
                 for instance in record.get("matched_instances", []):
                     parameters = instance.get("parameters")
-                    if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+                    if (
+                        not isinstance(parameters, dict)
+                        or parameters.get("RS_CFG_EN") != "0"
+                    ):
                         failed = True
                         print(
                             "GUI_SMOKE_FAIL: RS_CFG_EN parameter evidence mismatch",
@@ -344,6 +484,121 @@ def main() -> int:
                         )
                         root.destroy()
                         return
+                module_rule = record.get("module_rule")
+                step_check = record.get("step_check")
+                if (
+                    not isinstance(module_rule, dict)
+                    or module_rule.get("name") != spec.get("RS_module")
+                    or module_rule.get("has_rs_cfg_en") is not True
+                    or module_rule.get("step_parameters") != ["rs_mode"]
+                    or not isinstance(step_check, dict)
+                    or not isinstance(step_check.get("effective_step"), int)
+                    or (
+                        not args.negative
+                        and step_check.get("effective_step") != spec.get("step")
+                    )
+                    or step_check.get("physical_instances")
+                    != len(record.get("matched_instances", []))
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: module rule or effective step evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                instances = record.get("matched_instances", [])
+                contributions = step_check.get("contributions")
+                if (
+                    not isinstance(instances, list)
+                    or not isinstance(contributions, list)
+                    or len(contributions) != len(instances)
+                    or step_check.get("expected") != spec.get("step")
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: contribution cardinality or expected step mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                contribution_values: list[int] = []
+                contribution_evidence_valid = True
+                for instance, contribution in zip(instances, contributions):
+                    if not isinstance(instance, dict) or not isinstance(
+                        contribution, dict
+                    ):
+                        contribution_evidence_valid = False
+                        break
+                    value = contribution.get("contribution")
+                    parameter_evidence = contribution.get("parameters")
+                    rs_mode_evidence = (
+                        parameter_evidence.get("rs_mode")
+                        if isinstance(parameter_evidence, dict)
+                        else None
+                    )
+                    expected_state = "zero" if value == 0 else "nonzero"
+                    if (
+                        type(value) is not int
+                        or value not in (0, 1)
+                        or contribution.get("instance") != instance.get("full_name")
+                        or instance.get("step_evaluation") != contribution
+                        or not isinstance(rs_mode_evidence, dict)
+                        or rs_mode_evidence.get("present") is not True
+                        or rs_mode_evidence.get("raw_value")
+                        != instance.get("parameters", {}).get("rs_mode")
+                        or rs_mode_evidence.get("state") != expected_state
+                    ):
+                        contribution_evidence_valid = False
+                        break
+                    contribution_values.append(value)
+                if not contribution_evidence_valid or sum(
+                    contribution_values
+                ) != step_check.get("effective_step"):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: per-instance step contribution evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                if spec.get("RS_inst") == "AAAA_BBB" and (
+                    step_check.get("physical_instances") != 6
+                    or step_check.get("effective_step") != 5
+                    or contribution_values != [1, 1, 0, 1, 1, 1]
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: sample dynamic-step evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                if args.negative:
+                    finding_codes = {
+                        finding.get("code")
+                        for finding in record.get("findings", [])
+                        if isinstance(finding, dict)
+                    }
+                    required_codes = {
+                        "RS_CFG_EN_LABEL_MISMATCH",
+                        "STEP_MISMATCH",
+                    }
+                    if not required_codes.issubset(finding_codes):
+                        failed = True
+                        print(
+                            "GUI_SMOKE_FAIL: negative case is missing required findings "
+                            f"{sorted(required_codes - finding_codes)!r}",
+                            file=sys.stderr,
+                        )
+                        root.destroy()
+                        return
+            app._on_result_selected()
+            if args.negative:
+                finding_children = app.finding_tree.get_children()
+                if finding_children:
+                    app.finding_tree.selection_set(finding_children[0])
+                    app._on_finding_selected()
             try:
                 evidence = json.loads(app.evidence_text.get("1.0", "end"))
             except (json.JSONDecodeError, TypeError):
@@ -353,11 +608,15 @@ def main() -> int:
                 return
             evidence_spec = evidence.get("spec")
             evidence_instances = evidence.get("matched_instances")
+            evidence_step = evidence.get("step_check")
+            evidence_rule = evidence.get("module_rule")
             if (
                 not isinstance(evidence_spec, dict)
                 or evidence_spec.get("RS_CFG_EN") != expected_label
                 or not isinstance(evidence_instances, list)
                 or not evidence_instances
+                or not isinstance(evidence_step, dict)
+                or not isinstance(evidence_rule, dict)
             ):
                 failed = True
                 print(
@@ -376,18 +635,14 @@ def main() -> int:
                 return
         if app.summary_rows_var.get() != f"行数 {expected_rows}":
             failed = True
-            print(
-                f"GUI_SMOKE_FAIL: {app.summary_rows_var.get()}", file=sys.stderr
-            )
+            print(f"GUI_SMOKE_FAIL: {app.summary_rows_var.get()}", file=sys.stderr)
             root.destroy()
             return
         if (
             args.validate_only or not args.negative
         ) and app.summary_errors_var.get() != "错误 0":
             failed = True
-            print(
-                f"GUI_SMOKE_FAIL: {app.summary_errors_var.get()}", file=sys.stderr
-            )
+            print(f"GUI_SMOKE_FAIL: {app.summary_errors_var.get()}", file=sys.stderr)
             root.destroy()
             return
         if (
@@ -401,9 +656,7 @@ def main() -> int:
             return
         if app.summary_warnings_var.get() != "警告 0":
             failed = True
-            print(
-                f"GUI_SMOKE_FAIL: {app.summary_warnings_var.get()}", file=sys.stderr
-            )
+            print(f"GUI_SMOKE_FAIL: {app.summary_warnings_var.get()}", file=sys.stderr)
             root.destroy()
             return
         if not window_seen:
@@ -453,16 +706,19 @@ def main() -> int:
             return
         print(
             "GUI_SMOKE_PASS: "
-            f"rows={app.summary_rows_var.get()} errors={app.summary_errors_var.get()} "
+            f"state={app.summary_state_var.get()} rows={app.summary_rows_var.get()} "
+            f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
             f"case={'negative' if args.negative else 'positive'} iterations={completed} "
             f"window=mapped window_id={window_id}"
-            f"{' contract=elab-only' if online else ''}",
+            f"{' contract=elab-only' if online else ''}"
+            f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )
         visible_tabs = {
             "config": app.setup_tab,
+            "rules": app.rules_tab,
             "results": app.results_tab,
             "log": app.log_tab,
         }

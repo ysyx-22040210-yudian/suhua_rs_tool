@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
-from .model import ConfigError, ExcelConfig, FIELD_NAMES, RtlConfig, ToolConfig
+from .model import (
+    ConfigError,
+    ExcelConfig,
+    FIELD_NAMES,
+    ModuleRule,
+    RtlConfig,
+    ToolConfig,
+)
 
 
 def _require_mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -43,6 +52,63 @@ def _string(value: Any, name: str) -> str:
     return value.strip()
 
 
+def _module_rules(value: Any) -> dict[str, ModuleRule]:
+    raw_rules = _require_mapping(value, "module_rules")
+    rules: dict[str, ModuleRule] = {}
+    for raw_name, raw_rule in raw_rules.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ConfigError("'module_rules' names must be non-empty strings")
+        name = raw_name.strip()
+        if name != raw_name:
+            raise ConfigError(f"module rule name must not have surrounding whitespace: {raw_name!r}")
+        rule = _require_mapping(raw_rule, f"module_rules.{name}")
+        _reject_unknown(
+            rule,
+            {"has_rs_cfg_en", "step_parameters"},
+            f"module_rules.{name}",
+        )
+        if "has_rs_cfg_en" not in rule:
+            raise ConfigError(f"'module_rules.{name}.has_rs_cfg_en' is required")
+        if "step_parameters" not in rule:
+            raise ConfigError(f"'module_rules.{name}.step_parameters' is required")
+        has_rs_cfg_en = _boolean(
+            rule["has_rs_cfg_en"], f"module_rules.{name}.has_rs_cfg_en"
+        )
+        raw_parameters = rule["step_parameters"]
+        if not isinstance(raw_parameters, list):
+            raise ConfigError(
+                f"'module_rules.{name}.step_parameters' must be a JSON array"
+            )
+        parameters: list[str] = []
+        for index, raw_parameter in enumerate(raw_parameters):
+            parameter = _string(
+                raw_parameter,
+                f"module_rules.{name}.step_parameters[{index}]",
+            )
+            if parameter != raw_parameter or any(
+                character.isspace() for character in parameter
+            ):
+                raise ConfigError(
+                    f"'module_rules.{name}.step_parameters[{index}]' "
+                    "must not contain whitespace"
+                )
+            if parameter == "RS_CFG_EN":
+                raise ConfigError(
+                    f"'module_rules.{name}.step_parameters' must not include RS_CFG_EN"
+                )
+            if parameter in parameters:
+                raise ConfigError(
+                    f"duplicate step parameter {parameter!r} in module rule {name!r}"
+                )
+            parameters.append(parameter)
+        rules[name] = ModuleRule(
+            name=name,
+            has_rs_cfg_en=has_rs_cfg_en,
+            step_parameters=tuple(parameters),
+        )
+    return rules
+
+
 def load_config(path: str | Path) -> ToolConfig:
     config_path = Path(path)
     try:
@@ -60,7 +126,8 @@ def load_config(path: str | Path) -> ToolConfig:
     excel_raw = _require_mapping(root.get("excel", {}), "excel")
     columns_raw = _require_mapping(root.get("columns", {}), "columns")
     rtl_raw = _require_mapping(root.get("rtl", {}), "rtl")
-    _reject_unknown(root, {"excel", "columns", "rtl"}, "root")
+    module_rules = _module_rules(root.get("module_rules"))
+    _reject_unknown(root, {"excel", "columns", "rtl", "module_rules"}, "root")
     _reject_unknown(
         excel_raw,
         {"sheet", "header_row", "data_start_row", "validate_headers"},
@@ -153,4 +220,60 @@ def load_config(path: str | Path) -> ToolConfig:
         crg_match=crg_match,
     )
 
-    return ToolConfig(excel=excel, rtl=rtl)
+    return ToolConfig(excel=excel, rtl=rtl, module_rules=module_rules)
+
+
+def config_to_dict(config: ToolConfig) -> dict[str, Any]:
+    return {
+        "excel": {
+            "sheet": config.excel.sheet,
+            "header_row": config.excel.header_row,
+            "data_start_row": config.excel.data_start_row,
+            "validate_headers": config.excel.validate_headers,
+        },
+        "columns": dict(config.excel.columns),
+        "rtl": {
+            "clk_port": config.rtl.clk_port,
+            "rst_port": config.rtl.rst_port,
+            "suffix_regex": config.rtl.suffix_regex,
+            "index_base": config.rtl.index_base,
+            "require_contiguous_indices": config.rtl.require_contiguous_indices,
+            "allow_leaf_signal_match": config.rtl.allow_leaf_signal_match,
+            "crg_match": config.rtl.crg_match,
+        },
+        "module_rules": {
+            name: {
+                "has_rs_cfg_en": rule.has_rs_cfg_en,
+                "step_parameters": list(rule.step_parameters),
+            }
+            for name, rule in sorted(config.module_rules.items())
+        },
+    }
+
+
+def save_config(config: ToolConfig, path: str | Path) -> Path:
+    output = Path(path).resolve()
+    temporary_path: Path | None = None
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(config_to_dict(config), ensure_ascii=False, indent=2) + "\n"
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary_path, output)
+    except OSError as exc:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise ConfigError(f"cannot save config file {output}: {exc}") from exc
+    return output

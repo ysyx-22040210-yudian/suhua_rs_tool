@@ -24,5 +24,17 @@
     "require_contiguous_indices": false,
     "allow_leaf_signal_match": false,
     "crg_match": "module"
+  },
+  "module_rules": {
+    "rs_pipe": {
+      "has_rs_cfg_en": true,
+      "step_parameters": [
+        "rs_mode"
+      ]
+    },
+    "rs_plain": {
+      "has_rs_cfg_en": false,
+      "step_parameters": []
+    }
   }
 }

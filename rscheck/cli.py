@@ -158,6 +158,14 @@ def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig
 
 def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
     specs = read_spec_rows(args.excel, config.excel)
+    missing_rules = sorted(
+        {spec.rs_module for spec in specs if spec.rs_module not in config.module_rules}
+    )
+    if missing_rules:
+        raise ConfigError(
+            "RS_module values are not registered in module_rules: "
+            + ", ".join(missing_rules)
+        )
     if args.json:
         print(json.dumps([spec.as_dict() for spec in specs], ensure_ascii=False, indent=2))
     else:
@@ -197,7 +205,7 @@ def _check_command(
             keep_inventory=args.keep_inventory,
             npi_lib_dir=args.npi_lib_dir,
         )
-    report = check_specs(specs, inventory, config.rtl)
+    report = check_specs(specs, inventory, config.rtl, config.module_rules)
     print(format_console_report(report))
     if args.json_report:
         output = write_json_report(report, args.json_report)

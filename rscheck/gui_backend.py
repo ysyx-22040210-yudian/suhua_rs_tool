@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .checker import parameter_value_state
 from .model import FIELD_NAMES
 
 
@@ -316,6 +317,195 @@ def _validate_finding_severities(
             )
 
 
+def _validate_v3_row(
+    row: Mapping[str, Any],
+    spec: Mapping[str, Any],
+    matched_instances: Sequence[Mapping[str, Any]],
+    row_number: int,
+) -> None:
+    step = spec.get("step")
+    if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+        raise GuiReportError(
+            f"report row {row_number}.spec.step must be a non-negative integer"
+        )
+
+    module_rule = row.get("module_rule")
+    step_parameters: list[str] | None = None
+    if module_rule is not None:
+        if not isinstance(module_rule, Mapping):
+            raise GuiReportError(f"report row {row_number}.module_rule must be an object or null")
+        name = module_rule.get("name")
+        if not isinstance(name, str) or not name:
+            raise GuiReportError(f"report row {row_number}.module_rule.name must be a string")
+        if name != spec.get("RS_module"):
+            raise GuiReportError(
+                f"report row {row_number}.module_rule.name does not match RS_module"
+            )
+        if not isinstance(module_rule.get("has_rs_cfg_en"), bool):
+            raise GuiReportError(
+                f"report row {row_number}.module_rule.has_rs_cfg_en must be true or false"
+            )
+        step_parameters = module_rule.get("step_parameters")
+        if (
+            not isinstance(step_parameters, list)
+            or not all(
+                isinstance(item, str)
+                and item
+                and not any(character.isspace() for character in item)
+                for item in step_parameters
+            )
+            or len(set(step_parameters)) != len(step_parameters)
+            or "RS_CFG_EN" in step_parameters
+        ):
+            raise GuiReportError(
+                f"report row {row_number}.module_rule.step_parameters is invalid"
+            )
+
+    step_check = row.get("step_check")
+    if not isinstance(step_check, Mapping):
+        raise GuiReportError(f"report row {row_number}.step_check must be an object")
+    report_expected = step_check.get("expected")
+    if type(report_expected) is not int or report_expected != step:
+        raise GuiReportError(
+            f"report row {row_number}.step_check.expected does not match spec.step"
+        )
+    physical_instances = step_check.get("physical_instances")
+    if (
+        isinstance(physical_instances, bool)
+        or not isinstance(physical_instances, int)
+        or physical_instances != len(matched_instances)
+    ):
+        raise GuiReportError(
+            f"report row {row_number}.step_check.physical_instances does not match instances"
+        )
+    contributions = _mapping_array(
+        step_check.get("contributions"),
+        f"report row {row_number}.step_check.contributions",
+    )
+    if len(contributions) != len(matched_instances):
+        raise GuiReportError(
+            f"report row {row_number}.step_check.contributions does not match instances"
+        )
+
+    contribution_values: list[int | None] = []
+    for index, (contribution, instance) in enumerate(
+        zip(contributions, matched_instances), start=1
+    ):
+        if contribution.get("instance") != instance.get("full_name"):
+            raise GuiReportError(
+                f"report row {row_number} contribution {index}.instance does not match"
+            )
+        value = contribution.get("contribution")
+        if value is not None and (type(value) is not int or value not in {0, 1}):
+            raise GuiReportError(
+                f"report row {row_number} contribution {index} must be 0, 1, or null"
+            )
+        parameter_evaluations = contribution.get("parameters")
+        if not isinstance(parameter_evaluations, Mapping):
+            raise GuiReportError(
+                f"report row {row_number} contribution {index}.parameters must be an object"
+            )
+        expected_parameter_names = (
+            step_parameters
+            if step_parameters is not None
+            and instance.get("module") == spec.get("RS_module")
+            else []
+        )
+        if set(parameter_evaluations) != set(expected_parameter_names):
+            raise GuiReportError(
+                f"report row {row_number} contribution {index}.parameters "
+                "does not match module_rule.step_parameters"
+            )
+
+        evaluation_states: list[str] = []
+        instance_parameters = instance.get("parameters")
+        for parameter_name in expected_parameter_names:
+            evaluation = parameter_evaluations[parameter_name]
+            if not isinstance(parameter_name, str) or not parameter_name:
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter names must not be empty"
+                )
+            if not isinstance(evaluation, Mapping):
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter {parameter_name!r} must be an object"
+                )
+            present = evaluation.get("present")
+            raw_value = evaluation.get("raw_value")
+            state = evaluation.get("state")
+            if not isinstance(present, bool):
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter present must be boolean"
+                )
+            if raw_value is not None and not isinstance(raw_value, str):
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter raw_value must be string or null"
+                )
+            if state not in {"zero", "nonzero", "missing", "unresolved"}:
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter state is invalid"
+                )
+            if (state == "missing") != (not present):
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter presence is inconsistent"
+                )
+            actual_present = parameter_name in instance_parameters
+            actual_raw_value = instance_parameters.get(parameter_name)
+            if present != actual_present or raw_value != actual_raw_value:
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter "
+                    f"{parameter_name!r} does not match instance parameters"
+                )
+            expected_state = (
+                parameter_value_state(actual_raw_value)
+                if actual_present
+                else "missing"
+            )
+            if state != expected_state:
+                raise GuiReportError(
+                    f"report row {row_number} contribution parameter "
+                    f"{parameter_name!r} state does not match its raw_value"
+                )
+            evaluation_states.append(state)
+
+        if step_parameters is None or instance.get("module") != spec.get("RS_module"):
+            expected_contribution = None
+        elif any(state in {"missing", "unresolved"} for state in evaluation_states):
+            expected_contribution = None
+        elif any(state == "zero" for state in evaluation_states):
+            expected_contribution = 0
+        else:
+            expected_contribution = 1
+        if value != expected_contribution:
+            raise GuiReportError(
+                f"report row {row_number} contribution {index} does not match "
+                "its parameter states"
+            )
+        if instance.get("step_evaluation") != contribution:
+            raise GuiReportError(
+                f"report row {row_number} instance {index}.step_evaluation is inconsistent"
+            )
+        contribution_values.append(value)
+
+    effective_step = step_check.get("effective_step")
+    expected_effective = (
+        None
+        if not contribution_values or any(value is None for value in contribution_values)
+        else sum(value for value in contribution_values if value is not None)
+    )
+    if effective_step is not None and type(effective_step) is not int:
+        raise GuiReportError(
+            f"report row {row_number}.step_check.effective_step must be an integer or null"
+        )
+    if effective_step != expected_effective:
+        raise GuiReportError(
+            f"report row {row_number}.step_check.effective_step does not match contributions"
+        )
+    if row.get("passed") and effective_step != step:
+        raise GuiReportError(
+            f"report row {row_number}.passed is inconsistent with effective_step"
+        )
+
+
 def load_report(path: str | Path) -> LoadedReport:
     report_path = Path(path)
     try:
@@ -331,7 +521,7 @@ def load_report(path: str | Path) -> LoadedReport:
     if not isinstance(value, Mapping):
         raise GuiReportError("JSON report root must be an object")
     schema_version = value.get("schema_version")
-    if type(schema_version) is not int or schema_version != 2:
+    if type(schema_version) is not int or schema_version not in {2, 3}:
         raise GuiReportError("unsupported JSON report schema_version")
     summary = value.get("summary")
     if not isinstance(summary, Mapping):
@@ -400,6 +590,8 @@ def load_report(path: str | Path) -> LoadedReport:
                         f"report row {index + 1} instance {instance_index} "
                         f"parameter {name!r} must be a string or null"
                     )
+        if schema_version == 3:
+            _validate_v3_row(row, spec, matched_instances, index + 1)
         row_findings = _mapping_array(
             row.get("findings"), f"report row {index + 1}.findings"
         )

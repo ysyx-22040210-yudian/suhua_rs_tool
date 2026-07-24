@@ -3,11 +3,11 @@
 该工具提供命令行（CLI）和自带的 Tkinter 桌面 GUI，把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
 
 - `position` 是否存在；
-- 同一 `RS_inst` 前缀组的实例数量是否等于 `step`；
+- 同一 `RS_inst` 前缀组的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例的 clk/rst formal port 是否存在、已连接且符合 Excel；
 - clk 是否可追到唯一上游模块，且模块定义名等于 `CRG_source`；
-- 每个匹配实例的 effective `RS_CFG_EN` 参数是否与 Excel 的“假门控”标记一致；
+- `RS_module` 是否已在模块规则库登记，以及逐实例 effective parameter 是否满足该模块的 `RS_CFG_EN` 和有效拍贡献规则；
 - 前缀重叠导致同一实例匹配多个 Excel 组时，明确报错。
 
 `Intf_type` 作为业务标签进入报告，不参与 RTL 判定。仅凭当前九个字段无法可靠检查各拍之间的数据串接，详见“当前边界”。
@@ -16,6 +16,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md)
 - [2026-07-24 GUI 发布验证记录](docs/TEST_RESULTS_2026-07-24.md)
 - [rscheck 自带 GUI 与 Verdi GUI 的 VM 复现指南](docs/VM_GUI_TEST.md)
 - [Excel 输入模板](examples/RS_Check_Excel_Template.xlsx)
@@ -64,6 +65,32 @@ python -m rscheck validate \
 
 默认会校验表头，防止列号填错。工作表、表头行和数据起始行可在 JSON 中配置，也可通过 `--sheet`、`--header-row`、`--data-start-row` 覆盖。
 
+## 模块规则库和动态拍数
+
+每一种可能出现在 Excel `RS_module` 列中的模块都必须先登记到配置文件的 `module_rules`。模块名区分大小写并精确匹配；未登记的模块会报 `RS_MODULE_RULE_NOT_FOUND`，不会回退到“物理实例数等于 step”的旧算法：
+
+```json
+"module_rules": {
+  "rs_pipe": {
+    "has_rs_cfg_en": true,
+    "step_parameters": ["rs_mode"]
+  },
+  "rs_plain": {
+    "has_rs_cfg_en": false,
+    "step_parameters": []
+  }
+}
+```
+
+- `has_rs_cfg_en=true`：该模块每个匹配 RTL 实例都必须具有 effective `RS_CFG_EN`，值必须为数值 `0`，且 Excel 本行 `RS_CFG_EN` 必须精确填写 `假门控`。
+- `has_rs_cfg_en=false`：Excel 本行必须留空；RTL 实例若实际仍存在 `RS_CFG_EN`，报 `RS_CFG_EN_PARAMETER_UNEXPECTED`。
+- `step_parameters=[]`：每个匹配物理实例贡献 `1` 拍。
+- `step_parameters` 非空：所有参数值均可确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。多个参数采用“全部非零”语义。
+- 任一参数缺失、值为 `null`、包含 X/Z/`?` 或不是可解析数值时，贡献为未知并 fail-closed，即使另一个参数已知为零也不使用部分证据计算 `step`。
+- 未登记的其他 RTL parameter（例如 `WIDTH`）允许存在并保留在报告证据中，但不影响拍数。
+
+例如 `AAAA_BBB_C0` 至 `AAAA_BBB_C5` 有 6 个物理实例，`rs_mode` 依次为 `1,1,0,1,1,1`，则逐实例贡献为 `1,1,0,1,1,1`，有效拍数是 `5`，Excel `step` 必须填 `5`。`step` 允许为 `0`；但没有任何物理实例匹配时仍报 `GROUP_NOT_FOUND`，不能用 `step=0` 掩盖错误路径或前缀。
+
 ## 分组规则
 
 一行 Excel 定义一组，组键为 `(position, RS_inst)`。`position` 是组成员直接父 scope 的完整 NPI 路径。
@@ -78,7 +105,7 @@ AAAA_BBB + 非空字符串 + 末尾阿拉伯数字
 
 Excel 中的简单 `clk`/`rst` 名称相对 `position` 解析，例如 `position=top.u_tile`、`clk=clk_rs` 对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
 
-`RS_CFG_EN` 的列映射和精确表头始终必需，但数据单元格按 RTL 条件填写。工具逐一检查组内每个匹配实例的 elaborated/effective 参数：实例存在 `RS_CFG_EN` 时，只有参数值为 `0` 且 Excel 单元格精确填写 `假门控` 才通过；实例不存在该参数时，只有 Excel 单元格留空才通过。非零值、无法解析的值、参数与标签不一致，或同组任一实例不满足条件，都会使该行失败。
+`RS_CFG_EN` 的列映射和精确表头始终必需，数据单元格则由匹配到的模块规则决定。实例后缀连续性仍按物理实例和数字后缀检查，不按有效拍数检查。
 
 ## 工具自带桌面 GUI
 
@@ -102,14 +129,14 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及九个互不重复的 1-based 列号。RTL 数据源可选：
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及九个互不重复的 1-based 列号。“模块规则库”页可搜索、新建、修改、删除规则，并把 `has_rs_cfg_en` 与逗号分隔的 `step_parameters` 原子保存回当前配置 JSON；存在未保存修改时不能运行检查。RTL 数据源可选：
 
 - **在线 NPI**：填写 collector、Verdi elaborated KDB、可选 NPI 库目录、超时和 inventory 保存路径；
 - **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。
 
 在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
 
-“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、Excel `RS_CFG_EN` 标签、每行匹配实例数和 finding。选择结果行可查看 matched instances 及其 effective `parameters`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
+“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、Excel `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
 
 ## 先验证 Excel
 
@@ -134,7 +161,7 @@ python -m rscheck check \
   --csv-report output/rs_report.csv
 ```
 
-CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。JSON report schema v2 包含匹配实例的完整路径、模块名、源文件/行号、clk/rst 实际连线、CRG 驱动证据，以及 `parameters` 中类型为 `string|null` 的全部可访问 effective 参数值；当前判定使用其中的 `RS_CFG_EN`。
+CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。report v3 在原实例、端口、CRG 和全部 effective `parameters` 证据之外，新增每行 `module_rule`、`step_check.physical_instances`、`step_check.effective_step` 和逐实例 `contributions`。CSV 同步增加 `physical_instances`、`effective_step` 与 `step_contributions`。
 
 `--inventory` 是面向测试和问题复现的离线模式，不证明 inventory 与当前 RTL 同步。生产签核应使用 `--collector --elab-db` 从当前 Verdi elaborated KDB 重新采集。
 
@@ -245,7 +272,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 - 当前版本仅把 `Intf_type` 作为报告标签。若要检查 interface 数据链，需要补充 input/output formal port 映射、首尾预期信号和 stage 顺序定义。
 - clk/rst 的复合表达式（concat、运算、mux 等）不会做字符串猜测，而是报 `UNSUPPORTED_CONNECTION`。
 - `CRG_source` 默认与第一个唯一上游模块的 `npiDefName` 精确比较；以 NPI module cell 表示的 clock gate/buffer 会被视作 source，primitive gate/buffer 会继续向上追踪。多驱动或顶层输入等无法确定来源的场景会 fail-closed。
-- `RS_CFG_EN` 检查使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；缺少整个 `parameters` 证据，或参数键存在但值无法解析时 fail-closed。确认不存在 `RS_CFG_EN` 的实例则按 Excel 必须留空的规则处理。
+- `RS_CFG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - 采集器产生的任何 NPI traversal/driver warning 都按 `NPI_UNRESOLVED` 硬错误处理，避免层次截断后误报 PASS。
 - 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
 - SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式。
@@ -256,14 +283,11 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、条件空值、实例分组、拍数、模块名、clk/rst、CRG、逐实例 `RS_CFG_EN`、schema v2 inventory、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
-在已登录图形桌面并安装 Verdi/NPI 的 Linux 设备上，可运行完整 GUI 正向链路：
+在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，可运行完整 GUI 正向链路。脚本不要求特定 license 环境变量名；若站点需要专用初始化脚本，请提前 source：
 
 ```bash
-: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE in the current shell}"
-export LM_LICENSE_FILE
-export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
 bash scripts/launch_verdi_gui.sh --probe-only
 bash scripts/test_vm_verdi_gui.sh
 ```
@@ -274,7 +298,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-2026-07-24 已在以下环境完成真实构建与端到端验证：
+2026-07-25 已在以下环境重新完成动态 step 版本的真实构建、fresh KDB、在线正负例和 GUI 压测：
 
 ```text
 CentOS 7.9
@@ -284,6 +308,8 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[RS_CFG_EN 九字段版本验证记录](docs/TEST_RESULTS_RS_CFG_EN_2026-07-24.md) 包含当前版本的 Windows/Linux 102 项测试、10,000 行压力、980×680 布局、真实 elaborated KDB 和在线 GUI 正反例结果。
+[动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md) 记录了 Windows 回归，以及 VM 上 fresh KDB、真实 NPI、在线正负例、可见 GUI、100 轮和 10,000 行压力的实测结果。
+
+[RS_CFG_EN 九字段版本验证记录](docs/TEST_RESULTS_RS_CFG_EN_2026-07-24.md) 是引入动态 `step_parameters` 之前的历史基线；其中 102 项测试和压力数字不能代表当前动态 step 版本。
 
 [2026-07-24 GUI 发布验证记录](docs/TEST_RESULTS_2026-07-24.md) 保留的是引入 `RS_CFG_EN` 前的八字段历史基线，仅用于对照。

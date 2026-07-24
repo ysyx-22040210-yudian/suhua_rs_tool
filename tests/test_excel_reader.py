@@ -150,7 +150,7 @@ class ExcelReaderTests(unittest.TestCase):
     def test_csv_is_parsed(self) -> None:
         rows = read_spec_rows(ROOT / "tests" / "fixtures" / "specs.csv", self.config)
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0].step, 2)
+        self.assertEqual(rows[0].step, 5)
         self.assertEqual(rows[1].rs_inst, "CTRL_RS")
         self.assertEqual(rows[0].rs_cfg_en, "假门控")
 
@@ -286,7 +286,7 @@ class ExcelReaderTests(unittest.TestCase):
                 read_spec_rows(path, ExcelConfig(sheet=1, columns=COLUMNS))
 
     def test_non_integral_and_scientific_steps_are_rejected(self) -> None:
-        for value in ("0", "-1", "2.5", "2e0"):
+        for value in ("-1", "2.5", "2e0"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as name:
                 path = Path(name) / "bad_step.csv"
                 path.write_text(
@@ -294,8 +294,19 @@ class ExcelReaderTests(unittest.TestCase):
                     f"A,pipe,PFX,top.u,{value},clk,rst,crg,\n",
                     encoding="utf-8",
                 )
-                with self.assertRaisesRegex(WorkbookError, "positive integer"):
+                with self.assertRaisesRegex(WorkbookError, "non-negative integer"):
                     read_spec_rows(path, ExcelConfig(sheet=1, columns=COLUMNS))
+
+    def test_zero_step_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "zero_step.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.u,0,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(path, ExcelConfig(sheet=1, columns=COLUMNS))
+        self.assertEqual(rows[0].step, 0)
 
     def test_partial_row_reports_all_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as name:

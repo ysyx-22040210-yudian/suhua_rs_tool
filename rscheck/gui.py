@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,7 +28,7 @@ except ImportError as exc:  # pragma: no cover - exercised on minimal Linux inst
 else:
     _TK_IMPORT_ERROR = None
 
-from .config import load_config
+from .config import load_config, save_config
 from .gui_backend import (
     INVENTORY_SOURCE,
     LIVE_SOURCE,
@@ -46,7 +46,7 @@ from .gui_backend import (
     load_report,
     load_validation_rows,
 )
-from .model import FIELD_NAMES, RsCheckError
+from .model import FIELD_NAMES, ModuleRule, RsCheckError, ToolConfig
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,8 @@ def _evidence_payload(
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "spec": record.get("spec", {}),
+        "module_rule": record.get("module_rule"),
+        "step_check": record.get("step_check"),
         "matched_instances": record.get("matched_instances", []),
     }
     if finding is not None:
@@ -75,6 +77,34 @@ def _evidence_payload(
             "actual": finding.get("actual"),
         }
     return evidence
+
+
+def _parse_step_parameters(value: str) -> tuple[str, ...]:
+    parameters = [item.strip() for item in value.replace("，", ",").split(",")]
+    parameters = [item for item in parameters if item]
+    if len(set(parameters)) != len(parameters):
+        raise GuiInputError("决定 step 的 parameter 名不能重复")
+    if "RS_CFG_EN" in parameters:
+        raise GuiInputError("RS_CFG_EN 不能同时作为决定 step 的 parameter")
+    return tuple(parameters)
+
+
+def _module_rule_from_form(
+    module_name: str, has_rs_cfg_en: bool, step_parameters: str
+) -> ModuleRule:
+    name = module_name.strip()
+    if not name:
+        raise GuiInputError("RS_module 名不能为空")
+    if any(character.isspace() for character in name):
+        raise GuiInputError("RS_module 名不能包含空白字符")
+    parameters = _parse_step_parameters(step_parameters)
+    if any(any(character.isspace() for character in item) for item in parameters):
+        raise GuiInputError("parameter 名不能包含空白字符")
+    return ModuleRule(
+        name=name,
+        has_rs_cfg_en=bool(has_rs_cfg_en),
+        step_parameters=parameters,
+    )
 
 
 class RsCheckApp:
@@ -92,6 +122,12 @@ class RsCheckApp:
         self._last_json_path = ""
         self._last_csv_path = ""
         self._saved_control_states: dict[Any, str] = {}
+        self._loaded_config: ToolConfig | None = None
+        self._loaded_config_path = ""
+        self._module_rules: dict[str, ModuleRule] = {}
+        self._module_rules_dirty = False
+        self._editing_module_name = ""
+        self._rule_tree_names: dict[str, str] = {}
 
         self._configure_root()
         self._create_variables()
@@ -162,6 +198,11 @@ class RsCheckApp:
         self.column_vars = {
             name: tk.StringVar(value=value) for name, value in default_columns().items()
         }
+        self.module_search_var = tk.StringVar()
+        self.module_name_var = tk.StringVar()
+        self.module_has_rs_cfg_en_var = tk.BooleanVar(value=False)
+        self.module_step_parameters_var = tk.StringVar()
+        self.module_rule_status_var = tk.StringVar(value="规则 0")
 
         self.source_mode_var = tk.StringVar(value=LIVE_SOURCE)
         self.collector_var = tk.StringVar(value=str(collector))
@@ -190,13 +231,16 @@ class RsCheckApp:
         self.notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 4))
 
         self.setup_tab = ttk.Frame(self.notebook, padding=12)
+        self.rules_tab = ttk.Frame(self.notebook, padding=10)
         self.results_tab = ttk.Frame(self.notebook, padding=10)
         self.log_tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.setup_tab, text="检查配置")
+        self.notebook.add(self.rules_tab, text="模块规则库")
         self.notebook.add(self.results_tab, text="检查结果")
         self.notebook.add(self.log_tab, text="运行日志")
 
         self._build_setup_tab()
+        self._build_rules_tab()
         self._build_results_tab()
         self._build_log_tab()
         self._build_status_bar()
@@ -412,6 +456,82 @@ class RsCheckApp:
             side="right"
         )
 
+    def _build_rules_tab(self) -> None:
+        tab = self.rules_tab
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Label(toolbar, text="搜索模块").grid(row=0, column=0, sticky="w")
+        ttk.Entry(toolbar, textvariable=self.module_search_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Label(toolbar, textvariable=self.module_rule_status_var).grid(
+            row=0, column=2, sticky="e"
+        )
+
+        tree_frame = ttk.Frame(tab)
+        tree_frame.grid(row=1, column=0, sticky="nsew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        self.rule_tree = ttk.Treeview(
+            tree_frame,
+            columns=("module", "rs_cfg_en", "step_parameters"),
+            show="headings",
+            selectmode="browse",
+        )
+        for name, title, width in (
+            ("module", "RS_module", 260),
+            ("rs_cfg_en", "RS_CFG_EN parameter", 170),
+            ("step_parameters", "决定 step 的 parameters", 420),
+        ):
+            self.rule_tree.heading(name, text=title)
+            self.rule_tree.column(
+                name,
+                width=width,
+                minwidth=100,
+                stretch=name == "step_parameters",
+            )
+        rule_scroll = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self.rule_tree.yview
+        )
+        self.rule_tree.configure(yscrollcommand=rule_scroll.set)
+        self.rule_tree.grid(row=0, column=0, sticky="nsew")
+        rule_scroll.grid(row=0, column=1, sticky="ns")
+        self.rule_tree.bind("<<TreeviewSelect>>", self._on_rule_selected)
+
+        editor = ttk.LabelFrame(tab, text="规则编辑", padding=10)
+        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        editor.columnconfigure(1, weight=1)
+        editor.columnconfigure(4, weight=2)
+        ttk.Label(editor, text="RS_module").grid(row=0, column=0, sticky="w")
+        ttk.Entry(editor, textvariable=self.module_name_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Checkbutton(
+            editor,
+            text="有 RS_CFG_EN",
+            variable=self.module_has_rs_cfg_en_var,
+        ).grid(row=0, column=2, sticky="w", padx=(0, 18))
+        ttk.Label(editor, text="step parameters").grid(row=0, column=3, sticky="w")
+        ttk.Entry(editor, textvariable=self.module_step_parameters_var).grid(
+            row=0, column=4, sticky="ew", padx=(8, 0)
+        )
+
+        actions = ttk.Frame(tab)
+        actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(actions, text="新建", command=self._new_rule).pack(side="left")
+        ttk.Button(actions, text="应用修改", command=self._apply_rule).pack(
+            side="left", padx=8
+        )
+        ttk.Button(actions, text="删除", command=self._delete_rule).pack(side="left")
+        ttk.Button(actions, text="保存规则库", command=self._save_module_rules).pack(
+            side="right"
+        )
+        self.module_search_var.trace_add("write", lambda *_: self._render_rule_tree())
+
     def _build_results_tab(self) -> None:
         tab = self.results_tab
         tab.rowconfigure(1, weight=3)
@@ -446,7 +566,8 @@ class RsCheckApp:
             "position",
             "rs_inst",
             "rs_cfg_en",
-            "instances",
+            "physical_instances",
+            "effective_step",
             "findings",
         )
         self.result_tree = ttk.Treeview(
@@ -462,18 +583,20 @@ class RsCheckApp:
             "position": "Position",
             "rs_inst": "RS_inst",
             "rs_cfg_en": "RS_CFG_EN",
-            "instances": "实例数",
+            "physical_instances": "匹配实例",
+            "effective_step": "实际/期望拍",
             "findings": "Finding",
         }
         widths = {
-            "status": 78,
-            "row": 74,
-            "interface": 100,
-            "position": 230,
-            "rs_inst": 150,
-            "rs_cfg_en": 110,
-            "instances": 82,
-            "findings": 95,
+            "status": 65,
+            "row": 60,
+            "interface": 85,
+            "position": 180,
+            "rs_inst": 120,
+            "rs_cfg_en": 90,
+            "physical_instances": 75,
+            "effective_step": 95,
+            "findings": 80,
         }
         for name in columns:
             self.result_tree.heading(name, text=headings[name])
@@ -601,8 +724,10 @@ class RsCheckApp:
             filetypes=(("JSON", "*.json"), ("所有文件", "*.*")),
         )
         if selected:
+            if self._module_rules_dirty and not self._confirm_discard_rule_changes():
+                return
             self.config_var.set(selected)
-            self._load_config_from_form()
+            self._load_config_from_form(confirm_discard=False)
 
     def _choose_directory(self, variable: Any) -> None:
         selected = filedialog.askdirectory(
@@ -634,7 +759,15 @@ class RsCheckApp:
         if self.config_var.get().strip():
             self._load_config_from_form(show_error=False)
 
-    def _load_config_from_form(self, show_error: bool = True) -> None:
+    def _load_config_from_form(
+        self, show_error: bool = True, confirm_discard: bool = True
+    ) -> None:
+        if (
+            confirm_discard
+            and self._module_rules_dirty
+            and not self._confirm_discard_rule_changes()
+        ):
+            return
         try:
             config = load_config(self.config_var.get().strip())
         except RsCheckError as exc:
@@ -648,7 +781,145 @@ class RsCheckApp:
         self.header_check_var.set(config.excel.validate_headers)
         for name in FIELD_NAMES:
             self.column_vars[name].set(str(config.excel.columns[name]))
+        self._loaded_config = config
+        self._loaded_config_path = str(Path(self.config_var.get().strip()).resolve())
+        self._module_rules = dict(config.module_rules)
+        self._module_rules_dirty = False
+        self._new_rule()
+        self._render_rule_tree()
         self.status_var.set("配置已加载")
+
+    def _confirm_discard_rule_changes(self) -> bool:
+        if not self._module_rules_dirty:
+            return True
+        return bool(
+            messagebox.askyesno(
+                "未保存规则",
+                "模块规则库有未保存修改，确定放弃吗？",
+                parent=self.root,
+            )
+        )
+
+    def _render_rule_tree(self) -> None:
+        if not hasattr(self, "rule_tree"):
+            return
+        selected_name = self._editing_module_name
+        for item in self.rule_tree.get_children():
+            self.rule_tree.delete(item)
+        self._rule_tree_names.clear()
+        search = self.module_search_var.get().strip().casefold()
+        selected_iid = ""
+        for index, name in enumerate(sorted(self._module_rules)):
+            if search and search not in name.casefold():
+                continue
+            rule = self._module_rules[name]
+            iid = f"module-rule-{index}"
+            self._rule_tree_names[iid] = name
+            self.rule_tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(
+                    name,
+                    "有" if rule.has_rs_cfg_en else "无",
+                    ", ".join(rule.step_parameters) or "-",
+                ),
+            )
+            if name == selected_name:
+                selected_iid = iid
+        if selected_iid:
+            self.rule_tree.selection_set(selected_iid)
+            self.rule_tree.see(selected_iid)
+        suffix = " · 未保存" if self._module_rules_dirty else ""
+        self.module_rule_status_var.set(f"规则 {len(self._module_rules)}{suffix}")
+
+    def _on_rule_selected(self, _event: Any = None) -> None:
+        selection = self.rule_tree.selection()
+        if not selection:
+            return
+        name = self._rule_tree_names.get(selection[0], "")
+        rule = self._module_rules.get(name)
+        if rule is None:
+            return
+        self._editing_module_name = name
+        self.module_name_var.set(rule.name)
+        self.module_has_rs_cfg_en_var.set(rule.has_rs_cfg_en)
+        self.module_step_parameters_var.set(", ".join(rule.step_parameters))
+
+    def _new_rule(self) -> None:
+        self._editing_module_name = ""
+        self.module_name_var.set("")
+        self.module_has_rs_cfg_en_var.set(False)
+        self.module_step_parameters_var.set("")
+        if hasattr(self, "rule_tree"):
+            self.rule_tree.selection_remove(*self.rule_tree.selection())
+
+    def _apply_rule(self) -> None:
+        try:
+            rule = _module_rule_from_form(
+                self.module_name_var.get(),
+                self.module_has_rs_cfg_en_var.get(),
+                self.module_step_parameters_var.get(),
+            )
+        except GuiInputError as exc:
+            messagebox.showerror("规则错误", str(exc), parent=self.root)
+            return
+        original = self._editing_module_name
+        if rule.name in self._module_rules and rule.name != original:
+            messagebox.showerror(
+                "规则错误",
+                f"RS_module {rule.name!r} 已存在",
+                parent=self.root,
+            )
+            return
+        if original and original != rule.name:
+            self._module_rules.pop(original, None)
+        self._module_rules[rule.name] = rule
+        self._editing_module_name = rule.name
+        self._module_rules_dirty = True
+        self._render_rule_tree()
+        self.status_var.set("模块规则已修改")
+
+    def _delete_rule(self) -> None:
+        name = self._editing_module_name
+        if not name or name not in self._module_rules:
+            return
+        if not messagebox.askyesno(
+            "删除规则",
+            f"确定删除 RS_module {name!r} 的规则吗？",
+            parent=self.root,
+        ):
+            return
+        del self._module_rules[name]
+        self._module_rules_dirty = True
+        self._new_rule()
+        self._render_rule_tree()
+        self.status_var.set("模块规则已删除")
+
+    def _save_module_rules(self) -> None:
+        config_path = self.config_var.get().strip()
+        if self._loaded_config is None or not config_path:
+            messagebox.showerror("保存失败", "请先加载配置 JSON", parent=self.root)
+            return
+        if str(Path(config_path).resolve()) != self._loaded_config_path:
+            messagebox.showerror(
+                "保存失败",
+                "配置路径已变化，请先加载当前配置",
+                parent=self.root,
+            )
+            return
+        updated = replace(self._loaded_config, module_rules=dict(self._module_rules))
+        try:
+            output = save_config(updated, config_path)
+            reloaded = load_config(output)
+        except RsCheckError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        self._loaded_config = reloaded
+        self._module_rules = dict(reloaded.module_rules)
+        self._module_rules_dirty = False
+        self._render_rule_tree()
+        self.status_var.set("模块规则库已保存")
 
     def _update_source_mode(self) -> None:
         if self.source_mode_var.get() == LIVE_SOURCE:
@@ -680,6 +951,25 @@ class RsCheckApp:
 
     def _start_operation(self, action: str) -> None:
         if self.running or self.controller.is_running:
+            return
+        if self._module_rules_dirty:
+            messagebox.showerror(
+                "规则未保存",
+                "请先在模块规则库页保存修改",
+                parent=self.root,
+            )
+            return
+        config_path = self.config_var.get().strip()
+        if (
+            self._loaded_config is None
+            or not config_path
+            or str(Path(config_path).resolve()) != self._loaded_config_path
+        ):
+            messagebox.showerror(
+                "配置未加载",
+                "配置路径已变化，请先点击“加载”同步模块规则库",
+                parent=self.root,
+            )
             return
         request = self._request()
         try:
@@ -883,7 +1173,9 @@ class RsCheckApp:
         }
         if disabled:
             self._saved_control_states.clear()
-            stack = list(self.setup_tab.winfo_children())
+            stack = list(self.setup_tab.winfo_children()) + list(
+                self.rules_tab.winfo_children()
+            )
             while stack:
                 widget = stack.pop()
                 stack.extend(widget.winfo_children())
@@ -942,8 +1234,9 @@ class RsCheckApp:
                     spec.get("position", ""),
                     spec.get("RS_inst", ""),
                     spec.get("RS_CFG_EN", ""),
+                    "-",
                     f"-/{spec.get('step', '')}",
-                    "0",
+                    "0E/0W",
                 ),
                 tags=("pass",),
             )
@@ -1000,6 +1293,13 @@ class RsCheckApp:
         passed = bool(record.get("passed", not errors))
         status = "PASS" if passed else "FAIL"
         tag = "warning" if passed and warnings else ("pass" if passed else "fail")
+        step_check = record.get("step_check", {})
+        if not isinstance(step_check, Mapping):
+            step_check = {}
+        physical_instances = step_check.get("physical_instances", len(instances))
+        effective_step = step_check.get("effective_step", len(instances))
+        expected_step = step_check.get("expected", spec.get("step", ""))
+        effective_text = "?" if effective_step is None else str(effective_step)
         self._result_records[iid] = record
         self.result_tree.insert(
             "",
@@ -1012,7 +1312,8 @@ class RsCheckApp:
                 spec.get("position", ""),
                 spec.get("RS_inst", ""),
                 spec.get("RS_CFG_EN", ""),
-                f"{len(instances)}/{spec.get('step', '')}",
+                physical_instances,
+                f"{effective_text}/{expected_step}",
                 f"{errors}E/{warnings}W",
             ),
             tags=(tag,),
@@ -1118,6 +1419,8 @@ class RsCheckApp:
                 self._cancel_requested.set()
             self.status_var.set("正在取消并关闭")
             threading.Thread(target=self._cancel_when_started, daemon=True).start()
+            return
+        if self._module_rules_dirty and not self._confirm_discard_rule_changes():
             return
         self.root.destroy()
 

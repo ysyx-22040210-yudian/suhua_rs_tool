@@ -103,11 +103,11 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
 | `RS_inst` | 一组打拍实例的本地实例名前缀 | 对 `position` 直接子实例做前缀和后缀规则匹配 |
 | `position` | 该组实例的直接父 scope 完整 NPI 层次路径 | 必须能在 elaborated 层次中找到；首尾 `.` 会被去除 |
-| `step` | 当前组预期的总拍数 | 等于符合前缀和后缀规则的实例数量；必须为正整数 |
+| `step` | 当前组预期的有效总拍数 | 按 `module_rules[RS_module].step_parameters` 汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
 | `CRG_source` | clk 预期的唯一上游来源 | 按 `rtl.crg_match` 与上游 module definition 或实例名比较 |
-| `RS_CFG_EN` | 该组是否预期为假门控 | 逐实例读取 elaborated/effective 参数；存在时必须为 `0` 且本格精确填写 `假门控`，不存在时本格必须留空 |
+| `RS_CFG_EN` | 该组是否预期为假门控 | 由 `module_rules[RS_module].has_rs_cfg_en` 决定应精确填写 `假门控` 还是留空，并核对逐实例 effective 参数 |
 
 一行定义一组，唯一组键是 `(position, RS_inst)`。同一个 `position` 下可以有多组，每组占一行；相同组键重复出现会被拒绝。
 
@@ -120,7 +120,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Owner | position | Review_note | rst | Intf_type | RS_CFG_EN | CRG_source | RS_inst | step | Ticket | RS_module | clk | Comment |
-| alice | top.u_tile | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 2 | HW-101 | rs_pipe | clk_rs | first group |
+| alice | top.u_tile | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 5 | HW-101 | rs_pipe | clk_rs | first group |
 
 对应配置为：
 
@@ -163,8 +163,8 @@ python -m rscheck validate \
 
 - 映射字段会去除首尾空白。
 - 除 `RS_CFG_EN` 外的八个字段均为必填；这些字段和 `RS_CFG_EN` 全部为空时跳过整行，八个必填字段中只有部分为空时报错。
-- `RS_CFG_EN` 可以为空或填写文本。是否应为空、是否必须精确为 `假门控` 只有加载 schema v2 inventory 或在线采集 RTL 后才能判定；其他非空文本会保留到 RTL 检查阶段，再按参数是否存在和值是否为零产生对应 finding。
-- `step` 接受 `2` 或 Excel 常见的 `2.0`，但不接受 `0`、负数、小数或科学计数法。
+- `RS_CFG_EN` 可以为空或填写文本。是否应为空由 `RS_module` 对应规则的 `has_rs_cfg_en` 决定；其他非空文本会保留到 RTL 检查阶段并产生清晰 finding。
+- `step` 接受 `0`、`2` 或 Excel 常见的 `2.0`，但不接受负数、小数或科学计数法。
 - 默认会在 `excel.header_row` 对九个映射单元格做精确表头校验，包括即使数据格允许留空也必须存在的 `RS_CFG_EN` 表头。
 - XLSX/XLSM 映射字段中的公式单元格会被拒绝，防止使用未刷新的 Excel 缓存值；CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
 - `.xlsm` 中的宏不会执行。
@@ -189,7 +189,7 @@ python -m rscheck validate \
 - `AAAA_BBB0`：不匹配，因为缺少非空 tag；
 - `AAAA_BBB_C`：不匹配，因为末尾没有数字 index。
 
-默认只检查匹配数量是否等于 `step`，不会要求 index 从 0 连续。启用 `require_contiguous_indices` 后，index 必须等于从 `index_base` 开始、长度为 `step` 的连续序列，且所有实例必须使用同一个 tag。
+物理实例匹配完成后，工具再按模块规则计算每个实例的 `0/1/?` 拍贡献。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，index 必须等于从 `index_base` 开始、长度为**物理实例数**的连续序列，且所有实例必须使用同一个 tag。连续性不按有效 `step` 截短。
 
 ### 3.2 clk/rst 连线
 
@@ -216,26 +216,51 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 推断出的 primitive gate/buffer 会继续向上穿透；只有它在 Netlist 中表现为 module cell 时才会作为 `CRG_source` 候选。
 
-### 3.4 `RS_CFG_EN` effective 参数
+### 3.4 模块规则库
 
-`RS_CFG_EN` 按组内匹配实例逐一检查，读取 elaboration 后的 effective 参数值，因此实例级 parameter override 优先于模块声明中的默认值。collector 会枚举每个匹配 `RS_module` 实例可访问的全部 effective parameters；inventory schema v2 把它们记录在实例的 `parameters` 对象中，而当前通过/失败规则消费其中的 `RS_CFG_EN`。键存在表示实例具有该参数，值类型为 `string|null`；字符串保留 collector 得到的值表示，`null` 表示 collector 找到了该参数但无法可靠解析其 effective 值。检查器把十进制有符号零、全零宽值、`'0` 和 Verilog 二/八/十六进制的全零形式都视为数值 `0`。
+配置中的 `module_rules` 是 `RS_module` 到检查策略的数据库。匹配区分大小写且必须精确；Excel 出现未登记模块时，`validate` 直接报配置型输入错误，检查器侧对应 finding 为 `RS_MODULE_RULE_NOT_FOUND`，不会回退到旧的实例计数算法。
 
-| 实例参数状态 | Excel `RS_CFG_EN` | 结果 |
-|---|---|---|
-| 不存在 `RS_CFG_EN` 键 | 空白 | 通过该实例检查 |
-| 不存在 `RS_CFG_EN` 键 | 任意非空文本 | `RS_CFG_EN_PARAMETER_MISSING` |
-| 字符串表示数值 `0` | 精确 `假门控` | 通过该实例检查 |
-| 字符串表示数值 `0` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` |
-| 字符串表示非零/非数值 | 精确 `假门控` | `RS_CFG_EN_VALUE_MISMATCH` |
-| 字符串表示非零/非数值 | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_MISMATCH` |
-| 值为 `null` | 精确 `假门控` | `RS_CFG_EN_VALUE_UNRESOLVED` |
-| 值为 `null` | 空白或其他文本 | `RS_CFG_EN_LABEL_MISMATCH` 和 `RS_CFG_EN_VALUE_UNRESOLVED` |
+```json
+"module_rules": {
+  "rs_pipe": {
+    "has_rs_cfg_en": true,
+    "step_parameters": ["rs_mode"]
+  },
+  "rs_plain": {
+    "has_rs_cfg_en": false,
+    "step_parameters": []
+  }
+}
+```
 
-同一 Excel 行匹配多个实例时，每个实例都必须通过；任一实例失败都会使该行 FAIL。参数不存在与参数值无法解析是两种不同状态，旧 inventory 缺少参数证据时不得按“不存在”处理。
+规则名和 parameter 名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CFG_EN`。RTL 中未列入规则的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
+
+### 3.5 `RS_CFG_EN` effective 参数
+
+`RS_CFG_EN` 按组内匹配实例逐一检查，读取 elaboration 后的 effective 参数值，因此实例级 override 优先于模块声明默认值。inventory schema v2 把 collector 枚举到的全部 effective parameters 记录在实例 `parameters` 对象中；字符串保留 NPI 值表示，`null` 表示参数存在但无法可靠解析。
+
+| 模块规则 | RTL 实例 | Excel `RS_CFG_EN` | 结果 |
+|---|---|---|---|
+| `has_rs_cfg_en=true` | 参数存在且为数值 `0` | 精确 `假门控` | 通过该实例检查 |
+| `has_rs_cfg_en=true` | 参数缺失 | `假门控` | `RS_CFG_EN_PARAMETER_MISSING` |
+| `has_rs_cfg_en=true` | 参数为已知非零值 | `假门控` | `RS_CFG_EN_VALUE_MISMATCH` |
+| `has_rs_cfg_en=true` | 参数为 `null`、X/Z 或非法值 | `假门控` | `RS_CFG_EN_VALUE_UNRESOLVED` |
+| `has_rs_cfg_en=true` | 任意 | 空白或其他文本 | 另报 `RS_CFG_EN_LABEL_MISMATCH` |
+| `has_rs_cfg_en=false` | 参数不存在 | 空白 | 通过该实例检查 |
+| `has_rs_cfg_en=false` | 参数实际存在 | 空白 | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
+| `has_rs_cfg_en=false` | 任意 | 非空 | 另报 `RS_CFG_EN_LABEL_MISMATCH` |
+
+### 3.6 `step_parameters` 和有效拍数
+
+`step_parameters=[]` 时，每个模块名正确的匹配实例贡献 `1`。数组非空时，对每个实例读取所有已登记 parameter：所有值都能确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。例如 6 个实例的 `rs_mode` 为 `1,1,0,1,1,1`，逐实例贡献为 `1,1,0,1,1,1`，因此有效拍数为 `5`。
+
+多个参数采用“全部非零”语义。例如 `step_parameters=["rs_mode", "pipe_enable"]` 时，两个值都已解析且都非零才贡献 `1`；都已解析且至少一个为零时贡献 `0`。参数缺失报 `STEP_PARAMETER_MISSING`；`null`、X/Z/`?` 或非法值报 `STEP_PARAMETER_VALUE_UNRESOLVED`。任一所需参数未知时该实例贡献就是 `null`，即使另一个参数已知为零也不使用部分证据。任一实例贡献未知时，整行 `effective_step` 为 `null` 并报 `STEP_CALCULATION_UNRESOLVED`。只有全部贡献已知时才求和，并用 `STEP_MISMATCH` 报告与 Excel `step` 的差异。
+
+同一 Excel 行匹配多个实例时，每个实例的模块、parameter、clk/rst 和 CRG 都必须通过；任一硬错误都会使该行 FAIL。
 
 ## 4. 配置文件完整说明
 
-配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl` 三个键。未知键、错误类型和未知列名都会被拒绝。
+配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`module_rules` 四个键。未知键、错误类型和未知列名都会被拒绝。
 
 完整示例：
 
@@ -266,6 +291,16 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
     "require_contiguous_indices": false,
     "allow_leaf_signal_match": false,
     "crg_match": "module"
+  },
+  "module_rules": {
+    "rs_pipe": {
+      "has_rs_cfg_en": true,
+      "step_parameters": ["rs_mode"]
+    },
+    "rs_plain": {
+      "has_rs_cfg_en": false,
+      "step_parameters": []
+    }
   }
 }
 ```
@@ -297,7 +332,16 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 `suffix_regex` 会被工具自动按完整字符串匹配，无需自行添加 `^`/`$`。`index` 组在运行时必须只产生 ASCII 数字，推荐固定写成 `(?P<index>[0-9]+)`。`tag` 组不是语法必需，但要使用 tag 一致性检查时应保留。
 
-### 4.4 命令行覆盖
+### 4.4 `module_rules`
+
+`module_rules` 必须是 JSON 对象。每个键是一个可出现在 Excel `RS_module` 中的精确模块定义名，每个值必须且只能包含：
+
+| 配置项 | 类型 | 说明 |
+|---|---|---|
+| `has_rs_cfg_en` | JSON 布尔值 | `true` 要求 RTL parameter 存在、值为 0 且 Excel 填 `假门控`；`false` 要求 RTL 不存在该 parameter 且 Excel 留空 |
+| `step_parameters` | 唯一字符串数组 | 决定逐实例拍贡献的 effective parameters；空数组表示每个实例贡献 1 |
+
+### 4.5 命令行覆盖
 
 | 参数 | 作用 |
 |---|---|
@@ -358,16 +402,27 @@ bash scripts/launch_rscheck_gui.sh
 
 在线模式严格构造现有 CLI 的 `--collector ... --elab-db ...` 命令。GUI 没有 RTL、filelist、top、编译选项或 passthrough 输入框，也不会在检查时调用 `vericom/elabcom`；`Elab KDB` 必须是生产流程预先生成的 elaborated KDB，不能是 `work.lib++`。
 
-### 5.3 执行、结果和取消
+### 5.3 “模块规则库”页
+
+加载配置后，规则页列出模块名、是否具有 `RS_CFG_EN` 和决定拍数的 parameters。用户可以搜索规则，或通过“新建/修改”“删除”维护当前配置：
+
+1. `RS_module` 填 RTL module definition 的精确名称；
+2. 勾选“有 RS_CFG_EN parameter”或保持未勾选；
+3. “决定 step 的 parameters”使用逗号分隔，例如 `rs_mode, pipe_enable`；无控制 parameter 时留空；
+4. 点击“应用新建/修改”只修改 GUI 内存；点击“保存规则库”才原子写回当前配置 JSON并重新加载校验。
+
+重复 parameter、`RS_CFG_EN` 被误放入 `step_parameters`、空模块名等会在应用时拒绝。存在“未保存”规则时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。
+
+### 5.4 执行、结果和取消
 
 - `验证 Excel`：在后台运行 `validate --json`，只检查配置、表头、列映射和规格行；成功后切到“检查结果”页并显示 `VALID`。
 - `运行 RTL 检查`：在后台运行与当前界面等价的 `check` 命令；返回 `0` 显示 `PASS`，返回 `1` 显示 `FAIL` 和差异，基础设施错误显示 `ERROR`。
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
 
-“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示 Excel 行、`Intf_type`、`position`、`RS_inst`、`RS_CFG_EN`、实例数和 finding 数。选中一行后，下方列出 finding 的级别、代码、实例和说明，证据面板同时显示该行规格及 matched instances 的端口、clk 来源、effective `parameters` 和源文件/行号；再选具体 finding 会切换为它的 expected/actual。由此可同时核对 Excel 标签、具体失败实例和实际参数值。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际执行命令、stdout、stderr 和退出码，便于复现 GUI 问题。
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表分别显示“匹配实例”和“实际/期望拍”，避免把物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、端口、clk 来源和源文件/行号。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共四个页签：“检查配置”“模块规则库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
@@ -673,37 +728,41 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 
 ### 11.1 控制台
 
-控制台首先输出整体结果，再逐行输出匹配数和 findings：
+控制台首先输出整体结果，再逐行区分物理实例数、有效拍数和 Excel 期望：
 
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB (2/2 instances) RS_CFG_EN=假门控
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS (1/1 instances) RS_CFG_EN=假门控
+[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
 ```
 
 ### 11.2 JSON 报告
 
 `--json-report` 写 UTF-8 JSON，包含：
 
-- `schema_version`：固定为 `2`；旧 report schema 不包含当前参数证据；
+- `schema_version`：当前固定为 `3`；注意 NPI inventory 的 schema 仍为 `2`；
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`；
 - `rows[].spec`：规范化后的九字段规格和源行号，其中 `RS_CFG_EN` 可以是空字符串；
-- `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线和 clk 来源证据；`parameters` 的值类型为 `string|null`；
+- `rows[].module_rule`：本行精确匹配的 `has_rs_cfg_en` 与 `step_parameters`，未登记时为 `null`；
+- `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
+- `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线、clk 来源及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`；
 - `rows[].findings`：code、message、expected、actual 等诊断信息。
 
 输出目录不存在时会自动创建。
+
+GUI 为历史问题复现保留 report schema v2 的只读兼容显示，但 v2 没有模块规则和逐实例贡献，不能证明动态 step 判定；当前 CLI 新生成的报告始终是 v3。
 
 ### 11.3 CSV 报告
 
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
 ```text
-status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
+status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual
 ```
 
 无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
-`RS_CFG_EN` 失败沿用通用的 `expected` / `actual` 列，其中包含 Excel 标签、参数存在状态和 effective 参数值；逐实例完整 `parameters` 证据保存在 JSON 报告中。
+`step_contributions` 是 JSON 文本，记录每个实例的 parameter 状态和贡献。`RS_CFG_EN` 与动态拍数失败仍沿用通用 `expected` / `actual`；逐实例完整证据保存在 JSON report v3 中。
 
 ### 11.4 Python CLI 退出码
 
@@ -737,7 +796,7 @@ status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 | `missing/unknown column mappings` | 九字段映射不完整或拼写错误 | `columns` 必须恰好包含九个规定字段 |
 | `column mappings must be unique` | 两个字段映射到同一列 | 调整为互不重复的 1-based 列号 |
 | `blank required fields` | 除 `RS_CFG_EN` 外的八个必填字段只填写了一部分 | 补齐八个始终必填字段，或清空整行使其被跳过；不要仅为消除此错误而填写 `RS_CFG_EN` |
-| `step must be a positive integer` | `step` 为 0、负数、小数或科学计数法 | 改为正整数，如 `2` |
+| `step must be a non-negative integer` | `step` 为负数、小数或科学计数法 | 改为非负整数，如 `0` 或 `2` |
 | `duplicate group` | 同一 `(position, RS_inst)` 出现多行 | 合并或修改重复组 |
 | `sheet ... not found` | sheet 名/序号不对 | 用实际工作表名或 1-based 序号覆盖 `--sheet` |
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
@@ -752,7 +811,11 @@ status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 | `POSITION_NOT_FOUND` | Excel 路径不属于当前 elaborated top，或层次名错误 | 在同一 KDB 中核对完整实例层次和 `position` |
 | `GROUP_NOT_FOUND` | 没有实例同时满足前缀和 suffix regex | 核对 `RS_inst` 和 `rtl.suffix_regex` |
 | `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但 suffix 不符合规则 | 修正命名或 regex；该 finding 默认是 warning |
-| `STEP_MISMATCH` | 匹配实例数与 `step` 不同 | 核对漏例化、多例化和规格拍数 |
+| `RS_MODULE_RULE_NOT_FOUND` | Excel `RS_module` 未登记 | 在 GUI“模块规则库”页或配置 `module_rules` 中增加精确、大小写一致的模块规则 |
+| `STEP_PARAMETER_MISSING` | 规则要求的 parameter 未出现在实例证据中 | 核对模块规则拼写、实际 RTL module 和 fresh elaborated KDB |
+| `STEP_PARAMETER_VALUE_UNRESOLVED` | step parameter 为 `null`、X/Z/`?` 或非法值 | 核对实例 override/KDB；未知值按 fail-closed 处理 |
+| `STEP_CALCULATION_UNRESOLVED` | 至少一个匹配实例的拍贡献未知 | 先解决实例模块不匹配、parameter 缺失或值无法解析，不能只修改 Excel `step` |
+| `STEP_MISMATCH` | 已知逐实例贡献之和与 Excel `step` 不同 | 查看 report v3 `step_check.contributions`，核对模块规则、实例 override 和规格拍数 |
 | `SUFFIX_TAG_MISMATCH` | 同组实例的 tag 不同 | 核对命名；默认是 warning，连续 index 模式下还会导致硬错误 |
 | `STAGE_INDEX_MISMATCH` | index 不连续、不从 `index_base` 开始或 tag 不唯一 | 修正实例命名或关闭不需要的连续检查 |
 | `RS_MODULE_MISMATCH` | 实例 definition 与 `RS_module` 不同 | 核对模块替换、wrapper 和规格模块名 |
@@ -763,7 +826,8 @@ status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 | `CRG_SOURCE_UNRESOLVED` | 顶层输入、无 driver、无法到达 module cell | 补充可识别来源或接受该 fail-closed 结果 |
 | `MULTIPLE_CLK_SOURCES` | clk 存在多个唯一上游 module source | 消除多驱动或修正结构 |
 | `CRG_SOURCE_MISMATCH` | 唯一来源与 `CRG_source` 不一致 | 核对 `rtl.crg_match` 和 Excel 来源字段 |
-| `RS_CFG_EN_PARAMETER_MISSING` | Excel 非空，但匹配实例没有 `RS_CFG_EN` 参数 | 无该参数的组应把 Excel 单元格留空，或核对是否匹配了错误模块/实例 |
+| `RS_CFG_EN_PARAMETER_MISSING` | 规则声明 `has_rs_cfg_en=true`，但实例没有该 parameter | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
+| `RS_CFG_EN_PARAMETER_UNEXPECTED` | 规则声明 `has_rs_cfg_en=false`，但实例实际存在该 parameter | 修正规则数据库或核对是否匹配错误模块/KDB |
 | `RS_CFG_EN_LABEL_MISMATCH` | 实例有该参数，但 Excel 规范化后的文本不是精确的 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；参数非零时还会同时报告 value mismatch |
 | `RS_CFG_EN_VALUE_MISMATCH` | 实例有 `RS_CFG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
 | `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到参数但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CFG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
@@ -777,12 +841,12 @@ status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
 - 当前九字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
-- 默认只按数量检查 `step`；只有启用 `require_contiguous_indices` 才检查数字 stage 连续性。
+- `step` 是模块规则计算出的有效拍数，不等同于物理实例数；后缀连续性仍按物理实例检查。
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
 - SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 风格，需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
 - CRG 追踪要求唯一 module cell 来源；顶层输入、多驱动和无法解析的 primitive 网络会 fail-closed。
-- `RS_CFG_EN` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
+- `RS_CFG_EN` 和 `step_parameters` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
 - `allow_leaf_signal_match=true` 会放宽层次比较，可能让不同 scope 的同名信号误匹配。
 - 任意 collector warning 都会升级为 `NPI_UNRESOLVED` error。
 - 在线模式只消费现有 elaborated KDB，不接收 RTL/filelist，也不负责 RTL 编译或 elaboration。
@@ -792,10 +856,11 @@ status,row,position,RS_inst,RS_CFG_EN,instance,code,message,expected,actual
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置九字段的 1-based 列映射，并按 RTL 预期为 `RS_CFG_EN` 留空或填写精确文本 `假门控`。
-3. 执行 `validate`，确认 sheet、表头、列和规范化内容。
-4. 使用 `--collector + --elab-db` 做在线检查。
-5. 同时输出 JSON/CSV，并用 `--keep-inventory` 保存可审计快照。
-6. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。
-7. RTL、KDB 或相关配置变化后立即重新在线采集。
-8. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。
+2. 配置九字段的 1-based 列映射，并为每种 `RS_module` 登记 `has_rs_cfg_en` 和 `step_parameters`。
+3. 按模块规则填写 `RS_CFG_EN`，并填写预期有效 `step`；有效拍可为 0。
+4. 执行 `validate`，确认 sheet、表头、列、模块登记和规范化内容。
+5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
+6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。
+7. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。
+8. RTL、KDB 或模块规则变化后立即重新在线采集或重新检查。
+9. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。

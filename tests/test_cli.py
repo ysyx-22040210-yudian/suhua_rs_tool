@@ -56,19 +56,30 @@ class CliTests(unittest.TestCase):
             self.assertTrue(json_report.is_file())
             self.assertTrue(csv_report.is_file())
             report = json.loads(json_report.read_text("utf-8"))
-            self.assertEqual(report["schema_version"], 2)
+            self.assertEqual(report["schema_version"], 3)
             self.assertTrue(report["summary"]["passed"])
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "假门控")
             self.assertEqual(
                 report["rows"][0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
                 "0",
             )
+            self.assertEqual(report["rows"][0]["step_check"]["physical_instances"], 6)
+            self.assertEqual(report["rows"][0]["step_check"]["effective_step"], 5)
+            self.assertEqual(
+                [
+                    item["contribution"]
+                    for item in report["rows"][0]["step_check"]["contributions"]
+                ],
+                [1, 1, 0, 1, 1, 1],
+            )
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
                 csv_rows = list(csv.DictReader(stream))
             self.assertEqual(csv_rows[0]["status"], "PASS")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "假门控")
+            self.assertEqual(csv_rows[0]["physical_instances"], "6")
+            self.assertEqual(csv_rows[0]["effective_step"], "5")
 
-    def test_offline_mismatch_returns_one_and_reports_all_core_fields(self) -> None:
+    def test_offline_mismatch_reports_effective_step_and_label(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             json_report = Path(name) / "negative.json"
             csv_report = Path(name) / "negative.csv"
@@ -94,20 +105,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             result = json.loads(json_report.read_text("utf-8"))
             codes = {item["code"] for item in result["rows"][0]["findings"]}
-            self.assertTrue(
-                {
-                    "STEP_MISMATCH",
-                    "RS_MODULE_MISMATCH",
-                    "CLK_CONNECTION_MISMATCH",
-                    "RST_CONNECTION_MISMATCH",
-                    "CRG_SOURCE_MISMATCH",
-                    "RS_CFG_EN_LABEL_MISMATCH",
-                }.issubset(codes)
-            )
+            self.assertEqual(codes, {"STEP_MISMATCH", "RS_CFG_EN_LABEL_MISMATCH"})
+            self.assertEqual(result["rows"][0]["step_check"]["effective_step"], 5)
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
                 csv_rows = list(csv.DictReader(stream))
             self.assertTrue(csv_rows)
             self.assertTrue(all(row["RS_CFG_EN"] == "真门控" for row in csv_rows))
+            self.assertTrue(all(row["effective_step"] == "5" for row in csv_rows))
 
     def test_validate_json_contains_optional_rs_cfg_en_value(self) -> None:
         output = StringIO()
@@ -125,6 +129,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         rows = json.loads(output.getvalue())
         self.assertEqual(rows[0]["RS_CFG_EN"], "假门控")
+
+    def test_validate_rejects_unregistered_rs_module(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            specs = Path(name) / "unknown.csv"
+            specs.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "OUT,unknown_pipe,PFX,top.u,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            error = StringIO()
+            with redirect_stderr(error):
+                code = main(
+                    [
+                        "validate",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(ROOT / "config" / "rscheck.example.json"),
+                    ]
+                )
+        self.assertEqual(code, 2)
+        self.assertIn("not registered in module_rules", error.getvalue())
 
     def test_collector_requires_elaborated_database(self) -> None:
         error = StringIO()

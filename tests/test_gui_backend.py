@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shlex
@@ -355,12 +356,192 @@ class GuiBackendTests(unittest.TestCase):
                 load_report(path)
             report["summary"]["warnings"] = 0
 
-            for unsupported_version in (1, 2.0, True, "2", 3):
+            for unsupported_version in (1, 2.0, True, "2", 4):
                 with self.subTest(schema_version=unsupported_version):
                     report["schema_version"] = unsupported_version
                     path.write_text(json.dumps(report), encoding="utf-8")
                     with self.assertRaisesRegex(GuiReportError, "schema_version"):
                         load_report(path)
+
+    def test_report_schema_v3_step_evidence_is_checked(self) -> None:
+        spec = {
+            "row": 2,
+            **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+        }
+        spec["step"] = 1
+        evaluation = {
+            "instance": "top.u.PIPE_S0",
+            "contribution": 1,
+            "parameters": {
+                "rs_mode": {
+                    "present": True,
+                    "raw_value": "1",
+                    "state": "nonzero",
+                }
+            },
+        }
+        report = {
+            "schema_version": 3,
+            "summary": {
+                "passed": True,
+                "rows": 1,
+                "passed_rows": 1,
+                "failed_rows": 0,
+                "errors": 0,
+                "warnings": 0,
+            },
+            "global_findings": [],
+            "rows": [
+                {
+                    "spec": spec,
+                    "passed": True,
+                    "module_rule": {
+                        "name": spec["RS_module"],
+                        "has_rs_cfg_en": True,
+                        "step_parameters": ["rs_mode"],
+                    },
+                    "step_check": {
+                        "expected": 1,
+                        "physical_instances": 1,
+                        "effective_step": 1,
+                        "contributions": [evaluation],
+                    },
+                    "matched_instances": [
+                        {
+                            "name": "PIPE_S0",
+                            "full_name": "top.u.PIPE_S0",
+                            "module": spec["RS_module"],
+                            "file": "pipe.sv",
+                            "line": 1,
+                            "parameters": {"RS_CFG_EN": "0", "rs_mode": "1"},
+                            "ports": {},
+                            "clk_sources": [],
+                            "step_evaluation": evaluation,
+                        }
+                    ],
+                    "findings": [],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "report-v3.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            loaded = load_report(path)
+            self.assertEqual(loaded.rows[0]["step_check"]["effective_step"], 1)
+
+            report["rows"][0]["step_check"]["effective_step"] = 0
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "effective_step"):
+                load_report(path)
+
+            def assert_rejected(mutator, message: str) -> None:
+                candidate = copy.deepcopy(report)
+                candidate["rows"][0]["step_check"]["effective_step"] = 1
+                mutator(candidate)
+                path.write_text(json.dumps(candidate), encoding="utf-8")
+                with self.assertRaisesRegex(GuiReportError, message):
+                    load_report(path)
+
+            assert_rejected(
+                lambda candidate: candidate["rows"][0]["step_check"].__setitem__(
+                    "expected", True
+                ),
+                "expected",
+            )
+            assert_rejected(
+                lambda candidate: candidate["rows"][0]["step_check"].__setitem__(
+                    "effective_step", True
+                ),
+                "integer or null",
+            )
+            assert_rejected(
+                lambda candidate: candidate["rows"][0]["module_rule"].__setitem__(
+                    "step_parameters", ["other_mode"]
+                ),
+                "module_rule.step_parameters",
+            )
+            assert_rejected(
+                lambda candidate: candidate["rows"][0]["step_check"][
+                    "contributions"
+                ][0]["parameters"]["rs_mode"].__setitem__("raw_value", "0"),
+                "does not match instance parameters",
+            )
+            assert_rejected(
+                lambda candidate: candidate["rows"][0]["step_check"][
+                    "contributions"
+                ][0]["parameters"]["rs_mode"].__setitem__("state", "zero"),
+                "state does not match",
+            )
+
+            def make_consistent_zero_but_pass(candidate) -> None:
+                row = candidate["rows"][0]
+                row["matched_instances"][0]["parameters"]["rs_mode"] = "0"
+                for evaluation in (
+                    row["step_check"]["contributions"][0],
+                    row["matched_instances"][0]["step_evaluation"],
+                ):
+                    evaluation["contribution"] = 0
+                    evaluation["parameters"]["rs_mode"]["raw_value"] = "0"
+                    evaluation["parameters"]["rs_mode"]["state"] = "zero"
+                row["step_check"]["effective_step"] = 0
+
+            assert_rejected(
+                make_consistent_zero_but_pass,
+                "passed is inconsistent with effective_step",
+            )
+
+    def test_report_schema_v3_missing_group_keeps_effective_step_null(self) -> None:
+        spec = {
+            "row": 2,
+            **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+        }
+        spec["step"] = 0
+        report = {
+            "schema_version": 3,
+            "summary": {
+                "passed": False,
+                "rows": 1,
+                "passed_rows": 0,
+                "failed_rows": 1,
+                "errors": 1,
+                "warnings": 0,
+            },
+            "global_findings": [],
+            "rows": [
+                {
+                    "spec": spec,
+                    "passed": False,
+                    "module_rule": {
+                        "name": spec["RS_module"],
+                        "has_rs_cfg_en": False,
+                        "step_parameters": [],
+                    },
+                    "step_check": {
+                        "expected": 0,
+                        "physical_instances": 0,
+                        "effective_step": None,
+                        "contributions": [],
+                    },
+                    "matched_instances": [],
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "code": "GROUP_NOT_FOUND",
+                        }
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "report-v3-missing-group.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            loaded = load_report(path)
+            self.assertIsNone(loaded.rows[0]["step_check"]["effective_step"])
+
+            report["rows"][0]["step_check"]["effective_step"] = 0
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "effective_step"):
+                load_report(path)
 
     def test_cli_gui_subcommand_dispatches_without_loading_a_config(self) -> None:
         with patch("rscheck.gui.main", return_value=0) as gui_main:

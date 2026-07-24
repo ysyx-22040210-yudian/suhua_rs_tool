@@ -1,2 +1,2 @@
 Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN
-OUT_IF,wrong_pipe,AAAA_BBB,top.u_tile,3,clk_wrong,rst_wrong,wrong_crg,真门控
+OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,6,clk_rs,rst_n,crg_core,真门控

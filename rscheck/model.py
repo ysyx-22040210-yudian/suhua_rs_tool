@@ -61,9 +61,24 @@ class RtlConfig:
 
 
 @dataclass(frozen=True)
+class ModuleRule:
+    name: str
+    has_rs_cfg_en: bool
+    step_parameters: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "has_rs_cfg_en": self.has_rs_cfg_en,
+            "step_parameters": list(self.step_parameters),
+        }
+
+
+@dataclass(frozen=True)
 class ToolConfig:
     excel: ExcelConfig
     rtl: RtlConfig
+    module_rules: Mapping[str, ModuleRule] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -198,6 +213,37 @@ class Inventory:
 
 
 @dataclass(frozen=True)
+class ParameterEvaluation:
+    name: str
+    present: bool
+    raw_value: str | None
+    state: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "present": self.present,
+            "raw_value": self.raw_value,
+            "state": self.state,
+        }
+
+
+@dataclass(frozen=True)
+class InstanceStepEvaluation:
+    instance: str
+    contribution: int | None
+    parameters: tuple[ParameterEvaluation, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "instance": self.instance,
+            "contribution": self.contribution,
+            "parameters": {
+                parameter.name: parameter.as_dict() for parameter in self.parameters
+            },
+        }
+
+
+@dataclass(frozen=True)
 class Finding:
     severity: str
     code: str
@@ -230,10 +276,21 @@ class RowResult:
     spec: SpecRow
     instances: tuple[ActualInstance, ...]
     findings: tuple[Finding, ...]
+    module_rule: ModuleRule | None = None
+    step_evaluations: tuple[InstanceStepEvaluation, ...] = ()
 
     @property
     def passed(self) -> bool:
         return not any(item.severity == "error" for item in self.findings)
+
+    @property
+    def effective_step(self) -> int | None:
+        if not self.instances or len(self.step_evaluations) != len(self.instances):
+            return None
+        contributions = [item.contribution for item in self.step_evaluations]
+        if any(value is None for value in contributions):
+            return None
+        return sum(value for value in contributions if value is not None)
 
 
 @dataclass(frozen=True)
