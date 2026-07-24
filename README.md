@@ -7,7 +7,7 @@
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例的 clk/rst formal port 是否存在、已连接且符合 Excel；
 - clk 是否可追到唯一上游模块，且模块定义名等于 `CRG_source`；
-- `RS_module` 是否已在模块规则库登记，以及逐实例 effective parameter 是否满足该模块的 `RS_CFG_EN` 和有效拍贡献规则；
+- 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CFG_EN` 和有效拍贡献条件；
 - 前缀重叠导致同一实例匹配多个 Excel 组时，明确报错。
 
 `Intf_type` 作为业务标签进入报告，不参与 RTL 判定。仅凭当前九个字段无法可靠检查各拍之间的数据串接，详见“当前边界”。
@@ -67,7 +67,7 @@ python -m rscheck validate \
 
 ## 模块规则库和动态拍数
 
-每一种可能出现在 Excel `RS_module` 列中的模块都必须先登记到配置文件的 `module_rules`。模块名区分大小写并精确匹配；未登记的模块会报 `RS_MODULE_RULE_NOT_FOUND`，不会回退到“物理实例数等于 step”的旧算法：
+`module_rules` 保存可选的逐模块覆盖项，不要求为 Excel 中每一种 `RS_module` 建项。工具先按区分大小写的模块名查找显式规则；精确匹配时使用该规则，否则自动使用隐式默认规则：`has_rs_cfg_en=true`、`step_parameters=[]`。因此默认仍会逐实例检查 `RS_CFG_EN=0` 和 Excel `假门控`，并让每个匹配物理实例贡献 `1` 拍：
 
 ```json
 "module_rules": {
@@ -87,7 +87,9 @@ python -m rscheck validate \
 - `step_parameters=[]`：每个匹配物理实例贡献 `1` 拍。
 - `step_parameters` 非空：所有参数值均可确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。多个参数采用“全部非零”语义。
 - 任一参数缺失、值为 `null`、包含 X/Z/`?` 或不是可解析数值时，贡献为未知并 fail-closed，即使另一个参数已知为零也不使用部分证据计算 `step`。
-- 未登记的其他 RTL parameter（例如 `WIDTH`）允许存在并保留在报告证据中，但不影响拍数。
+- 未列入 `step_parameters` 的其他 RTL parameter（例如 `WIDTH`）允许存在并保留在报告证据中，但不影响拍数。
+
+显式规则优先于默认规则。例如上面的 `rs_pipe` 使用 `rs_mode` 计算有效拍数；没有同名显式项的模块则沿用默认“每实例 1 拍”。若本意是覆盖默认值，规则键必须与 Excel/RTL `RS_module` 大小写完全一致。
 
 例如 `AAAA_BBB_C0` 至 `AAAA_BBB_C5` 有 6 个物理实例，`rs_mode` 依次为 `1,1,0,1,1,1`，则逐实例贡献为 `1,1,0,1,1,1`，有效拍数是 `5`，Excel `step` 必须填 `5`。`step` 允许为 `0`；但没有任何物理实例匹配时仍报 `GROUP_NOT_FOUND`，不能用 `step=0` 掩盖错误路径或前缀。
 

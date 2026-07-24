@@ -177,7 +177,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 - `JSON` 和可选 `CSV` 报告路径；
 - `验证 Excel`、`运行 RTL 检查`、`取消`、`打开报告目录`。
 
-“模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。模块名与 Excel `RS_module` 大小写敏感、精确匹配，未登记时报 `RS_MODULE_RULE_NOT_FOUND`。
+“模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求假门控且每个匹配实例贡献 1。
 
 `has_rs_cfg_en=true` 时每个 RTL 实例都必须存在该 effective parameter、值为 0，且 Excel 精确填写 `假门控`；`false` 时 Excel 必须留空且 RTL 不得实际存在该 parameter。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。
 
@@ -476,7 +476,7 @@ PASS: fresh KDB online positive/negative GUI checks and offline GUI stress suite
 - `npi.h` 或 `libNPI.so` 找不到：设置 `NPI_INC_DIR` 和 `NPI_LIB_DIR`；后者必须直接包含 `libNPI.so`。
 - `npi_load_design failed`：确认 KDB 来自 `elabcom -elab`、内容完整，并与当前 Verdi/NPI 版本兼容；`work.lib++` 及其符号链接别名会更早被 Python runner 拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
-- `RS_MODULE_RULE_NOT_FOUND`：Excel 模块名未在规则库精确登记；大小写敏感，不回退物理实例计数。
+- 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`。
 - `STEP_PARAMETER_MISSING` / `STEP_PARAMETER_VALUE_UNRESOLVED`：规则要求的拍数 parameter 缺失或未知；查看 report v3 逐实例证据。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个贡献未知，整行 fail-closed。
 - `RS_CFG_EN_PARAMETER_MISSING`：规则声明有该 parameter，但实例证据缺失。

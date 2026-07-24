@@ -400,17 +400,12 @@ def _check_row(
     findings: list[Finding] = []
     rule = module_rules.get(spec.rs_module)
     if rule is None:
-        findings.append(
-            _row_finding(
-                spec,
-                "RS_MODULE_RULE_NOT_FOUND",
-                f"RS_module {spec.rs_module!r} is not registered in module_rules",
-                expected=spec.rs_module,
-                actual=sorted(module_rules),
-            )
+        rule = ModuleRule(
+            name=spec.rs_module,
+            has_rs_cfg_en=True,
+            step_parameters=(),
         )
-    else:
-        findings.extend(_check_rs_cfg_en_label(spec, rule))
+    findings.extend(_check_rs_cfg_en_label(spec, rule))
 
     position = inventory.positions.get(spec.position)
     if position is None or not position.found:
@@ -499,7 +494,7 @@ def _check_row(
                     actual=instance.module,
                 )
             )
-        if rule is None or not module_matches:
+        if not module_matches:
             step_evaluations.append(
                 InstanceStepEvaluation(
                     instance=instance.full_name,
@@ -513,7 +508,7 @@ def _check_row(
             findings.extend(step_findings)
         findings.extend(_check_ports_and_sources(spec, instance, config))
 
-    if matched_instances and rule is not None:
+    if matched_instances:
         contributions = [item.contribution for item in step_evaluations]
         if any(value is None for value in contributions):
             findings.append(

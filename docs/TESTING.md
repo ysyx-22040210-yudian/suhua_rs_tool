@@ -14,7 +14,7 @@
 | L2 | Windows + Microsoft Excel | 真实 XLSX 九字段乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | schema v2 离线正例 inventory + report v3 | `0` | 6 个物理实例贡献 `[1,1,0,1,1,1]`，有效/期望拍 `5/5`，两组均 PASS |
 | L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH` |
-| L5 | 通用本地环境 | 模块规则、动态 step、`RS_CFG_EN` 和旧 inventory | `0` | 未登记模块、0/非0/缺失/`null`/X/Z、多 parameter AND 语义、step 0 及 schema v1 拒绝均有独立用例 |
+| L5 | 通用本地环境 | 默认/显式模块规则、动态 step、`RS_CFG_EN` 和旧 inventory | `0` | 隐式默认规则、显式覆盖优先、0/非0/缺失/`null`/X/Z、多 parameter AND 语义、step 0 及 schema v1 拒绝均有独立用例 |
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
@@ -240,8 +240,9 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 
 | 规则/实例条件 | 预期 |
 |---|---|
-| Excel `RS_module` 未登记 | `RS_MODULE_RULE_NOT_FOUND`；CLI `validate` 拒绝输入 |
-| `step_parameters=[]`，6 个物理实例 | 有效拍数 6 |
+| 没有模块专属显式规则 | 使用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；`validate` 接受输入 |
+| 默认规则，6 个物理实例 | 每个实例贡献 1，有效拍数 6 |
+| 存在大小写精确匹配的显式规则 | 显式 `has_rs_cfg_en` 和 `step_parameters` 覆盖默认值 |
 | `step_parameters=["rs_mode"]`，值为 `1,1,0,1,1,1` | 贡献 `[1,1,0,1,1,1]`，有效拍数 5 |
 | 两个 step parameters 且值都已解析 | 只有全部非零的实例贡献 1，至少一个为 0 贡献 0 |
 | step parameter 缺失 | `STEP_PARAMETER_MISSING` + `STEP_CALCULATION_UNRESOLVED` |
@@ -253,7 +254,7 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 | `has_rs_cfg_en=false`，RTL 参数不存在且 Excel 留空 | PASS |
 | `has_rs_cfg_en=false`，RTL 实际存在该参数 | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
 
-还必须断言 report `schema_version=3`，每行包含与 `RS_module` 一致的 `module_rule`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。
+还必须断言 report `schema_version=3`，每行都包含最终采用的默认或显式 `module_rule`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。
 
 ## 4. 通用 POSIX 本地测试
 
@@ -1084,7 +1085,7 @@ work_lib_as_elab.log
 
 ### 14.11 模块规则或动态 step 检查失败
 
-- `RS_MODULE_RULE_NOT_FOUND`：`RS_module` 与 `module_rules` 的键不完全一致；比较区分大小写，不会回退旧计数算法。
+- 显式规则没有生效：规则键与 `RS_module` 大小写不完全一致。工具会采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；核对 report v3 的 `module_rule`。
 - `STEP_PARAMETER_MISSING`：规则中的 parameter 不存在于该实例；核对拼写、模块类型和 KDB。
 - `STEP_PARAMETER_VALUE_UNRESOLVED`：parameter 为 `null`、X/Z/`?` 或非法值；该实例贡献未知。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个实例贡献未知；查看 report v3 的 `step_check.contributions`，先解决根因。
@@ -1092,7 +1093,7 @@ work_lib_as_elab.log
 
 ### 14.12 反例返回 2，而不是 1
 
-退出码 `2` 说明检查尚未进入 RTL 差异判定，通常是 KDB、collector、动态库、license、Excel、未登记模块或配置错误。先解决日志中的基础设施错误，再验证反例 finding。
+退出码 `2` 说明检查尚未进入 RTL 差异判定，通常是 KDB、collector、动态库、license、Excel 或配置错误。缺少模块专属规则不会导致退出码 `2`；这种情况使用默认规则。先解决日志中的基础设施错误，再验证反例 finding。
 
 ### 14.13 旧 `-- -f` 命令没有返回 2
 

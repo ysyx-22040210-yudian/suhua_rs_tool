@@ -164,14 +164,99 @@ class CheckerTests(unittest.TestCase):
         self.assertTrue(report.passed)
         self.assertEqual(report.rows[0].effective_step, 6)
 
-    def test_unregistered_rs_module_is_a_row_error(self) -> None:
-        report = check_specs([self.specs[0]], self.inventory, self.rtl, {})
-        self.assertFalse(report.passed)
-        self.assertIn(
-            "RS_MODULE_RULE_NOT_FOUND",
-            {item.code for item in report.rows[0].findings},
+    def test_unregistered_rs_module_uses_default_rule(self) -> None:
+        spec = replace(self.specs[0], step=6)
+        report = check_specs([spec], self.inventory, self.rtl, {})
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].findings, ())
+        self.assertEqual(
+            report.rows[0].module_rule,
+            ModuleRule(
+                name="rs_pipe",
+                has_rs_cfg_en=True,
+                step_parameters=(),
+            ),
         )
-        self.assertIsNone(report.rows[0].effective_step)
+        self.assertEqual(report.rows[0].effective_step, 6)
+        self.assertEqual(
+            [item.contribution for item in report.rows[0].step_evaluations],
+            [1, 1, 1, 1, 1, 1],
+        )
+
+    def test_default_rule_reports_step_mismatch_for_six_physical_instances(self) -> None:
+        report = check_specs([self.specs[0]], self.inventory, self.rtl, {})
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"STEP_MISMATCH"},
+        )
+        mismatch = report.rows[0].findings[0]
+        self.assertEqual(mismatch.expected, 5)
+        self.assertEqual(mismatch.actual["physical_instances"], 6)
+        self.assertEqual(mismatch.actual["effective_step"], 6)
+
+    def test_default_rule_requires_rs_cfg_en_on_every_instance(self) -> None:
+        def mutate(raw) -> None:
+            raw["positions"]["top.u_tile"]["instances"][0]["parameters"].pop(
+                "RS_CFG_EN"
+            )
+
+        spec = replace(self.specs[0], step=6)
+        report = check_specs(
+            [spec], self._mutated_inventory(mutate), self.rtl, {}
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"RS_CFG_EN_PARAMETER_MISSING"},
+        )
+        missing = report.rows[0].findings[0]
+        self.assertEqual(missing.instance, "top.u_tile.AAAA_BBB_C0")
+
+    def test_default_rule_rejects_nonzero_rs_cfg_en(self) -> None:
+        def mutate(raw) -> None:
+            raw["positions"]["top.u_tile"]["instances"][0]["parameters"][
+                "RS_CFG_EN"
+            ] = "1"
+
+        spec = replace(self.specs[0], step=6)
+        report = check_specs(
+            [spec], self._mutated_inventory(mutate), self.rtl, {}
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"RS_CFG_EN_VALUE_MISMATCH"},
+        )
+        mismatch = report.rows[0].findings[0]
+        self.assertEqual(mismatch.instance, "top.u_tile.AAAA_BBB_C0")
+        self.assertEqual(mismatch.actual, "1")
+
+    def test_default_rule_requires_fake_gating_excel_label(self) -> None:
+        spec = replace(self.specs[0], step=6, rs_cfg_en="")
+        report = check_specs([spec], self.inventory, self.rtl, {})
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"RS_CFG_EN_LABEL_MISMATCH"},
+        )
+        mismatch = report.rows[0].findings[0]
+        self.assertEqual(mismatch.expected, "假门控")
+        self.assertEqual(mismatch.actual, "")
+
+    def test_explicit_module_rule_takes_priority_over_default(self) -> None:
+        report = check_specs(
+            [self.specs[0]], self.inventory, self.rtl, self.rules
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].module_rule, self.rules["rs_pipe"])
+        self.assertEqual(report.rows[0].effective_step, 5)
 
     def test_rs_cfg_en_truth_matrix(self) -> None:
         missing = object()

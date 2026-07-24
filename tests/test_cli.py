@@ -130,7 +130,7 @@ class CliTests(unittest.TestCase):
         rows = json.loads(output.getvalue())
         self.assertEqual(rows[0]["RS_CFG_EN"], "假门控")
 
-    def test_validate_rejects_unregistered_rs_module(self) -> None:
+    def test_validate_accepts_unregistered_rs_module(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             specs = Path(name) / "unknown.csv"
             specs.write_text(
@@ -138,8 +138,8 @@ class CliTests(unittest.TestCase):
                 "OUT,unknown_pipe,PFX,top.u,1,clk,rst,crg,\n",
                 encoding="utf-8",
             )
-            error = StringIO()
-            with redirect_stderr(error):
+            output = StringIO()
+            with redirect_stdout(output):
                 code = main(
                     [
                         "validate",
@@ -149,8 +149,64 @@ class CliTests(unittest.TestCase):
                         str(ROOT / "config" / "rscheck.example.json"),
                     ]
                 )
-        self.assertEqual(code, 2)
-        self.assertIn("not registered in module_rules", error.getvalue())
+        self.assertEqual(code, 0)
+        self.assertIn("VALID: 1 specification row(s)", output.getvalue())
+
+    def test_offline_check_uses_default_rule_for_unregistered_module(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "default_rule.csv"
+            specs.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,6,clk_rs,rst_n,crg_core,假门控\n",
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            del raw_config["module_rules"]["rs_pipe"]
+            config = directory / "default_rule.json"
+            config.write_text(
+                json.dumps(raw_config, ensure_ascii=False), encoding="utf-8"
+            )
+            json_report = directory / "default_rule_report.json"
+
+            with redirect_stdout(StringIO()):
+                code = main(
+                    [
+                        "check",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--sheet",
+                        "1",
+                        "--inventory",
+                        str(ROOT / "tests" / "fixtures" / "inventory.json"),
+                        "--json-report",
+                        str(json_report),
+                    ]
+                )
+
+            report = json.loads(json_report.read_text("utf-8"))
+        self.assertEqual(code, 0)
+        self.assertEqual(report["rows"][0]["findings"], [])
+        self.assertEqual(
+            report["rows"][0]["module_rule"],
+            {
+                "name": "rs_pipe",
+                "has_rs_cfg_en": True,
+                "step_parameters": [],
+            },
+        )
+        self.assertEqual(report["rows"][0]["step_check"]["effective_step"], 6)
+        self.assertEqual(
+            [
+                item["contribution"]
+                for item in report["rows"][0]["step_check"]["contributions"]
+            ],
+            [1, 1, 1, 1, 1, 1],
+        )
 
     def test_collector_requires_elaborated_database(self) -> None:
         error = StringIO()

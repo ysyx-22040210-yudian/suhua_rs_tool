@@ -4,6 +4,8 @@
 
 在线 NPI 的设计输入契约没有改变：只能把 `elabcom` 生成的 Verdi elaborated KDB 交给 collector。不得向 NPI 传 RTL、filelist、top、`work.lib++` 或任意 Verdi 参数透传。
 
+模块规则采用“显式覆盖优先”的解析方式：存在大小写精确匹配的 `module_rules` 项时使用该项；否则使用隐式默认 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求假门控且每个匹配物理实例贡献 `1` 拍。缺少模块专属项本身不是错误。
+
 ## 1. 本地已验证
 
 环境：Windows，工作区 `D:\suhua_rs_tool`，Python 3.11.5。
@@ -24,7 +26,7 @@ Ran 120 tests in 2.651s
 OK (skipped=22)
 ```
 
-22 项 skip 均为 Windows 不适用的 Linux Bash/X11 或 POSIX 进程组用例；其余 98 项通过。已执行用例覆盖 `step=0`、未登记模块、无 step parameter、单/多 parameter、参数缺失、`null`、X/Z、非法值、`RS_CFG_EN` 数据库/RTL 一致性、report v3 结构校验、GUI 规则保存和配置路径同步逻辑。
+22 项 skip 均为 Windows 不适用的 Linux Bash/X11 或 POSIX 进程组用例；其余 98 项通过。已执行用例覆盖 `step=0`、隐式默认规则、显式规则优先、无 step parameter、单/多 parameter、参数缺失、`null`、X/Z、非法值、`RS_CFG_EN` 数据库/RTL 一致性、report v3 结构校验、GUI 规则保存和配置路径同步逻辑。
 
 ### 1.2 离线正例和动态拍证据
 

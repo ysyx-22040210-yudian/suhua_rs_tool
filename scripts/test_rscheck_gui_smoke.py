@@ -114,6 +114,11 @@ def _parser() -> argparse.ArgumentParser:
         help="tab left visible after the smoke assertions pass",
     )
     parser.add_argument("--negative", action="store_true")
+    parser.add_argument(
+        "--default-rule",
+        action="store_true",
+        help="run an offline passing case for an unregistered RS_module",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -196,6 +201,91 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
     return specs_path, inventory_path
 
 
+def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
+    specs_path = output / "default_rule_specs.csv"
+    inventory_path = output / "default_rule_inventory.json"
+    position = "top.u_default"
+    prefix = "DEFAULT_RS"
+    module = "rs_default_pipe"
+    with specs_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            (
+                "Intf_type",
+                "RS_module",
+                "RS_inst",
+                "position",
+                "step",
+                "clk",
+                "rst",
+                "CRG_source",
+                "RS_CFG_EN",
+            )
+        )
+        writer.writerow(
+            (
+                "DEFAULT_IF",
+                module,
+                prefix,
+                position,
+                2,
+                "clk_default",
+                "rst_n",
+                "crg_default",
+                "假门控",
+            )
+        )
+    instances = []
+    for index in range(2):
+        name = f"{prefix}_C{index}"
+        instances.append(
+            {
+                "name": name,
+                "full_name": f"{position}.{name}",
+                "module": module,
+                "file": "default_rule_top.sv",
+                "line": index + 10,
+                "parameters": {
+                    "RS_CFG_EN": "0",
+                    "WIDTH": "8",
+                    "ignored_mode": "0",
+                },
+                "ports": {
+                    "clk": {
+                        "connection": f"{position}.clk_default",
+                        "type": "npiNet",
+                    },
+                    "rst": {
+                        "connection": f"{position}.rst_n",
+                        "type": "npiNet",
+                    },
+                },
+                "clk_sources": [
+                    {
+                        "instance": f"{position}.u_crg",
+                        "module": "crg_default",
+                    }
+                ],
+            }
+        )
+    with inventory_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema_version": 2,
+                "positions": {
+                    position: {
+                        "found": True,
+                        "instances": instances,
+                    }
+                },
+                "warnings": [],
+            },
+            stream,
+            ensure_ascii=True,
+        )
+    return specs_path, inventory_path
+
+
 def _read_json_object(path: Path, label: str) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -222,6 +312,14 @@ def main() -> int:
         raise SystemExit("--generated-rows is available only in offline inventory mode")
     if args.negative and args.generated_rows:
         raise SystemExit("--negative and --generated-rows are mutually exclusive")
+    if args.default_rule and online:
+        raise SystemExit("--default-rule is available only in offline inventory mode")
+    if args.default_rule and (args.negative or args.generated_rows):
+        raise SystemExit(
+            "--default-rule is mutually exclusive with --negative and --generated-rows"
+        )
+    if args.default_rule and args.validate_only:
+        raise SystemExit("--default-rule requires a full check, not --validate-only")
 
     root = tk.Tk()
     app = RsCheckApp(root)
@@ -241,6 +339,8 @@ def main() -> int:
         encoding="utf-8"
     )
     original_module_rules = json.loads(source_config_text).get("module_rules", {})
+    if args.default_rule and "rs_default_pipe" in original_module_rules:
+        raise SystemExit("default-rule smoke module must not be explicitly registered")
     config_path.write_text(source_config_text, encoding="utf-8")
     app.config_var.set(str(config_path))
     app._load_config_from_form()
@@ -302,8 +402,12 @@ def main() -> int:
     app.module_search_var.set("rs_pipe")
     if len(app.rule_tree.get_children()) != 1:
         raise SystemExit("GUI module rule search did not find rs_pipe after restore")
-    expected_rows = 1 if args.negative else args.generated_rows or 2
-    if args.generated_rows:
+    expected_rows = (
+        1 if args.negative or args.default_rule else args.generated_rows or 2
+    )
+    if args.default_rule:
+        excel_path, inventory_path = _write_default_rule_inputs(output)
+    elif args.generated_rows:
         excel_path, inventory_path = _write_generated_inputs(
             output, args.generated_rows
         )
@@ -412,17 +516,21 @@ def main() -> int:
         if not args.validate_only and not args.generated_rows:
             first_result = app.result_tree.get_children()[0]
             first_values = app.result_tree.item(first_result, "values")
-            expected_step_cell = "5/6" if args.negative else "5/5"
+            expected_group = "DEFAULT_RS" if args.default_rule else "AAAA_BBB"
+            expected_instances = "2" if args.default_rule else "6"
+            expected_step_cell = (
+                "2/2" if args.default_rule else "5/6" if args.negative else "5/5"
+            )
             if (
                 len(first_values) < 8
-                or str(first_values[4]) != "AAAA_BBB"
-                or str(first_values[6]) != "6"
+                or str(first_values[4]) != expected_group
+                or str(first_values[6]) != expected_instances
                 or str(first_values[7]) != expected_step_cell
             ):
                 failed = True
                 print(
-                    "GUI_SMOKE_FAIL: first result row does not display "
-                    f"AAAA_BBB physical/effective steps: {first_values!r}",
+                    "GUI_SMOKE_FAIL: first result row does not display the expected "
+                    f"physical/effective steps: {first_values!r}",
                     file=sys.stderr,
                 )
                 root.destroy()
@@ -486,11 +594,12 @@ def main() -> int:
                         return
                 module_rule = record.get("module_rule")
                 step_check = record.get("step_check")
+                expected_step_parameters = [] if args.default_rule else ["rs_mode"]
                 if (
                     not isinstance(module_rule, dict)
                     or module_rule.get("name") != spec.get("RS_module")
                     or module_rule.get("has_rs_cfg_en") is not True
-                    or module_rule.get("step_parameters") != ["rs_mode"]
+                    or module_rule.get("step_parameters") != expected_step_parameters
                     or not isinstance(step_check, dict)
                     or not isinstance(step_check.get("effective_step"), int)
                     or (
@@ -543,7 +652,15 @@ def main() -> int:
                         or value not in (0, 1)
                         or contribution.get("instance") != instance.get("full_name")
                         or instance.get("step_evaluation") != contribution
-                        or not isinstance(rs_mode_evidence, dict)
+                    ):
+                        contribution_evidence_valid = False
+                        break
+                    if args.default_rule:
+                        if parameter_evidence != {} or value != 1:
+                            contribution_evidence_valid = False
+                            break
+                    elif (
+                        not isinstance(rs_mode_evidence, dict)
                         or rs_mode_evidence.get("present") is not True
                         or rs_mode_evidence.get("raw_value")
                         != instance.get("parameters", {}).get("rs_mode")
@@ -570,6 +687,27 @@ def main() -> int:
                     failed = True
                     print(
                         "GUI_SMOKE_FAIL: sample dynamic-step evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                if args.default_rule and (
+                    spec.get("RS_module") != "rs_default_pipe"
+                    or spec.get("RS_module") in original_module_rules
+                    or spec.get("RS_inst") != "DEFAULT_RS"
+                    or step_check.get("expected") != 2
+                    or step_check.get("physical_instances") != 2
+                    or step_check.get("effective_step") != 2
+                    or contribution_values != [1, 1]
+                    or any(
+                        instance.get("module") != "rs_default_pipe"
+                        or instance.get("parameters", {}).get("ignored_mode") != "0"
+                        for instance in instances
+                    )
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: unregistered module default-rule evidence mismatch",
                         file=sys.stderr,
                     )
                     root.destroy()
@@ -710,9 +848,11 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'positive'} iterations={completed} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'positive'} "
+            f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             f"{' contract=elab-only' if online else ''}"
+            f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )

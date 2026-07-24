@@ -103,11 +103,11 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
 | `RS_inst` | 一组打拍实例的本地实例名前缀 | 对 `position` 直接子实例做前缀和后缀规则匹配 |
 | `position` | 该组实例的直接父 scope 完整 NPI 层次路径 | 必须能在 elaborated 层次中找到；首尾 `.` 会被去除 |
-| `step` | 当前组预期的有效总拍数 | 按 `module_rules[RS_module].step_parameters` 汇总逐实例贡献；必须为非负整数 |
+| `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
 | `CRG_source` | clk 预期的唯一上游来源 | 按 `rtl.crg_match` 与上游 module definition 或实例名比较 |
-| `RS_CFG_EN` | 该组是否预期为假门控 | 由 `module_rules[RS_module].has_rs_cfg_en` 决定应精确填写 `假门控` 还是留空，并核对逐实例 effective 参数 |
+| `RS_CFG_EN` | 该组是否预期为假门控 | 由解析后的规则决定应精确填写 `假门控` 还是留空，并核对逐实例 effective 参数 |
 
 一行定义一组，唯一组键是 `(position, RS_inst)`。同一个 `position` 下可以有多组，每组占一行；相同组键重复出现会被拒绝。
 
@@ -218,7 +218,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 ### 3.4 模块规则库
 
-配置中的 `module_rules` 是 `RS_module` 到检查策略的数据库。匹配区分大小写且必须精确；Excel 出现未登记模块时，`validate` 直接报配置型输入错误，检查器侧对应 finding 为 `RS_MODULE_RULE_NOT_FOUND`，不会回退到旧的实例计数算法。
+配置中的 `module_rules` 是 `RS_module` 到检查策略的可选覆盖数据库。解析顺序固定为：先按区分大小写的模块名查找显式规则；精确匹配时使用显式规则，否则使用隐式默认规则 `has_rs_cfg_en=true`、`step_parameters=[]`。因此没有模块专属项时不会导致 `validate` 或 RTL 检查失败；默认行为是要求逐实例 `RS_CFG_EN=0`、Excel 精确填写 `假门控`，并让每个匹配实例贡献 `1` 拍。
 
 ```json
 "module_rules": {
@@ -233,7 +233,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 }
 ```
 
-规则名和 parameter 名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CFG_EN`。RTL 中未列入规则的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
+显式规则名和 parameter 名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CFG_EN`。显式规则优先于默认规则，其键必须与 Excel/RTL `RS_module` 大小写完全一致。RTL 中未列入 `step_parameters` 的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
 
 ### 3.5 `RS_CFG_EN` effective 参数
 
@@ -252,7 +252,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 ### 3.6 `step_parameters` 和有效拍数
 
-`step_parameters=[]` 时，每个模块名正确的匹配实例贡献 `1`。数组非空时，对每个实例读取所有已登记 parameter：所有值都能确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。例如 6 个实例的 `rs_mode` 为 `1,1,0,1,1,1`，逐实例贡献为 `1,1,0,1,1,1`，因此有效拍数为 `5`。
+`step_parameters=[]` 时，每个模块名正确的匹配实例贡献 `1`；这也是没有显式模块规则时的默认行为。数组非空时，对每个实例读取所有列出的 parameter：所有值都能确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。例如 6 个实例的 `rs_mode` 为 `1,1,0,1,1,1`，逐实例贡献为 `1,1,0,1,1,1`，因此有效拍数为 `5`。
 
 多个参数采用“全部非零”语义。例如 `step_parameters=["rs_mode", "pipe_enable"]` 时，两个值都已解析且都非零才贡献 `1`；都已解析且至少一个为零时贡献 `0`。参数缺失报 `STEP_PARAMETER_MISSING`；`null`、X/Z/`?` 或非法值报 `STEP_PARAMETER_VALUE_UNRESOLVED`。任一所需参数未知时该实例贡献就是 `null`，即使另一个参数已知为零也不使用部分证据。任一实例贡献未知时，整行 `effective_step` 为 `null` 并报 `STEP_CALCULATION_UNRESOLVED`。只有全部贡献已知时才求和，并用 `STEP_MISMATCH` 报告与 Excel `step` 的差异。
 
@@ -334,12 +334,14 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 ### 4.4 `module_rules`
 
-`module_rules` 必须是 JSON 对象。每个键是一个可出现在 Excel `RS_module` 中的精确模块定义名，每个值必须且只能包含：
+`module_rules` 必须是 JSON 对象，可以为空。每个键是一个需要覆盖默认行为的精确模块定义名，每个值必须且只能包含：
 
 | 配置项 | 类型 | 说明 |
 |---|---|---|
 | `has_rs_cfg_en` | JSON 布尔值 | `true` 要求 RTL parameter 存在、值为 0 且 Excel 填 `假门控`；`false` 要求 RTL 不存在该 parameter 且 Excel 留空 |
 | `step_parameters` | 唯一字符串数组 | 决定逐实例拍贡献的 effective parameters；空数组表示每个实例贡献 1 |
+
+没有精确显式项的模块自动采用 `has_rs_cfg_en=true`、`step_parameters=[]`。显式项优先，名称比较区分大小写。
 
 ### 4.5 命令行覆盖
 
@@ -744,7 +746,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`；
 - `rows[].spec`：规范化后的九字段规格和源行号，其中 `RS_CFG_EN` 可以是空字符串；
-- `rows[].module_rule`：本行精确匹配的 `has_rs_cfg_en` 与 `step_parameters`，未登记时为 `null`；
+- `rows[].module_rule`：本行最终采用的规则；无显式覆盖时也会记录隐式默认的 `has_rs_cfg_en=true` 与空 `step_parameters`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
 - `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线、clk 来源及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`；
 - `rows[].findings`：code、message、expected、actual 等诊断信息。
@@ -811,7 +813,7 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 | `POSITION_NOT_FOUND` | Excel 路径不属于当前 elaborated top，或层次名错误 | 在同一 KDB 中核对完整实例层次和 `position` |
 | `GROUP_NOT_FOUND` | 没有实例同时满足前缀和 suffix regex | 核对 `RS_inst` 和 `rtl.suffix_regex` |
 | `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但 suffix 不符合规则 | 修正命名或 regex；该 finding 默认是 warning |
-| `RS_MODULE_RULE_NOT_FOUND` | Excel `RS_module` 未登记 | 在 GUI“模块规则库”页或配置 `module_rules` 中增加精确、大小写一致的模块规则 |
+| 显式模块规则未生效 | 规则键与 Excel/RTL `RS_module` 大小写不完全一致 | 核对名称；没有精确匹配时工具会正常采用默认规则，而不是把近似名称当作覆盖项 |
 | `STEP_PARAMETER_MISSING` | 规则要求的 parameter 未出现在实例证据中 | 核对模块规则拼写、实际 RTL module 和 fresh elaborated KDB |
 | `STEP_PARAMETER_VALUE_UNRESOLVED` | step parameter 为 `null`、X/Z/`?` 或非法值 | 核对实例 override/KDB；未知值按 fail-closed 处理 |
 | `STEP_CALCULATION_UNRESOLVED` | 至少一个匹配实例的拍贡献未知 | 先解决实例模块不匹配、parameter 缺失或值无法解析，不能只修改 Excel `step` |
@@ -856,9 +858,9 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置九字段的 1-based 列映射，并为每种 `RS_module` 登记 `has_rs_cfg_en` 和 `step_parameters`。
-3. 按模块规则填写 `RS_CFG_EN`，并填写预期有效 `step`；有效拍可为 0。
-4. 执行 `validate`，确认 sheet、表头、列、模块登记和规范化内容。
+2. 配置九字段的 1-based 列映射；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
+3. 按最终解析规则填写 `RS_CFG_EN` 和预期有效 `step`；默认是 `假门控` 且每个物理实例贡献 1，有效拍可为 0。
+4. 执行 `validate`，确认 sheet、表头、列和规范化内容。
 5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
 6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。
 7. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。

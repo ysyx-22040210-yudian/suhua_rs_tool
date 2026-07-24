@@ -627,6 +627,22 @@ grep -Eq \
 grep -Fq 'contract=elab-only schemas=report-v3/inventory-v2' "$ONLINE_NEGATIVE_LOG"
 assert_no_collector_errors "$ONLINE_NEGATIVE_LOG"
 
+DEFAULT_RULE_LOG="$TEST_ROOT/offline_gui_default_rule.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --default-rule \
+  --iterations 1 \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$DEFAULT_RULE_LOG"
+grep -Fq \
+  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=default-rule iterations=1' \
+  "$DEFAULT_RULE_LOG"
+grep -Fq \
+  'rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' \
+  "$DEFAULT_RULE_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$DEFAULT_RULE_LOG"
+
 OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
@@ -661,7 +677,7 @@ echo "PASS: fresh KDB online positive/negative GUI checks and offline GUI stress
 echo "ELAB_DB=$ELAB_DB"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$ONLINE_GUI_LOG,$ONLINE_NEGATIVE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$ONLINE_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then
