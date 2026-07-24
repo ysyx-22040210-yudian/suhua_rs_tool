@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Sequence
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(DEFAULT_PROJECT_ROOT) not in sys.path:
@@ -15,11 +16,79 @@ if str(DEFAULT_PROJECT_ROOT) not in sys.path:
 
 import rscheck.gui as gui_module
 from rscheck.gui import RsCheckApp, tk
-from rscheck.gui_backend import INVENTORY_SOURCE, LIVE_SOURCE
+from rscheck.gui_backend import INVENTORY_SOURCE, LIVE_SOURCE, build_check_command
+
+
+_ONLINE_OPTIONS_WITH_VALUE = frozenset(
+    {
+        "--collector",
+        "--column",
+        "--config",
+        "--csv-report",
+        "--data-start-row",
+        "--elab-db",
+        "--excel",
+        "--header-row",
+        "--json-report",
+        "--keep-inventory",
+        "--npi-lib-dir",
+        "--npi-timeout",
+        "--sheet",
+    }
+)
+_ONLINE_FLAG_OPTIONS = frozenset({"--header-check", "--no-header-check"})
 
 
 def _window_identifier(root: object) -> str:
     return f"0x{int(root.winfo_id()):x}"
+
+
+def _online_command_contract_errors(
+    command_line: str,
+    *,
+    expected_command: Sequence[str],
+    expected_collector: str,
+    expected_elab_db: str,
+) -> tuple[str, ...]:
+    try:
+        tokens = shlex.split(command_line)
+    except ValueError as exc:
+        return (f"command cannot be parsed: {exc}",)
+
+    errors: list[str] = []
+    if tokens != list(expected_command):
+        errors.append("command differs from the exact GUI request")
+
+    expected_prefix = [expected_command[0], "-m", "rscheck", "check"]
+    if tokens[:4] != expected_prefix:
+        errors.append("command prefix is not '<python> -m rscheck check'")
+
+    option_values: dict[str, list[str]] = {}
+    index = 4
+    while index < len(tokens):
+        option = tokens[index]
+        if option in _ONLINE_FLAG_OPTIONS:
+            option_values.setdefault(option, []).append("")
+            index += 1
+            continue
+        if option in _ONLINE_OPTIONS_WITH_VALUE:
+            if index + 1 >= len(tokens):
+                errors.append(f"{option} has no value")
+                break
+            option_values.setdefault(option, []).append(tokens[index + 1])
+            index += 2
+            continue
+        errors.append(f"unexpected option or positional argument: {option!r}")
+        index += 1
+
+    expected_sources = {
+        "--collector": expected_collector,
+        "--elab-db": expected_elab_db,
+    }
+    for option, expected_value in expected_sources.items():
+        if option_values.get(option) != [expected_value]:
+            errors.append(f"{option} must occur once with the requested value")
+    return tuple(errors)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -299,22 +368,21 @@ def main() -> int:
                 )
                 root.destroy()
                 return
-            command_tokens = shlex.split(command_lines[-1])
-            missing_options = [
-                option
-                for option in ("--collector", "--elab-db")
-                if command_tokens.count(option) != 1
-            ]
-            forbidden_options = [
-                option
-                for option in ("--inventory", "-f", "-sv", "-lib", "-top", "--")
-                if option in command_tokens
-            ]
-            if missing_options or forbidden_options:
+            expected_command = build_check_command(
+                app._request(),
+                internal_json_report=app.json_report_var.get(),
+            )
+            contract_errors = _online_command_contract_errors(
+                command_lines[-1],
+                expected_command=expected_command,
+                expected_collector=args.collector or "",
+                expected_elab_db=args.elab_db or "",
+            )
+            if contract_errors:
                 failed = True
                 print(
                     "GUI_SMOKE_FAIL: online command contract mismatch "
-                    f"missing={missing_options} forbidden={forbidden_options}",
+                    + "; ".join(contract_errors),
                     file=sys.stderr,
                 )
                 root.destroy()

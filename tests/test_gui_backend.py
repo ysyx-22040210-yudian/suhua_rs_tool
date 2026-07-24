@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from rscheck.gui_backend import (
     load_validation_rows,
 )
 from rscheck.model import FIELD_NAMES
+from scripts.test_rscheck_gui_smoke import _online_command_contract_errors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +111,51 @@ class GuiBackendTests(unittest.TestCase):
         self.assertNotIn("--inventory", command)
         for forbidden in ("-f", "-sv", "-lib", "-top", "--"):
             self.assertNotIn(forbidden, command)
+
+        collector = command[command.index("--collector") + 1]
+        elab_db = command[command.index("--elab-db") + 1]
+        contract_arguments = {
+            "expected_collector": collector,
+            "expected_elab_db": elab_db,
+        }
+        self.assertEqual(
+            _online_command_contract_errors(
+                shlex.join(command),
+                expected_command=command,
+                **contract_arguments,
+            ),
+            (),
+        )
+
+        wrong_kdb = list(command)
+        wrong_kdb[wrong_kdb.index("--elab-db") + 1] = "/other/kdb.elab++"
+        self.assertTrue(
+            _online_command_contract_errors(
+                shlex.join(wrong_kdb),
+                expected_command=wrong_kdb,
+                **contract_arguments,
+            )
+        )
+
+        forbidden_design_inputs = (
+            ("-F", "rtl.f"),
+            ("-verilog", "top.sv"),
+            ("-vhdl", "top.vhd"),
+            ("-path", "rtl"),
+            ("--filelist", "rtl.f"),
+            ("--top", "top"),
+            ("top.sv",),
+        )
+        for extra_arguments in forbidden_design_inputs:
+            with self.subTest(extra_arguments=extra_arguments):
+                mutated = [*command, *extra_arguments]
+                self.assertTrue(
+                    _online_command_contract_errors(
+                        shlex.join(mutated),
+                        expected_command=mutated,
+                        **contract_arguments,
+                    )
+                )
 
     def test_work_library_is_rejected_as_live_design(self) -> None:
         with self.assertRaisesRegex(GuiInputError, "work.lib\+\+"):
