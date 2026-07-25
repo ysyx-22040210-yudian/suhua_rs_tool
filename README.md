@@ -3,12 +3,12 @@
 该工具提供命令行（CLI）和自带的 Tkinter 桌面 GUI，把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
 
 - Excel `position` 简写是否能通过可选映射库解析到实际 RTL 全路径，以及解析后的路径是否存在；
-- 同一 `RS_inst` 前缀组的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
+- 同一 `RS_inst` 组（可填写前缀或完整本地例化名）的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例的 clk/rst formal port 是否存在、已连接且符合 Excel；
 - clk 是否可追到唯一上游模块，且模块定义名等于 `CRG_source`；
 - 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CFG_EN` 和有效拍贡献条件；
-- 前缀重叠导致同一实例匹配多个 Excel 组时，明确报错。
+- 重叠的 `RS_inst` 导致同一实例匹配多个 Excel 组时，明确报错。
 
 `Intf_type` 作为业务标签进入报告，不参与 RTL 判定。仅凭当前九个字段无法可靠检查各拍之间的数据串接，详见“当前边界”。
 
@@ -77,7 +77,7 @@ Excel 的 `position` 可以填写便于维护的简写，不必重复很长的 R
 }
 ```
 
-解析时按区分大小写的简写精确查找。命中时，内部 `position`、分组、clk/rst 相对路径和 NPI positions 请求全部使用右侧全路径，report v3 的 `spec.position_alias` 保留 Excel 原值；未命中时保持兼容，把 Excel 值直接当作完整 RTL 路径，`position_alias` 为空。因此旧表仍可直接填写 `top.u_tile`。显式映射只改变路径解析，不改变 Excel 列位置、模块规则或实例前缀语义。
+解析时按区分大小写的简写精确查找。命中时，内部 `position`、分组、clk/rst 相对路径和 NPI positions 请求全部使用右侧全路径，report v3 的 `spec.position_alias` 保留 Excel 原值；未命中时保持兼容，把 Excel 值直接当作完整 RTL 路径，`position_alias` 为空。因此旧表仍可直接填写 `top.u_tile`。显式映射只改变路径解析，不改变 Excel 列位置、模块规则或 `RS_inst` 匹配语义。
 
 可以在 GUI 的“Position 映射库”页维护，也可以在无图形环境使用 CLI 原子修改配置：
 
@@ -127,23 +127,21 @@ python -m rscheck position-db delete \
 
 显式规则优先于默认规则。例如上面的 `rs_pipe` 使用 `rs_mode` 计算有效拍数；没有同名显式项的模块则沿用默认“每实例 1 拍”。若本意是覆盖默认值，规则键必须与 Excel/RTL `RS_module` 大小写完全一致。
 
-例如 `AAAA_BBB_C0` 至 `AAAA_BBB_C5` 有 6 个物理实例，`rs_mode` 依次为 `1,1,0,1,1,1`，则逐实例贡献为 `1,1,0,1,1,1`，有效拍数是 `5`，Excel `step` 必须填 `5`。`step` 允许为 `0`；但没有任何物理实例匹配时仍报 `GROUP_NOT_FOUND`，不能用 `step=0` 掩盖错误路径或前缀。
+例如 `AAAA_BBB_C0` 至 `AAAA_BBB_C5` 有 6 个物理实例，`rs_mode` 依次为 `1,1,0,1,1,1`，则逐实例贡献为 `1,1,0,1,1,1`，有效拍数是 `5`，Excel `step` 必须填 `5`。`step` 允许为 `0`；但没有任何物理实例匹配时仍报 `GROUP_NOT_FOUND`，不能用 `step=0` 掩盖错误路径或 `RS_inst`。
 
 ## 分组规则
 
-一行 Excel 定义一组，组键为 `(解析后的完整 position, RS_inst)`。`position` 可以是 `position_mappings` 中的简写，也可以直接是组成员父 scope 的完整 NPI 路径。
+一行 Excel 定义一组，组键为 `(解析后的完整 position, RS_inst)`。`position` 可以是 `position_mappings` 中的简写，也可以直接是组成员父 scope 的完整 NPI 路径。`RS_inst` 单元格本身必须非空，可以填写组前缀，也可以填写一个完整的 NPI 本地例化名；完整名不是 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
 
-若 `RS_inst=AAAA_BBB`，本地实例名必须满足：
+实例的本地名字减去 `RS_inst` 后，空 remainder 直接合法，用于完整名输入；非空 remainder 才必须完整匹配 `rtl.suffix_regex`。例如，`RS_inst=AAAA_BBB` 时 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配；`RS_inst=CTRL_RS_D0` 时，本地实例 `CTRL_RS_D0` 以空后缀匹配。
 
-```text
-AAAA_BBB + 非空字符串 + 末尾阿拉伯数字
-```
+空后缀实例仍照常检查 `RS_module`、parameters、`step` 贡献、clk/rst 和 `CRG_source`，但不参与 suffix tag/index 或连续编号检查。非空后缀成员中，不同 suffix stem 仍属于同一组，只产生 warning；数字是否从 0 连续默认不影响 PASS，需要时把 `require_contiguous_indices` 设为 `true`。
 
-因此 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配。相同前缀但不同 suffix stem 仍属于同一组，只产生 warning。数字是否从 0 连续默认不影响 PASS；需要时把 `require_contiguous_indices` 设为 `true`。
+匹配仍保留前缀语义：若同一 scope 同时存在 `PFX` 和 `PFX_C0`，填写 `RS_inst=PFX` 会同时匹配空后缀的 `PFX` 和带后缀的 `PFX_C0`。当前没有 exact-only 模式；需要只检查 `PFX` 时，应避免同 scope 中存在也符合该前缀与 suffix 规则的其他实例，或拆分命名。
 
 Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
 
-`RS_CFG_EN` 的列映射和精确表头始终必需，数据单元格则由匹配到的模块规则决定。实例后缀连续性仍按物理实例和数字后缀检查，不按有效拍数检查。
+`RS_CFG_EN` 的列映射和精确表头始终必需，数据单元格则由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
 
 ## 工具自带桌面 GUI
 
@@ -313,7 +311,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 - `RS_CFG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - 采集器产生的任何 NPI traversal/driver warning 都按 `NPI_UNRESOLVED` 硬错误处理，避免层次截断后误报 PASS。
 - 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
-- SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式。
+- SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式；单个元素可按完整本地名填写，按数组前缀分组则需要定制 suffix 规则。
 
 ## 测试
 

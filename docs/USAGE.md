@@ -101,7 +101,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 |---|---|---|
 | `Intf_type` | 该组打拍 interface 的业务标签 | 当前仅写入报告，不参与 RTL 判定 |
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
-| `RS_inst` | 一组打拍实例的本地实例名前缀 | 对解析后的完整 `position` 直接子实例做前缀和后缀规则匹配 |
+| `RS_inst` | 非空的本地实例名前缀或完整本地例化名 | 对解析后的完整 `position` 直接子实例匹配；空 remainder 直接合法，非空 remainder 按后缀规则检查 |
 | `position` | 配置库中的 position 简写，或该组实例的直接父 scope 完整 NPI 层次路径 | 简写命中后转换为全路径；未命中时兼容完整路径输入；最终必须能在 elaborated 层次中找到 |
 | `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
@@ -163,6 +163,7 @@ python -m rscheck validate \
 
 - 映射字段会去除首尾空白。
 - 除 `RS_CFG_EN` 外的八个字段均为必填；这些字段和 `RS_CFG_EN` 全部为空时跳过整行，八个必填字段中只有部分为空时报错。
+- `RS_inst` 单元格本身不能留空。可以填写组前缀，也可以填写完整的 NPI 本地例化名，例如 `CTRL_RS_D0`；不要填写 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
 - `RS_CFG_EN` 可以为空或填写文本。是否应为空由 `RS_module` 对应规则的 `has_rs_cfg_en` 决定；其他非空文本会保留到 RTL 检查阶段并产生清晰 finding。
 - `step` 接受 `0`、`2` 或 Excel 常见的 `2.0`，但不接受负数、小数或科学计数法。
 - 默认会在 `excel.header_row` 对九个映射单元格做精确表头校验，包括即使数据格允许留空也必须存在的 `RS_CFG_EN` 表头。
@@ -175,7 +176,12 @@ python -m rscheck validate \
 
 ### 3.1 实例组
 
-`RS_inst` 只定义前缀。实例名减去该前缀后的剩余字符串，必须完整匹配 `rtl.suffix_regex`。
+`RS_inst` 必须是非空文本，可以定义一组实例的前缀，也可以就是一个实例的完整 NPI 本地例化名。这里的“本地”指 `position` 直接子实例的名字，不含 `top.u_tile.` 等父层次路径。
+
+从实例本地名中去掉 `RS_inst` 后得到 remainder：
+
+- remainder 为空时直接匹配，不要求 `rtl.suffix_regex` 接受空字符串；这就是完整本地例化名模式。
+- remainder 非空时，必须完整匹配 `rtl.suffix_regex`。
 
 默认规则：
 
@@ -185,11 +191,16 @@ python -m rscheck validate \
 
 若 `RS_inst=AAAA_BBB`：
 
+- `AAAA_BBB`：匹配，remainder 为空；
 - `AAAA_BBB_C0`、`AAAA_BBB_C12`：匹配；
 - `AAAA_BBB0`：不匹配，因为缺少非空 tag；
 - `AAAA_BBB_C`：不匹配，因为末尾没有数字 index。
 
-物理实例匹配完成后，工具再按模块规则计算每个实例的 `0/1/?` 拍贡献。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，index 必须等于从 `index_base` 开始、长度为**物理实例数**的连续序列，且所有实例必须使用同一个 tag。连续性不按有效 `step` 截短。
+例如 RTL 本地例化名为 `CTRL_RS_D0` 时，可以在 Excel 直接填写 `RS_inst=CTRL_RS_D0`；此时 remainder 为空并匹配该实例。
+
+所有匹配实例，包括空后缀实例，都会照常检查 `RS_module`、模块规则要求的 parameters、逐实例 `step` 贡献、clk/rst 连接和 `CRG_source`。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。空后缀实例不具有 suffix tag/index，因此不参与 `SUFFIX_TAG_MISMATCH` 或连续编号检查。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，仅非空 remainder 且成功解析出 index 的成员必须从 `index_base` 开始连续并使用同一个 tag。连续性不按有效 `step` 截短。
+
+完整名输入是对既有前缀匹配的补充，不是 exact-only 模式。若同一 scope 同时存在 `PFX` 和 `PFX_C0`，填写 `RS_inst=PFX` 会同时匹配前者的空 remainder 和后者符合默认 suffix 规则的 `_C0`；两行使用重叠 `RS_inst` 并命中同一实例时仍报 `AMBIGUOUS_GROUP_MATCH`。当前没有只匹配 `PFX` 的显式模式。
 
 ### 3.2 Position 简写与完整路径
 
@@ -347,13 +358,13 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 |---|---|---|---|
 | `rtl.clk_port` | 非空字符串 | `clk` | 打拍模块的 clk formal port 名 |
 | `rtl.rst_port` | 非空字符串 | `rst` | 打拍模块的 rst formal port 名 |
-| `rtl.suffix_regex` | 非空正则字符串 | `(?P<tag>.+?)(?P<index>[0-9]+)` | 匹配实例名减去 `RS_inst` 后的完整 remainder；必须含命名组 `index` |
+| `rtl.suffix_regex` | 非空正则字符串 | `(?P<tag>.+?)(?P<index>[0-9]+)` | 匹配实例名减去 `RS_inst` 后的非空 remainder；空 remainder 直接合法；正则必须含命名组 `index` |
 | `rtl.index_base` | 非负整数 | `0` | 连续 index 检查的起点 |
 | `rtl.require_contiguous_indices` | JSON 布尔值 | `false` | 是否强制相同 tag 和连续 index |
 | `rtl.allow_leaf_signal_match` | JSON 布尔值 | `false` | 是否允许 clk/rst 仅按最后一级信号名匹配 |
 | `rtl.crg_match` | 枚举字符串 | `module` | `module`、`instance` 或 `module_or_instance` |
 
-`suffix_regex` 会被工具自动按完整字符串匹配，无需自行添加 `^`/`$`。`index` 组在运行时必须只产生 ASCII 数字，推荐固定写成 `(?P<index>[0-9]+)`。`tag` 组不是语法必需，但要使用 tag 一致性检查时应保留。
+非空 remainder 会由 `suffix_regex` 自动按完整字符串匹配，无需自行添加 `^`/`$`；空 remainder 会绕过该正则并作为合法完整名匹配。`index` 组在运行时必须只产生 ASCII 数字，推荐固定写成 `(?P<index>[0-9]+)`。`tag` 组不是语法必需，但要使用 tag 一致性检查时应保留。
 
 ### 4.4 `position_mappings`
 
@@ -505,7 +516,7 @@ python -m rscheck validate \
 ```text
 VALID: 2 specification row(s)
 row 2: tile_core -> top.u_tile / AAAA_BBB module=rs_pipe step=5
-row 3: tile_core -> top.u_tile / CTRL_RS module=rs_pipe step=1
+row 3: tile_core -> top.u_tile / CTRL_RS_D0 module=rs_pipe step=1
 ```
 
 输出完整规范化 JSON：
@@ -799,7 +810,7 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
-[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS_D0 physical=1 effective=1 expected=1 RS_CFG_EN=假门控
 ```
 
 ### 11.2 JSON 报告
@@ -875,8 +886,8 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `npi_load_design failed` | KDB 损坏、版本不兼容、未完成 elaboration 或 top 错误 | 确认输入是 `elabcom -elab` 产物；用相同 Verdi 流程重新生成 KDB 并验证 top；`work.lib++` 会在启动 collector 前被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
 | `POSITION_NOT_FOUND` | 映射后的路径不属于当前 elaborated top；或 Excel 简写未命中数据库，被当作完整路径直通 | 查看 report 的 `position`/`position_alias`，核对映射键、映射值和同一 KDB 中的完整 hierarchy |
-| `GROUP_NOT_FOUND` | 没有实例同时满足前缀和 suffix regex | 核对 `RS_inst` 和 `rtl.suffix_regex` |
-| `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但 suffix 不符合规则 | 修正命名或 regex；该 finding 默认是 warning |
+| `GROUP_NOT_FOUND` | 没有实例与完整本地名相同，也没有实例同时满足前缀和 suffix regex | 核对非空 `RS_inst` 是否为本地名/前缀，并核对 `rtl.suffix_regex` |
+| `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但非空 suffix 不符合规则 | 修正命名或 regex；空 suffix 本身合法，该 finding 默认是 warning |
 | 显式模块规则未生效 | 规则键与 Excel/RTL `RS_module` 大小写不完全一致 | 核对名称；没有精确匹配时工具会正常采用默认规则，而不是把近似名称当作覆盖项 |
 | `STEP_PARAMETER_MISSING` | 规则要求的 parameter 未出现在实例证据中 | 核对模块规则拼写、实际 RTL module 和 fresh elaborated KDB |
 | `STEP_PARAMETER_VALUE_UNRESOLVED` | step parameter 为 `null`、X/Z/`?` 或非法值 | 核对实例 override/KDB；未知值按 fail-closed 处理 |
@@ -897,7 +908,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `RS_CFG_EN_LABEL_MISMATCH` | 实例有该参数，但 Excel 规范化后的文本不是精确的 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；参数非零时还会同时报告 value mismatch |
 | `RS_CFG_EN_VALUE_MISMATCH` | 实例有 `RS_CFG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
 | `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到参数但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CFG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
-| `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst` 前缀 | 重新设计互不重叠的组前缀 |
+| `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst`；完整名也可能与较短前缀重叠 | 重新设计互不重叠的组名；当前没有 exact-only 模式 |
 | `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
 | `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
 | `multiple usable X11 displays` | 自动探测到多个有效 DISPLAY | 设置 `GUI_DISPLAY`，必要时同时设置 `GUI_USER` 或 `GUI_XAUTHORITY` |
@@ -907,10 +918,10 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
 - 当前九字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
-- `step` 是模块规则计算出的有效拍数，不等同于物理实例数；后缀连续性仍按物理实例检查。
+- `step` 是模块规则计算出的有效拍数，不等同于物理实例数；后缀连续性只按具有合法非空 remainder 的 indexed 物理实例检查，空后缀实例不参与编号检查。
 - position 映射是区分大小写的精确替换，不做模糊、前缀或多级递归解析；未命中值按完整路径直通。
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
-- SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 风格，需要定制 `suffix_regex` 和前缀策略。
+- SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 后缀风格；检查单个元素时可直接把 `u[0]` 作为完整本地 `RS_inst`，按数组前缀分组时才需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
 - CRG 追踪要求唯一 module cell 来源；顶层输入、多驱动和无法解析的 primitive 网络会 fail-closed。
 - `RS_CFG_EN` 和 `step_parameters` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。

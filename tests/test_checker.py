@@ -508,6 +508,81 @@ class CheckerTests(unittest.TestCase):
         self.assertTrue(report.passed)
         self.assertIn("SUFFIX_TAG_MISMATCH", {item.code for item in report.rows[0].findings})
 
+    def test_full_instance_name_matches_with_empty_suffix(self) -> None:
+        spec = replace(self.specs[1], rs_inst="CTRL_RS_D0")
+        report = check_specs([spec], self.inventory, self.rtl, self.rules)
+
+        self.assertTrue(report.passed)
+        self.assertEqual(
+            [instance.name for instance in report.rows[0].instances],
+            ["CTRL_RS_D0"],
+        )
+        self.assertEqual(report.rows[0].effective_step, 1)
+        self.assertNotIn(
+            "INSTANCE_SUFFIX_INVALID",
+            {finding.code for finding in report.rows[0].findings},
+        )
+
+    def test_full_instance_name_needs_no_numeric_suffix(self) -> None:
+        def mutate(raw) -> None:
+            instance = raw["positions"]["top.u_tile"]["instances"][6]
+            instance["name"] = "CONTROL_SINGLE"
+            instance["full_name"] = "top.u_tile.CONTROL_SINGLE"
+
+        spec = replace(self.specs[1], rs_inst="CONTROL_SINGLE")
+        report = check_specs(
+            [spec], self._mutated_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].instances[0].name, "CONTROL_SINGLE")
+
+    def test_empty_suffix_instance_obeys_step_parameter(self) -> None:
+        spec = replace(self.specs[0], rs_inst="AAAA_BBB_C2", step=0)
+        report = check_specs([spec], self.inventory, self.rtl, self.rules)
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].effective_step, 0)
+        self.assertEqual(
+            [item.contribution for item in report.rows[0].step_evaluations],
+            [0],
+        )
+
+    def test_empty_and_indexed_suffix_instances_share_prefix_group(self) -> None:
+        def mutate(raw) -> None:
+            instance = dict(raw["positions"]["top.u_tile"]["instances"][0])
+            instance["name"] = "AAAA_BBB"
+            instance["full_name"] = "top.u_tile.AAAA_BBB"
+            raw["positions"]["top.u_tile"]["instances"].append(instance)
+
+        spec = replace(self.specs[0], step=6)
+        report = check_specs(
+            [spec],
+            self._mutated_inventory(mutate),
+            replace(self.rtl, require_contiguous_indices=True),
+            self.rules,
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(len(report.rows[0].instances), 7)
+        self.assertEqual(report.rows[0].instances[0].name, "AAAA_BBB")
+        self.assertEqual(report.rows[0].effective_step, 6)
+
+    def test_full_name_and_broad_prefix_overlap_is_ambiguous(self) -> None:
+        exact = replace(
+            self.specs[0], row_number=98, rs_inst="AAAA_BBB_C0", step=1
+        )
+        broad = replace(self.specs[0], row_number=99, rs_inst="AAAA", step=5)
+        report = check_specs([exact, broad], self.inventory, self.rtl, self.rules)
+
+        ambiguous = [
+            finding
+            for finding in report.global_findings
+            if finding.code == "AMBIGUOUS_GROUP_MATCH"
+        ]
+        self.assertEqual(len(ambiguous), 1)
+        self.assertEqual(ambiguous[0].instance, "top.u_tile.AAAA_BBB_C0")
+
     def test_multiple_clock_sources_fail_closed(self) -> None:
         def mutate(raw) -> None:
             raw["positions"]["top.u_tile"]["instances"][0]["clk_sources"].append(

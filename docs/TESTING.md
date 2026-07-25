@@ -73,6 +73,8 @@ OK
 
 这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2、report schema v3、旧 schema 拒绝、elab-only CLI 契约、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
+实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/clk/rst/CRG 检查并计入物理实例数及规则计算后的有效 `step`，但不得进入 tag/index/连续编号判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
+
 ### 3.2 Windows 工具自带 GUI 启动和布局检查
 
 Tkinter 可用性和 GUI 启动命令：
@@ -259,6 +261,8 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 还必须断言 report `schema_version=3`，每行都包含最终采用的默认或显式 `module_rule`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。
 
 Position 映射必须有独立合同测试：`tile_core -> top.u_tile` 命中后 `SpecRow.position` 为全路径、`position_alias` 为简写；未登记的 `top.u_tile` 直通且 alias 为空；映射后相同 `(position, RS_inst)` 仍判重复；CLI/GUI report v3 和 CSV 保留 alias；交给 NPI runner 的唯一 positions 只能包含完整路径，绝不能包含 `tile_core`。
+
+`RS_inst` 匹配也必须有独立合同测试：空单元格仍按必填字段拒绝；填写 `CTRL_RS_D0` 能以空 remainder 匹配同名本地实例；完整层次名不应被文档或 GUI 引导为 `RS_inst`；空后缀实例的 `rs_mode=0` 时贡献为 `0`，非零时贡献为 `1`；空后缀与 indexed 成员混合时，只对 indexed 成员检查 tag/index/连续性。
 
 ## 4. 通用 POSIX 本地测试
 
@@ -635,7 +639,7 @@ test -s "$POS_CSV"
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
-[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS_D0 physical=1 effective=1 expected=1 RS_CFG_EN=假门控
 ```
 
 ### 8.1 正例 schema、摘要和参数证据断言
@@ -731,6 +735,14 @@ if step_check["effective_step"] != 5 or step_check["expected"] != 5:
     raise SystemExit("expected effective/expected step 5/5: {!r}".format(step_check))
 if contributions != [1, 1, 0, 1, 1, 1]:
     raise SystemExit("unexpected step contributions: {!r}".format(contributions))
+
+ctrl_row = next(row for row in report["rows"] if row["spec"]["RS_inst"] == "CTRL_RS_D0")
+ctrl_names = [instance["name"] for instance in ctrl_row["matched_instances"]]
+if ctrl_names != ["CTRL_RS_D0"]:
+    raise SystemExit("full local RS_inst did not match exactly one empty-suffix instance: {!r}".format(ctrl_names))
+ctrl_step = ctrl_row["step_check"]
+if ctrl_step["physical_instances"] != 1 or ctrl_step["effective_step"] != 1:
+    raise SystemExit("empty-suffix instance lost normal step evaluation: {!r}".format(ctrl_step))
 print("positive position-mapping/inventory-v2/report-v3 evidence OK:", actual)
 PY
 ```

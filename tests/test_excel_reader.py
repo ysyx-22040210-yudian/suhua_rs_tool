@@ -151,7 +151,7 @@ class ExcelReaderTests(unittest.TestCase):
         rows = read_spec_rows(ROOT / "tests" / "fixtures" / "specs.csv", self.config)
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].step, 5)
-        self.assertEqual(rows[1].rs_inst, "CTRL_RS")
+        self.assertEqual(rows[1].rs_inst, "CTRL_RS_D0")
         self.assertEqual(rows[0].rs_cfg_en, "假门控")
 
     def test_columns_beyond_z_are_supported(self) -> None:

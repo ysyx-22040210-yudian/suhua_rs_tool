@@ -631,7 +631,7 @@ for name in ("u_crg", "u_aux_crg"):
         )
 
 rows_by_group = {row["spec"]["RS_inst"]: row for row in report["rows"]}
-if set(rows_by_group) != {"AAAA_BBB", "CTRL_RS"}:
+if set(rows_by_group) != {"AAAA_BBB", "CTRL_RS_D0"}:
     raise SystemExit("unexpected report groups: {!r}".format(sorted(rows_by_group)))
 
 for row in report["rows"]:
@@ -701,13 +701,20 @@ for instance, contribution in zip(group_row["matched_instances"], contributions)
             "matched instance lost step evaluation evidence: {!r}".format(instance)
         )
 
-control_step = rows_by_group["CTRL_RS"].get("step_check")
+control_row = rows_by_group["CTRL_RS_D0"]
+control_names = [item["name"] for item in control_row["matched_instances"]]
+if control_names != ["CTRL_RS_D0"]:
+    raise SystemExit(
+        "CTRL_RS_D0 exact-name match mismatch: {!r}".format(control_names)
+    )
+
+control_step = control_row.get("step_check")
 if not isinstance(control_step, dict) or (
     control_step.get("expected"),
     control_step.get("physical_instances"),
     control_step.get("effective_step"),
 ) != (1, 1, 1):
-    raise SystemExit("unexpected CTRL_RS step evidence: {!r}".format(control_step))
+    raise SystemExit("unexpected CTRL_RS_D0 step evidence: {!r}".format(control_step))
 print("positive summary OK:", summary)
 print("position mapping evidence OK: tile_core -> top.u_tile; NPI full paths only")
 print("dynamic step inventory/report evidence OK")

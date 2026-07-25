@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from typing import Iterable, Mapping
 
 from .model import (
@@ -253,27 +252,39 @@ def _match_group(
     spec: SpecRow,
     instances: Iterable[ActualInstance],
     suffix: re.Pattern[str],
-) -> tuple[list[tuple[ActualInstance, re.Match[str]]], list[ActualInstance]]:
-    valid = []
+) -> tuple[
+    list[tuple[ActualInstance, re.Match[str] | None]],
+    list[ActualInstance],
+]:
+    valid: list[tuple[ActualInstance, re.Match[str] | None]] = []
     invalid = []
     for instance in instances:
         if not instance.name.startswith(spec.rs_inst):
             continue
         remainder = instance.name[len(spec.rs_inst) :]
+        if not remainder:
+            valid.append((instance, None))
+            continue
         match = suffix.fullmatch(remainder)
         if match is None:
             invalid.append(instance)
         else:
             valid.append((instance, match))
-    def stage_index(item: tuple[ActualInstance, re.Match[str]]) -> int:
-        value = item[1].group("index")
+
+    def sort_key(
+        item: tuple[ActualInstance, re.Match[str] | None],
+    ) -> tuple[int, int, str]:
+        match = item[1]
+        if match is None:
+            return 0, -1, item[0].name
+        value = match.group("index")
         if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
             raise ConfigError(
                 "rtl.suffix_regex named group 'index' must match only ASCII digits"
             )
-        return int(value)
+        return 1, int(value), item[0].name
 
-    valid.sort(key=lambda item: (stage_index(item), item[0].name))
+    valid.sort(key=sort_key)
     return valid, invalid
 
 
@@ -445,13 +456,14 @@ def _check_row(
             _row_finding(
                 spec,
                 "GROUP_NOT_FOUND",
-                f"no instance matched prefix {spec.rs_inst!r} and the configured suffix pattern",
-                expected={"prefix": spec.rs_inst, "step": spec.step},
+                f"no instance matched RS_inst {spec.rs_inst!r} and the configured suffix rules",
+                expected={"RS_inst": spec.rs_inst, "step": spec.step},
                 actual=0,
             )
         )
 
-    tags = {match.groupdict().get("tag", "") for _, match in matches}
+    suffix_matches = [match for _, match in matches if match is not None]
+    tags = {match.groupdict().get("tag", "") for match in suffix_matches}
     if len(tags) > 1:
         findings.append(
             _row_finding(
@@ -464,10 +476,10 @@ def _check_row(
             )
         )
 
-    indices = [int(match.group("index")) for _, match in matches]
-    if config.require_contiguous_indices:
+    indices = [int(match.group("index")) for match in suffix_matches]
+    if config.require_contiguous_indices and suffix_matches:
         expected_indices = list(
-            range(config.index_base, config.index_base + len(matched_instances))
+            range(config.index_base, config.index_base + len(suffix_matches))
         )
         if len(tags) != 1 or sorted(indices) != expected_indices:
             findings.append(
@@ -581,21 +593,17 @@ def check_specs(
         for warning in inventory.warnings
     ]
 
-    specs_by_position: dict[str, list[SpecRow]] = defaultdict(list)
-    for spec in spec_list:
-        specs_by_position[spec.position].append(spec)
-    for position_name, position_specs in specs_by_position.items():
+    owners_by_position: dict[str, dict[str, list[SpecRow]]] = {}
+    for row in rows:
+        position_owners = owners_by_position.setdefault(row.spec.position, {})
+        for instance in row.instances:
+            position_owners.setdefault(instance.full_name, []).append(row.spec)
+    for position_name, instance_owners in owners_by_position.items():
         position = inventory.positions.get(position_name)
         if position is None or not position.found:
             continue
         for instance in position.instances:
-            owners = []
-            for spec in position_specs:
-                if not instance.name.startswith(spec.rs_inst):
-                    continue
-                remainder = instance.name[len(spec.rs_inst) :]
-                if suffix.fullmatch(remainder):
-                    owners.append(spec)
+            owners = instance_owners.get(instance.full_name, [])
             if len(owners) > 1:
                 global_findings.append(
                     Finding(
