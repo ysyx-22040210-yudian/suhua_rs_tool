@@ -64,6 +64,19 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
             source,
         )
 
+    def test_vm_flow_requires_partial_npi_load_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        rtl = (ROOT / "examples" / "rtl" / "rs_example.sv").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("RSCHECK_PARTIAL_LOAD_FIXTURE", rtl)
+        self.assertIn("warning[NPI_LOAD_PARTIAL]", source)
+        self.assertIn('inventory.get("notices")', source)
+        self.assertIn("RESULT: PASS | rows=2 errors=0 warnings=1", source)
+        self.assertIn("--expect-partial-load", source)
+        self.assertIn("notice=NPI_LOAD_PARTIAL", source)
+
     def test_license_environment_import_contract_is_safe(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         runner = SITE_ENV_RUNNER.read_text(encoding="utf-8")

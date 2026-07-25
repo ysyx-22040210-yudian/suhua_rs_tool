@@ -80,9 +80,13 @@ def load_inventory(path: str | Path) -> Inventory:
     raw_warnings = raw.get("warnings")
     if not isinstance(raw_warnings, list):
         raise InventoryError("inventory 'warnings' must be an array")
+    raw_notices = raw.get("notices", [])
+    if not isinstance(raw_notices, list):
+        raise InventoryError("inventory 'notices' must be an array")
     return Inventory(
         positions=positions,
         warnings=tuple(str(item) for item in raw_warnings),
+        notices=tuple(str(item) for item in raw_notices),
     )
 
 
@@ -118,4 +122,5 @@ def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
             for position, value in inventory.positions.items()
         },
         "warnings": list(inventory.warnings),
+        "notices": list(inventory.notices),
     }

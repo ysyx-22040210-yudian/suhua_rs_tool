@@ -126,6 +126,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--negative", action="store_true")
     parser.add_argument(
+        "--expect-partial-load",
+        action="store_true",
+        help="expect one non-fatal NPI_LOAD_PARTIAL global warning",
+    )
+    parser.add_argument(
         "--default-rule",
         action="store_true",
         help="run an offline passing case for an unregistered RS_module",
@@ -297,6 +302,14 @@ def main() -> int:
         raise SystemExit("--collector and --elab-db must be provided together")
     if online and args.generated_rows:
         raise SystemExit("--generated-rows is available only in offline inventory mode")
+    if args.expect_partial_load and not online:
+        raise SystemExit("--expect-partial-load requires online NPI mode")
+    if args.expect_partial_load and (
+        args.negative or args.default_rule or args.generated_rows or args.validate_only
+    ):
+        raise SystemExit(
+            "--expect-partial-load requires a positive online full check"
+        )
     if args.negative and args.generated_rows:
         raise SystemExit("--negative and --generated-rows are mutually exclusive")
     if args.default_rule and online:
@@ -466,6 +479,7 @@ def main() -> int:
     expected_rows = (
         1 if args.negative or args.default_rule else args.generated_rows or 2
     )
+    expected_tree_rows = expected_rows + (1 if args.expect_partial_load else 0)
     sample_position_mapping = not (
         args.negative or args.default_rule or args.generated_rows
     )
@@ -569,10 +583,10 @@ def main() -> int:
             )
             root.destroy()
             return
-        if len(app.result_tree.get_children()) != expected_rows:
+        if len(app.result_tree.get_children()) != expected_tree_rows:
             failed = True
             print(
-                f"GUI_SMOKE_FAIL: expected {expected_rows} result rows",
+                f"GUI_SMOKE_FAIL: expected {expected_tree_rows} result rows",
                 file=sys.stderr,
             )
             root.destroy()
@@ -621,7 +635,7 @@ def main() -> int:
                     root.destroy()
                     return
         if not args.validate_only and not args.generated_rows:
-            first_result = app.result_tree.get_children()[0]
+            first_result = "row-0"
             first_values = app.result_tree.item(first_result, "values")
             expected_group = "DEFAULT_RS" if args.default_rule else "AAAA_BBB"
             expected_instances = "2" if args.default_rule else "6"
@@ -672,6 +686,46 @@ def main() -> int:
                 )
                 root.destroy()
                 return
+            global_findings = raw_report.get("global_findings")
+            inventory_notices = raw_inventory.get("notices", [])
+            if args.expect_partial_load:
+                if (
+                    not isinstance(global_findings, list)
+                    or len(global_findings) != 1
+                    or global_findings[0].get("severity") != "warning"
+                    or global_findings[0].get("code") != "NPI_LOAD_PARTIAL"
+                    or not isinstance(inventory_notices, list)
+                    or len(inventory_notices) != 1
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: partial-load warning evidence is missing",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                global_values = app.result_tree.item("global", "values")
+                if (
+                    len(global_values) < 9
+                    or str(global_values[0]) != "PASS"
+                    or str(global_values[2]) != "GLOBAL"
+                    or str(global_values[8]) != "0E/1W"
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: GLOBAL warning row is not displayed as PASS",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+            elif global_findings or inventory_notices:
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: unexpected global findings or inventory notices",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
             if sample_position_mapping:
                 inventory_positions = raw_inventory.get("positions")
                 if (
@@ -688,7 +742,9 @@ def main() -> int:
                     root.destroy()
                     return
             expected_label = "真门控" if args.negative else "假门控"
-            for record in app._result_records.values():
+            for iid, record in app._result_records.items():
+                if iid == "global":
+                    continue
                 spec = record.get("spec", {})
                 if (
                     not isinstance(spec, dict)
@@ -853,6 +909,8 @@ def main() -> int:
                         )
                         root.destroy()
                         return
+            if args.expect_partial_load:
+                app.result_tree.selection_set("row-0")
             app._on_result_selected()
             if args.negative:
                 finding_children = app.finding_tree.get_children()
@@ -914,7 +972,8 @@ def main() -> int:
             print("GUI_SMOKE_FAIL: negative case has no errors", file=sys.stderr)
             root.destroy()
             return
-        if app.summary_warnings_var.get() != "警告 0":
+        expected_warning_text = "警告 1" if args.expect_partial_load else "警告 0"
+        if app.summary_warnings_var.get() != expected_warning_text:
             failed = True
             print(f"GUI_SMOKE_FAIL: {app.summary_warnings_var.get()}", file=sys.stderr)
             root.destroy()
@@ -970,7 +1029,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -978,6 +1037,7 @@ def main() -> int:
             f"{' position-map=tile_core->top.u_tile' if sample_position_mapping else ''}"
             f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
             f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
+            f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )

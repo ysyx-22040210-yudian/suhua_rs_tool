@@ -284,6 +284,26 @@ class NpiSession {
   bool active_;
 };
 
+std::vector<std::string> queryable_top_instances() {
+  std::vector<std::string> names;
+  npiHandle iterator = npi_iterate(npiInstance, NULL);
+  if (iterator == NULL) {
+    return names;
+  }
+
+  npiHandle top = NULL;
+  while ((top = npi_scan(iterator)) != NULL) {
+    const NPI_BYTE8* value = npi_get_str(npiFullName, top);
+    if (value != NULL && value[0] != '\0') {
+      names.push_back(reinterpret_cast<const char*>(value));
+    }
+    npi_release_handle(top);
+  }
+  std::sort(names.begin(), names.end());
+  names.erase(std::unique(names.begin(), names.end()), names.end());
+  return names;
+}
+
 std::string language_string(NPI_INT32 property, npiHandle object) {
   if (object == NULL) {
     return std::string();
@@ -822,8 +842,9 @@ void write_instance(std::ostream& out, const InstanceInfo& instance,
 }
 
 bool write_inventory(const std::string& path, const PositionResults& positions,
-                     const std::set<std::string>& warnings,
-                     std::string* error) {
+                      const std::set<std::string>& warnings,
+                      const std::set<std::string>& notices,
+                      std::string* error) {
   std::ofstream out(path.c_str(), std::ios::out | std::ios::binary |
                                       std::ios::trunc);
   if (!out) {
@@ -869,6 +890,18 @@ bool write_inventory(const std::string& path, const PositionResults& positions,
     std::set<std::string>::const_iterator next = warning;
     ++next;
     out << (next == warnings.end() ? "\n" : ",\n");
+  }
+  out << "  ],\n  \"notices\": [";
+  if (!notices.empty()) {
+    out << '\n';
+  }
+  for (std::set<std::string>::const_iterator notice = notices.begin();
+       notice != notices.end(); ++notice) {
+    out << "    ";
+    write_json_string(out, *notice);
+    std::set<std::string>::const_iterator next = notice;
+    ++next;
+    out << (next == notices.end() ? "\n" : ",\n");
   }
   out << "  ]\n}\n";
   out.flush();
@@ -916,12 +949,24 @@ int run(int argc, char** argv) {
     std::cerr << "error[NPI_INIT]: npi_init failed\n";
     return kNpiInitError;
   }
+  std::set<std::string> notices;
   if (!npi_load_design(npi_argc, npi_argv)) {
-    std::cerr << "error[NPI_LOAD]: npi_load_design failed for Verdi "
-                 "elaborated KDB: "
-              << elab_db_path << '\n';
-    session.finish();
-    return kNpiLoadError;
+    const std::vector<std::string> top_instances = queryable_top_instances();
+    if (top_instances.empty()) {
+      std::cerr << "error[NPI_LOAD]: npi_load_design reported errors and no "
+                   "top instance is queryable in Verdi elaborated KDB: "
+                << elab_db_path << '\n';
+      session.finish();
+      return kNpiLoadError;
+    }
+
+    std::ostringstream message;
+    message << "npi_load_design reported elaboration errors, but "
+            << top_instances.size() << " top instance(s) remain queryable"
+            << " (first: " << top_instances.front()
+            << "); continuing with fail-closed RTL evidence checks";
+    notices.insert(message.str());
+    std::cerr << "warning[NPI_LOAD_PARTIAL]: " << message.str() << '\n';
   }
 
   Collector collector(options.clk_port, options.rst_port);
@@ -938,7 +983,7 @@ int run(int argc, char** argv) {
     return kNpiEndError;
   }
   if (!write_inventory(options.output_path, results, collector.warnings(),
-                       &error)) {
+                       notices, &error)) {
     std::cerr << "error[OUTPUT]: " << error << '\n';
     return kOutputError;
   }

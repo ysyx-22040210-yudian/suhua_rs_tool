@@ -16,6 +16,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md)
 - [完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_FULL_INSTANCE_2026-07-25.md)
 - [Position 映射库与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_POSITION_MAPPING_2026-07-25.md)
 - [动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md)
@@ -200,7 +201,7 @@ python -m rscheck check \
   --csv-report output/rs_report.csv
 ```
 
-CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。每行 `spec.position` 是解析后的完整路径，命中映射时 `spec.position_alias` 保存 Excel 简写，否则为空。report v3 还包含每行 `module_rule`、`step_check.physical_instances`、`step_check.effective_step`、逐实例 `contributions`，以及实例、端口、CRG 和全部 effective `parameters` 证据。CSV 同步包含 `position_alias`、`physical_instances`、`effective_step` 与 `step_contributions`。
+CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。每行 `spec.position` 是解析后的完整路径，命中映射时 `spec.position_alias` 保存 Excel 简写，否则为空。report v3 还包含每行 `module_rule`、`step_check.physical_instances`、`step_check.effective_step`、逐实例 `contributions`，以及实例、端口、CRG 和全部 effective `parameters` 证据。CSV 同步包含 `position_alias`、`physical_instances`、`effective_step` 与 `step_contributions`。inventory 的 `warnings` 表示 traversal/driver 证据不完整，会转换为硬错误；可选 `notices` 当前用于记录可继续检查的 partial KDB，并在报告中显示非致命 `NPI_LOAD_PARTIAL` warning。
 
 `--inventory` 是面向测试和问题复现的离线模式，不证明 inventory 与当前 RTL 同步。生产签核应使用 `--collector --elab-db` 从当前 Verdi elaborated KDB 重新采集。
 
@@ -226,7 +227,7 @@ make -C npi \
 
 GNU Make 会按空白拆分目标名，因此仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；Makefile 会对此提前报错。该限制只影响 collector/端到端构建，独立 GUI 启动器仍支持 KDB 路径包含空格。
 
-构建产物默认位于 `npi/build/rs_npi_collector`。采集器使用手册中的 `npi_init`、`npi_load_design`、`npi_handle_by_name`、`npiInternalScope`、`npiPort`、`npiHighConn`，并用 Netlist Model 的 `npiNlDriver` 追踪 clk 驱动。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。
+构建产物默认位于 `npi/build/rs_npi_collector`。采集器使用手册中的 `npi_init`、`npi_load_design`、`npi_handle_by_name`、`npiInternalScope`、`npiPort`、`npiHighConn`，并用 Netlist Model 的 `npiNlDriver` 追踪 clk 驱动。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。若 load 返回 0，collector 会按 NPI 手册示例继续探测 top：至少一个 top 可查询时继续并报告 `NPI_LOAD_PARTIAL`；没有任何 top 可查询时才退出 11。后续 position、实例、端口、parameter 和 CRG 证据仍全部 fail-closed。
 
 运行前设置 `VERDI_HOME`。Python runner 会自动把对应 NPI library 目录加入采集器子进程的 `LD_LIBRARY_PATH`：
 
@@ -312,7 +313,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 - clk/rst 的复合表达式（concat、运算、mux 等）不会做字符串猜测，而是报 `UNSUPPORTED_CONNECTION`。
 - `CRG_source` 默认与第一个唯一上游模块的 `npiDefName` 精确比较；以 NPI module cell 表示的 clock gate/buffer 会被视作 source，primitive gate/buffer 会继续向上追踪。多驱动或顶层输入等无法确定来源的场景会 fail-closed。
 - `RS_CFG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
-- 采集器产生的任何 NPI traversal/driver warning 都按 `NPI_UNRESOLVED` 硬错误处理，避免层次截断后误报 PASS。
+- inventory `warnings` 中的 NPI traversal/driver 问题都按 `NPI_UNRESOLVED` 硬错误处理；partial load 本身写入可选 `notices` 并显示为非致命 warning，只有目标证据仍完整时检查才可能 PASS。
 - 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
 - SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式；单个元素可按完整本地名填写，按数组前缀分组则需要定制 suffix 规则。
 
@@ -322,7 +323,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、partial-load notice、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、partial KDB、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 

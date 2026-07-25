@@ -141,4 +141,9 @@ module top (
         .data_out (data_out),
         .ctrl_out (ctrl_out)
     );
+
+`ifdef RSCHECK_PARTIAL_LOAD_FIXTURE
+    // Intentional unresolved instance used by the partial-load VM regression.
+    intentionally_missing_module u_expected_elaboration_error ();
+`endif
 endmodule

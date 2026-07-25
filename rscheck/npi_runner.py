@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -42,6 +43,32 @@ def _decode_collector_output(value: bytes | str | None) -> str:
     if isinstance(value, str):
         return value
     return value.decode("utf-8", errors="replace")
+
+
+def _bounded_collector_output(value: bytes | str | None, limit: int = 4000) -> str:
+    text = _decode_collector_output(value).strip()
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n... collector output truncated ...\n" + text[-half:]
+
+
+def _collector_diagnostics(
+    completed: subprocess.CompletedProcess, temp_dir: Path
+) -> str:
+    streams = []
+    for name, value in (("stdout", completed.stdout), ("stderr", completed.stderr)):
+        text = _bounded_collector_output(value)
+        if text:
+            streams.append(f"{name}:\n{text}")
+    for log_path in sorted(temp_dir.glob("*Log/compiler.log")):
+        try:
+            text = _bounded_collector_output(log_path.read_bytes())
+        except OSError:
+            continue
+        if text:
+            streams.append(f"{log_path.relative_to(temp_dir)}:\n{text}")
+    return "\n".join(streams)
 
 
 def collect_inventory(
@@ -108,11 +135,7 @@ def collect_inventory(
                     f"failed to decode NPI collector output: {exc}"
                 ) from exc
             if completed.returncode != 0:
-                detail = _decode_collector_output(
-                    completed.stderr or completed.stdout
-                ).strip()
-                if len(detail) > 4000:
-                    detail = detail[-4000:]
+                detail = _collector_diagnostics(completed, temp_dir)
                 raise InventoryError(
                     f"NPI collector exited with code {completed.returncode}"
                     + (f":\n{detail}" if detail else "")
@@ -120,6 +143,13 @@ def collect_inventory(
             if not output_path.is_file():
                 raise InventoryError("NPI collector succeeded but did not create its inventory")
             inventory = load_inventory(output_path)
+            if inventory.notices:
+                detail = _collector_diagnostics(completed, temp_dir)
+                if detail:
+                    print(
+                        "NPI collector partial-load diagnostics:\n" + detail,
+                        file=sys.stderr,
+                    )
             if keep_inventory is not None:
                 destination = Path(keep_inventory).resolve()
                 try:

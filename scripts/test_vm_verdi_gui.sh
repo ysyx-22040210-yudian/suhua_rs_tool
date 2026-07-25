@@ -439,6 +439,116 @@ if grep -q 'not found' "$TEST_ROOT/collector_ldd.txt"; then
   fail "collector has unresolved shared libraries"
 fi
 
+PARTIAL_ELAB_ROOT="$TEST_ROOT/partial_load_elab"
+PARTIAL_ELAB_DB="$PARTIAL_ELAB_ROOT/partial.elab++"
+PARTIAL_POSITIONS="$TEST_ROOT/partial_load_positions.txt"
+PARTIAL_INVENTORY="$TEST_ROOT/partial_load_inventory.json"
+PARTIAL_REPORT="$TEST_ROOT/partial_load_report.json"
+PARTIAL_STDOUT="$TEST_ROOT/partial_load.stdout"
+PARTIAL_STDERR="$TEST_ROOT/partial_load.stderr"
+PARTIAL_CHECK_LOG="$TEST_ROOT/partial_load_check.log"
+PARTIAL_GUI_LOG="$TEST_ROOT/partial_load_gui.log"
+mkdir -p "$PARTIAL_ELAB_ROOT"
+
+cd "$PARTIAL_ELAB_ROOT"
+"$VERICOM_BIN" +define+RSCHECK_PARTIAL_LOAD_FIXTURE \
+  -sv "$PROJECT_ROOT/examples/rtl/rs_example.sv"
+"$ELABCOM_BIN" -top top -elab "$PARTIAL_ELAB_DB"
+[ -d "$PARTIAL_ELAB_DB" ] || fail "partial-load elabcom did not create a KDB"
+printf 'top.u_tile\n' >"$PARTIAL_POSITIONS"
+
+set +e
+LD_LIBRARY_PATH="$NPI_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$COLLECTOR" \
+    --positions "$PARTIAL_POSITIONS" \
+    --output "$PARTIAL_INVENTORY" \
+    --clk-port clk \
+    --rst-port rst \
+    --elab-db "$PARTIAL_ELAB_DB" \
+    >"$PARTIAL_STDOUT" 2>"$PARTIAL_STDERR"
+PARTIAL_COLLECTOR_RC=$?
+set -e
+cat "$PARTIAL_STDOUT"
+cat "$PARTIAL_STDERR"
+[ "$PARTIAL_COLLECTOR_RC" -eq 0 ] ||
+  fail "collector rejected a partial KDB whose top remains queryable"
+grep -Fq 'warning[NPI_LOAD_PARTIAL]' "$PARTIAL_STDERR"
+
+"$PYTHON_BIN" - "$PARTIAL_INVENTORY" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    inventory = json.load(stream)
+notices = inventory.get("notices")
+if not isinstance(notices, list) or len(notices) != 1:
+    raise SystemExit("partial-load inventory must contain one notice: {!r}".format(notices))
+if "top instance(s) remain queryable" not in notices[0]:
+    raise SystemExit("unexpected partial-load notice: {!r}".format(notices[0]))
+if inventory.get("warnings") != []:
+    raise SystemExit("partial-load fixture has unresolved traversal warnings")
+position = inventory.get("positions", {}).get("top.u_tile", {})
+if position.get("found") is not True:
+    raise SystemExit("top.u_tile was not queryable after partial load")
+names = {item.get("name") for item in position.get("instances", [])}
+if "CTRL_RS_D0" not in names or "AAAA_BBB_C0" not in names:
+    raise SystemExit("partial-load inventory is missing expected RS instances: {!r}".format(names))
+print("partial NPI load evidence OK: load reported errors but requested RTL remained queryable")
+PY
+
+cd "$PROJECT_ROOT"
+"$PYTHON_BIN" -m rscheck check \
+  --excel "$PROJECT_ROOT/examples/specs.csv" \
+  --config "$PROJECT_ROOT/config/rscheck.example.json" \
+  --collector "$COLLECTOR" \
+  --elab-db "$PARTIAL_ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout "$NPI_TIMEOUT" \
+  --json-report "$PARTIAL_REPORT" \
+  2>&1 | tee "$PARTIAL_CHECK_LOG"
+grep -Fq 'RESULT: PASS | rows=2 errors=0 warnings=1' "$PARTIAL_CHECK_LOG"
+grep -Fq '[WARNING] NPI_LOAD_PARTIAL:' "$PARTIAL_CHECK_LOG"
+assert_no_collector_errors "$PARTIAL_CHECK_LOG"
+
+"$PYTHON_BIN" - "$PARTIAL_REPORT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    report = json.load(stream)
+if report.get("summary") != {
+    "passed": True,
+    "rows": 2,
+    "passed_rows": 2,
+    "failed_rows": 0,
+    "errors": 0,
+    "warnings": 1,
+}:
+    raise SystemExit("unexpected partial-load summary: {!r}".format(report.get("summary")))
+findings = report.get("global_findings", [])
+if len(findings) != 1 or findings[0].get("code") != "NPI_LOAD_PARTIAL":
+    raise SystemExit("partial-load report warning is missing: {!r}".format(findings))
+PY
+
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$PARTIAL_ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout "$NPI_TIMEOUT" \
+  --iterations 1 \
+  --expect-partial-load \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$PARTIAL_GUI_LOG"
+grep -Fq \
+  'state=PASS rows=行数 2 errors=错误 0 warnings=警告 1 mode=online case=partial-load iterations=1' \
+  "$PARTIAL_GUI_LOG"
+grep -Fq 'notice=NPI_LOAD_PARTIAL' "$PARTIAL_GUI_LOG"
+grep -Fq 'contract=elab-only' "$PARTIAL_GUI_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$PARTIAL_GUI_LOG"
+assert_no_collector_errors "$PARTIAL_GUI_LOG"
+
 ELAB_ROOT="$TEST_ROOT/example_elab"
 ELAB_DB="$ELAB_ROOT/kdb.elab++"
 mkdir -p "$ELAB_ROOT"
@@ -857,6 +967,7 @@ grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_LOAD_LOG"
 
 for gui_log in \
   "$ONLINE_GUI_LOG" \
+  "$PARTIAL_GUI_LOG" \
   "$ONLINE_NEGATIVE_LOG" \
   "$DEFAULT_RULE_LOG" \
   "$OFFLINE_STRESS_LOG" \
@@ -868,8 +979,10 @@ assert_no_unexpected_collector_logs
 assert_verdi_still_ready
 
 trap - ERR
-echo "PASS: arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
+echo "PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
 echo "ELAB_DB=$ELAB_DB"
+echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
+echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
 echo "GUI_LOGS=$ONLINE_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"

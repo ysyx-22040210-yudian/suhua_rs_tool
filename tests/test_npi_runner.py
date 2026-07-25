@@ -5,6 +5,8 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -199,6 +201,89 @@ class NpiRunnerTests(unittest.TestCase):
                     message = str(raised.exception)
                     self.assertIn("exited with code 11", message)
                     self.assertIn("collector failure: \ufffd", message)
+
+    def test_collector_failure_preserves_stdout_and_stderr_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+            completed = subprocess.CompletedProcess(
+                [],
+                11,
+                stdout=b"compiler.log: unresolved module",
+                stderr=b"error[NPI_LOAD]: no queryable top",
+            )
+
+            with patch("rscheck.npi_runner.subprocess.run", return_value=completed):
+                with self.assertRaises(InventoryError) as raised:
+                    collect_inventory(
+                        collector,
+                        [self._spec()],
+                        RtlConfig(),
+                        elab_db=elab_db,
+                    )
+
+            message = str(raised.exception)
+            self.assertIn("stdout:\ncompiler.log: unresolved module", message)
+            self.assertIn("stderr:\nerror[NPI_LOAD]: no queryable top", message)
+
+    def test_partial_load_preserves_streams_and_compiler_log(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+
+            def completed(command, **kwargs):
+                temp_dir = Path(kwargs["cwd"])
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "positions": {
+                                "top.u": {"found": False, "instances": []}
+                            },
+                            "warnings": [],
+                            "notices": ["top remains queryable after partial load"],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                log_dir = temp_dir / "collectorLog"
+                log_dir.mkdir()
+                (log_dir / "compiler.log").write_text(
+                    "elaboration error detail", encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout=b"Total 1 error",
+                    stderr=b"warning[NPI_LOAD_PARTIAL]",
+                )
+
+            diagnostic = StringIO()
+            with patch(
+                "rscheck.npi_runner.subprocess.run", side_effect=completed
+            ), redirect_stderr(diagnostic):
+                inventory = collect_inventory(
+                    collector,
+                    [self._spec()],
+                    RtlConfig(),
+                    elab_db=elab_db,
+                )
+
+            self.assertEqual(
+                inventory.notices, ("top remains queryable after partial load",)
+            )
+            message = diagnostic.getvalue()
+            self.assertIn("stdout:\nTotal 1 error", message)
+            self.assertIn("stderr:\nwarning[NPI_LOAD_PARTIAL]", message)
+            self.assertIn("collectorLog", message)
+            self.assertIn("elaboration error detail", message)
 
     def test_subprocess_unicode_error_is_controlled(self) -> None:
         with tempfile.TemporaryDirectory() as name:

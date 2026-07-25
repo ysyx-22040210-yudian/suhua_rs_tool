@@ -436,7 +436,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 collector、用当前示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
+Verdi 端到端脚本会运行全量测试、构建 collector，先生成故意带 elaboration error 但 top 可查询的 partial KDB，要求 CLI 和工具 GUI 都以 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning 完成；随后用 clean 示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 clean KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
 
 正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
@@ -485,6 +485,9 @@ bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```text
 Ran ... tests in ...
 OK
+partial NPI load evidence OK: load reported errors but requested RTL remained queryable
+RESULT: PASS | rows=2 errors=0 warnings=1
+[WARNING] NPI_LOAD_PARTIAL: ...
 Verdi GUI loaded elaborated top 'top' after ...
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
@@ -510,7 +513,8 @@ PASS: position mapping, fresh KDB online positive/negative GUI checks, and offli
 - `Verdi not found`：设置 `VERDI_BIN`、`VERDI_HOME` 或 `NOVAS_INST_DIR`，或把 `verdi` 加入 `PATH`。
 - `no new Verdi X11 window title matched VERDI_READY_REGEX`：脚本看到了的窗口不代表 elaboration 已加载完成；检查 GUI 日志、license、DISPLAY 权限、KDB、Verdi/KDB 版本和实际窗口标题。必要时调高 `GUI_START_TIMEOUT`；仅当该 Verdi 版本确实使用不同标题格式时才覆盖 `VERDI_READY_REGEX`，且表达式仍须匹配目标 top，不能放宽为任意 Verdi 窗口。
 - `npi.h` 或 `libNPI.so` 找不到：设置 `NPI_INC_DIR` 和 `NPI_LIB_DIR`；后者必须直接包含 `libNPI.so`。
-- `npi_load_design failed`：确认 KDB 来自 `elabcom -elab`、内容完整，并与当前 Verdi/NPI 版本兼容；`work.lib++` 及其符号链接别名会更早被 Python runner 拒绝。
+- `warning[NPI_LOAD_PARTIAL]`：load 报告 elaboration error，但至少一个 top 可查询；工具会继续并在 report/GUI 显示非致命 warning。逐项检查目标 position、实例、端口、parameter 和 CRG，相关证据缺失仍会失败。
+- `error[NPI_LOAD]` / collector 退出 11：load 返回 0 且没有任何 top 可查询。确认 KDB 来自 `elabcom -elab`，执行 `ldd "$COLLECTOR" | grep libNPI.so` 核对运行库与 Verdi/KDB 版本，并查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`；`work.lib++` 及其符号链接别名会更早被拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
 - 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
 - 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`。

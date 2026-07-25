@@ -1588,6 +1588,9 @@ class RsCheckApp:
         self.summary_warnings_var.set(f"警告 {summary['warnings']}")
 
         if report.global_findings:
+            global_passed = not any(
+                item.get("severity") == "error" for item in report.global_findings
+            )
             global_record: Mapping[str, Any] = {
                 "spec": {
                     "row": "-",
@@ -1597,7 +1600,7 @@ class RsCheckApp:
                     "RS_CFG_EN": "",
                     "step": "",
                 },
-                "passed": False,
+                "passed": global_passed,
                 "matched_instances": [],
                 "findings": list(report.global_findings),
             }

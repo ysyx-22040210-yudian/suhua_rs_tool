@@ -592,6 +592,10 @@ def check_specs(
         Finding(severity="error", code="NPI_UNRESOLVED", message=warning)
         for warning in inventory.warnings
     ]
+    global_findings.extend(
+        Finding(severity="warning", code="NPI_LOAD_PARTIAL", message=notice)
+        for notice in inventory.notices
+    )
 
     owners_by_position: dict[str, dict[str, list[SpecRow]]] = {}
     for row in rows:

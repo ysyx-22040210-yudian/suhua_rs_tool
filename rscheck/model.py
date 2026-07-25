@@ -213,6 +213,7 @@ class PositionInventory:
 class Inventory:
     positions: Mapping[str, PositionInventory]
     warnings: tuple[str, ...] = ()
+    notices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

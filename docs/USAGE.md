@@ -606,11 +606,12 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
       ]
     }
   },
-  "warnings": []
+  "warnings": [],
+  "notices": []
 }
 ```
 
-加载器要求 `schema_version=2`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。inventory 中任何 `warnings` 都会转换为全局 `NPI_UNRESOLVED` 硬错误，避免不完整采集误报 PASS。
+加载器要求 `schema_version=2`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。`warnings` 是必需数组，其中的 traversal/driver 问题会转换为全局 `NPI_UNRESOLVED` 硬错误。`notices` 是向后兼容的可选数组，旧 schema v2 可省略；当前 collector 用它记录返回 0 但 top 仍可查询的 partial load，报告将其显示为非致命 `NPI_LOAD_PARTIAL` warning。
 
 ## 8. 构建 NPI collector
 
@@ -744,8 +745,8 @@ python -m rscheck check \
 2. 解析 position 简写，提取所有唯一完整 `position` 写入临时文本文件；简写不会送入 collector；
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
-5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；
-6. collector 遍历层次、端口、逐实例 effective parameters 和 clk driver，生成 schema v2 inventory；
+5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；若 load 返回 0，则枚举 top，存在可查询 top 时记录 partial notice 并继续，否则退出 11；
+6. collector 遍历层次、端口、逐实例 effective parameters 和 clk driver，生成 schema v2 inventory；任何目标证据缺失仍 fail-closed；
 7. Python 加载 inventory，执行组、拍数、模块、clk/rst、CRG 和 `RS_CFG_EN` 检查；
 8. 可选保存 inventory 和 JSON/CSV 报告。
 
@@ -821,7 +822,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 
 - `schema_version`：当前固定为 `3`；注意 NPI inventory 的 schema 仍为 `2`；
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
-- `global_findings`：例如 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`；
+- `global_findings`：例如硬错误 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`，或非致命 warning `NPI_LOAD_PARTIAL`；
 - `rows[].spec`：规范化后的九字段规格和源行号；`position` 是解析后的完整 RTL 路径，命中映射时 `position_alias` 保存 Excel 原始简写，未命中时为空；`RS_CFG_EN` 可以是空字符串；
 - `rows[].module_rule`：本行最终采用的规则；无显式覆盖时也会记录隐式默认的 `has_rs_cfg_en=true` 与空 `step_parameters`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
@@ -860,7 +861,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `3` | positions 文件不可读或没有有效路径 |
 | `4` | elaborated KDB 路径不存在、不可访问或不是目录 |
 | `10` | `npi_init` 失败 |
-| `11` | `npi_load_design` 加载 KDB 失败 |
+| `11` | `npi_load_design` 返回 0，且 NPI Language Model 中没有任何可查询 top |
 | `12` | `npi_end` 失败 |
 | `13` | inventory 输出失败 |
 | `14` | 未预期内部异常 |
@@ -885,7 +886,8 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
 | `unexpected argument` / `unrecognized arguments` | 仍在使用旧 `-- -f/-sv/-lib` 透传 | 删除透传，先在外部流程生成 KDB，再只传 `--elab-db` |
 | `npi_init failed` | NPI 环境、license 或版本问题 | 检查 license、Verdi 安装和平台库 |
-| `npi_load_design failed` | KDB 损坏、版本不兼容、未完成 elaboration 或 top 错误 | 确认输入是 `elabcom -elab` 产物；用相同 Verdi 流程重新生成 KDB 并验证 top；`work.lib++` 会在启动 collector 前被拒绝 |
+| `NPI_LOAD_PARTIAL` | `npi_load_design` 报告 elaboration error，但至少一个 top 仍可查询 | 工具继续检查并显示非致命 warning；核对 report 中 position、实例、端口、parameter 和 CRG 证据，任何相关缺失仍会使检查失败 |
+| `error[NPI_LOAD]` / collector 退出 11 | load 返回 0，且没有任何 top 可查询 | 确认 collector 的 `ldd`、`VERDI_HOME` 与生成 KDB 的工具版本一致；查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`，必要时重新 elaboration；`work.lib++` 会更早被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
 | `POSITION_NOT_FOUND` | 映射后的路径不属于当前 elaborated top；或 Excel 简写未命中数据库，被当作完整路径直通 | 查看 report 的 `position`/`position_alias`，核对映射键、映射值和同一 KDB 中的完整 hierarchy |
 | `GROUP_NOT_FOUND` | 没有实例与完整本地名相同，也没有实例同时满足前缀和 suffix regex | 核对非空 `RS_inst` 是否为本地名/前缀，并核对 `rtl.suffix_regex` |
@@ -912,6 +914,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到参数但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CFG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst`；完整名也可能与较短前缀重叠 | 重新设计互不重叠的组名；当前没有 exact-only 模式 |
 | `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
+| `NPI_LOAD_PARTIAL` | KDB 有 elaboration error，但 top 可查询 | severity 为 warning；仅表示允许继续，不能覆盖后续任何硬 finding |
 | `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
 | `multiple usable X11 displays` | 自动探测到多个有效 DISPLAY | 设置 `GUI_DISPLAY`，必要时同时设置 `GUI_USER` 或 `GUI_XAUTHORITY` |
 | `no active gnome-session-binary session` | 使用了仓库旧版或外部旧启动脚本 | 更新仓库；工具 GUI 用 `scripts/launch_rscheck_gui.sh --probe-only`，Verdi 用 `scripts/launch_verdi_gui.sh --probe-only`；当前实现不要求 GNOME |
@@ -928,7 +931,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 - CRG 追踪要求唯一 module cell 来源；顶层输入、多驱动和无法解析的 primitive 网络会 fail-closed。
 - `RS_CFG_EN` 和 `step_parameters` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
 - `allow_leaf_signal_match=true` 会放宽层次比较，可能让不同 scope 的同名信号误匹配。
-- 任意 collector warning 都会升级为 `NPI_UNRESOLVED` error。
+- inventory `warnings` 中的 traversal/driver 问题会升级为 `NPI_UNRESOLVED` error；partial-load stderr warning 写入 inventory `notices`，在 report/GUI 中保持非致命 `NPI_LOAD_PARTIAL`。
 - 在线模式只消费现有 elaborated KDB，不接收 RTL/filelist，也不负责 RTL 编译或 elaboration。
 - 离线 inventory 是可信快照例外，不包含来源证明；它不能替代新鲜 KDB 的在线采集。
 - NPI 真实构建和在线运行依赖特定 Synopsys 版本、平台动态库和 license；离线 Python 测试不能覆盖这些环境因素。

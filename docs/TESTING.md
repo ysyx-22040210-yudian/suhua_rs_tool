@@ -27,6 +27,7 @@
 | V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 新窗口标题匹配 `VERDI_READY_REGEX`，明确显示 elaborated top `top` |
 | N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过；首组 physical=6、effective=5、expected=5，report schema v3 |
 | N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 `RS_CFG_EN` 标签差异 |
+| N3 | Linux + Verdi/NPI + Tk | 带 elaboration error 但 top 可查询的 partial KDB | `0` | collector/CLI/GUI 继续；2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
 | G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
@@ -71,7 +72,7 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2、report schema v3、旧 schema 拒绝、elab-only CLI 契约、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
 实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/clk/rst/CRG 检查并计入物理实例数及规则计算后的有效 `step`，但不得进入 tag/index/连续编号判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
@@ -611,7 +612,7 @@ $ELAB_ROOT/work.lib++       # vericom 编译库，不可传给生产工具
 $ELAB_ROOT/kdb.elab++       # elabcom elaborated KDB，可传给 --elab-db
 ```
 
-`--elab-db` 不强制目录名必须以 `.elab++` 结尾，因为 `elabcom -elab <path>` 允许自定义名称；但该路径必须存在且必须是目录。真正的 KDB 有效性由 `npi_load_design -elab <path>` 判定。
+`--elab-db` 不强制目录名必须以 `.elab++` 结尾，因为 `elabcom -elab <path>` 允许自定义名称；但该路径必须存在且必须是目录。collector 调用 `npi_load_design -elab <path>`；返回 0 时还会按手册示例枚举 top。存在可查询 top 才继续，并由后续 position/实例/端口/parameter/CRG 检查保持 fail-closed；无 top 才退出 11。
 
 ## 8. 在线正例
 
@@ -1051,6 +1052,11 @@ ERROR: --elab-db requires --collector
 ```text
 example_elab/work.lib++
 example_elab/kdb.elab++
+partial_load_elab/partial.elab++
+partial_load_inventory.json
+partial_load_report.json
+partial_load_check.log
+partial_load_gui.log
 positive_inventory.json
 positive_report.json
 positive_report.csv
@@ -1105,13 +1111,13 @@ work_lib_as_elab.log
 - 相对路径按运行命令时的当前目录解析；自动化中建议使用绝对路径。
 - `.elab++` 不是强制后缀，但路径内容必须是 `elabcom` 生成的 elaborated KDB。
 
-### 14.7 `error[NPI_LOAD]` / `npi_load_design failed`
+### 14.7 `NPI_LOAD_PARTIAL` 或 `error[NPI_LOAD]`
 
 - 当前 Python runner 会在 collector 启动前拒绝 `work.lib++` 及其符号链接别名；若看到对应错误，改传真正的 elaborated KDB。
-- 对真正进入 `npi_load_design` 后的失败，检查 KDB 是否损坏、未完成 elaboration，或与当前 Verdi/NPI 版本不兼容。
-- 返回第 7 节重新执行 `elabcom -top <top> -elab <path>`。
-- 确认生成 KDB 时使用的 Verdi 版本与运行 collector 时兼容。
-- 确认 `-top` 与 Excel 中 `position` 的层次根一致。
+- `warning[NPI_LOAD_PARTIAL]` 表示 load 返回 0，但 NPI 仍能枚举 top。该 warning 本身不阻止 PASS；继续核对报告中所有目标证据，不能用它忽略 `POSITION_NOT_FOUND`、端口、parameter 或 CRG 错误。
+- `error[NPI_LOAD]` / 退出 11 表示 load 返回 0 且没有任何 top 可查询。返回第 7 节重建 KDB，并确认 `-top` 与 Excel 层次根一致。
+- 执行 `ldd "$COLLECTOR" | grep libNPI.so`，确认运行时库、`VERDI_HOME`、PATH 中的 Verdi 与生成 KDB 的版本/平台一致。
+- 直接运行 collector 时分别保存 stdout/stderr，并查看当前工作目录下 `rs_npi_collectorLog/compiler.log`。Python runner 在失败时会同时保留两个输出流的首尾诊断。
 
 ### 14.8 正例出现 `POSITION_NOT_FOUND`
 
@@ -1211,7 +1217,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 在当前 shell 已能正常启动 Verdi 的图形 shell 中执行。正式 VM 复现推荐使用仓库外层 fresh-checkout 驱动；它默认测试克隆时的 `origin/main`，运行根目录位于当前用户 `$HOME`，也可用 `VM_RUN_BASE` 的绝对路径指向其他可写目录：
 

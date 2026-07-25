@@ -430,9 +430,12 @@ class CheckerTests(unittest.TestCase):
         )
 
     def test_inventory_parameters_round_trip(self) -> None:
-        raw = inventory_to_dict(self.inventory)
+        raw = inventory_to_dict(
+            replace(self.inventory, notices=("partial load remains queryable",))
+        )
         instance = raw["positions"]["top.u_tile"]["instances"][0]
         self.assertEqual(raw["schema_version"], 2)
+        self.assertEqual(raw["notices"], ["partial load remains queryable"])
         self.assertEqual(instance["parameters"]["RS_CFG_EN"], "0")
         self.assertEqual(instance["parameters"]["WIDTH"], "1")
 
@@ -451,6 +454,18 @@ class CheckerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(InventoryError, "warnings.*required"):
             self._mutated_inventory(mutate)
+
+    def test_inventory_notices_are_optional_but_must_be_an_array(self) -> None:
+        def omit(raw) -> None:
+            raw.pop("notices", None)
+
+        self.assertEqual(self._mutated_inventory(omit).notices, ())
+
+        def malformed(raw) -> None:
+            raw["notices"] = "not-an-array"
+
+        with self.assertRaisesRegex(InventoryError, "notices.*array"):
+            self._mutated_inventory(malformed)
 
     def test_missing_or_malformed_parameter_inventory_is_rejected(self) -> None:
         mutations = (
@@ -670,6 +685,21 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, warned, self.rtl, self.rules)
         self.assertFalse(report.passed)
         self.assertEqual(report.global_findings[0].code, "NPI_UNRESOLVED")
+
+    def test_partial_load_notice_is_visible_but_nonfatal(self) -> None:
+        noticed = replace(
+            self.inventory,
+            notices=(
+                "npi_load_design reported elaboration errors, but top remains queryable",
+            ),
+        )
+        report = check_specs(self.specs, noticed, self.rtl, self.rules)
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.error_count, 0)
+        self.assertEqual(report.warning_count, 1)
+        self.assertEqual(report.global_findings[0].severity, "warning")
+        self.assertEqual(report.global_findings[0].code, "NPI_LOAD_PARTIAL")
 
     def test_optional_or_non_numeric_index_group_is_controlled_config_error(self) -> None:
         bad = replace(self.rtl, suffix_regex=r".+(?P<index>[A-Z]+)?")
