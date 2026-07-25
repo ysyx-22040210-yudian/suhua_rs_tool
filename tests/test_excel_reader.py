@@ -178,9 +178,17 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertEqual(rows[0].rs_cfg_en, "假门控")
 
     def test_repository_excel_template_matches_example_csv(self) -> None:
-        config = load_config(ROOT / "config" / "rscheck.example.json").excel
-        xlsx_rows = read_spec_rows(ROOT / "examples" / "RS_Check_Excel_Template.xlsx", config)
-        csv_rows = read_spec_rows(ROOT / "examples" / "specs.csv", config)
+        config = load_config(ROOT / "config" / "rscheck.example.json")
+        xlsx_rows = read_spec_rows(
+            ROOT / "examples" / "RS_Check_Excel_Template.xlsx",
+            config.excel,
+            config.position_mappings,
+        )
+        csv_rows = read_spec_rows(
+            ROOT / "examples" / "specs.csv",
+            config.excel,
+            config.position_mappings,
+        )
 
         def values(row: object) -> tuple[object, ...]:
             return tuple(
@@ -190,6 +198,7 @@ class ExcelReaderTests(unittest.TestCase):
                     "rs_module",
                     "rs_inst",
                     "position",
+                    "position_alias",
                     "step",
                     "clk",
                     "rst",
@@ -199,6 +208,12 @@ class ExcelReaderTests(unittest.TestCase):
             )
 
         self.assertEqual([values(row) for row in xlsx_rows], [values(row) for row in csv_rows])
+        self.assertTrue(
+            all(
+                row.position == "top.u_tile" and row.position_alias == "tile_core"
+                for row in xlsx_rows
+            )
+        )
 
     def test_formula_in_mapped_cell_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -284,6 +299,74 @@ class ExcelReaderTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(WorkbookError, "duplicate group"):
                 read_spec_rows(path, ExcelConfig(sheet=1, columns=COLUMNS))
+
+    def test_position_alias_is_resolved_and_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "alias.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,tile0,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {"tile0": "top.cluster.u_tile0"},
+            )
+        self.assertEqual(rows[0].position, "top.cluster.u_tile0")
+        self.assertEqual(rows[0].position_alias, "tile0")
+        self.assertEqual(rows[0].as_dict()["position"], "top.cluster.u_tile0")
+        self.assertEqual(rows[0].as_dict()["position_alias"], "tile0")
+
+    def test_unmapped_position_passes_through_as_full_path(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "full_path.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.cluster.u_tile0,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {"another_alias": "top.other"},
+            )
+        self.assertEqual(rows[0].position, "top.cluster.u_tile0")
+        self.assertEqual(rows[0].position_alias, "")
+
+    def test_position_mapping_is_exact_and_one_level(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "one_level.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,tile0,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {"tile0": "tile1", "tile1": "top.cluster.u_tile1"},
+            )
+        self.assertEqual(rows[0].position, "tile1")
+        self.assertEqual(rows[0].position_alias, "tile0")
+
+    def test_duplicate_group_after_position_resolution_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "resolved_duplicate.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,tile0,1,clk,rst,crg,\n"
+                "B,pipe,PFX,top.cluster.u_tile0,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                WorkbookError, "duplicate group .* after position resolution"
+            ):
+                read_spec_rows(
+                    path,
+                    ExcelConfig(sheet=1, columns=COLUMNS),
+                    {"tile0": "top.cluster.u_tile0"},
+                )
 
     def test_non_integral_and_scientific_steps_are_rejected(self) -> None:
         for value in ("-1", "2.5", "2e0"):

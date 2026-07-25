@@ -16,6 +16,9 @@
     "CRG_source": 8,
     "RS_CFG_EN": 9
   },
+  "position_mappings": {
+    "tile_core": "top.u_tile"
+  },
   "rtl": {
     "clk_port": "clk",
     "rst_port": "rst",

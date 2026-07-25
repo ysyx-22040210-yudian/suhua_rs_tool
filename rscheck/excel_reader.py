@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 from xml.etree import ElementTree as ET
 
-from .model import FIELD_NAMES, REQUIRED_ROW_FIELDS, ExcelConfig, SpecRow, WorkbookError
+from .model import (
+    FIELD_NAMES,
+    REQUIRED_ROW_FIELDS,
+    ExcelConfig,
+    SpecRow,
+    WorkbookError,
+)
 
 
 _CELL_REF_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
@@ -92,6 +98,7 @@ def _rows_to_specs(
     sheet_name: str,
     rows: Iterable[tuple[int, Mapping[int, str]]],
     config: ExcelConfig,
+    position_mappings: Mapping[str, str],
 ) -> list[SpecRow]:
     materialised = list(rows)
     if config.validate_headers:
@@ -99,7 +106,7 @@ def _rows_to_specs(
 
     specs: list[SpecRow] = []
     errors: list[str] = []
-    seen: dict[tuple[str, str], int] = {}
+    seen: dict[tuple[str, str], tuple[int, str]] = {}
     for row_number, cells in materialised:
         if row_number < config.data_start_row:
             continue
@@ -120,6 +127,13 @@ def _rows_to_specs(
         except WorkbookError as exc:
             errors.append(str(exc))
             continue
+        position_input = values["position"].strip(".")
+        if position_input in position_mappings:
+            position = position_mappings[position_input].strip(".")
+            position_alias = position_input
+        else:
+            position = position_input
+            position_alias = ""
 
         spec = SpecRow(
             source=path,
@@ -128,23 +142,26 @@ def _rows_to_specs(
             intf_type=values["Intf_type"],
             rs_module=values["RS_module"],
             rs_inst=values["RS_inst"],
-            position=values["position"].strip("."),
+            position=position,
             step=step,
             clk=values["clk"],
             rst=values["rst"],
             crg_source=values["CRG_source"],
             rs_cfg_en=values["RS_CFG_EN"],
+            position_alias=position_alias,
         )
         if not spec.position:
             errors.append(f"row {row_number}: position cannot be empty")
             continue
         if spec.key in seen:
+            first_row, first_position_input = seen[spec.key]
             errors.append(
-                f"row {row_number}: duplicate group ({spec.position}, {spec.rs_inst}); "
-                f"first defined at row {seen[spec.key]}"
+                f"row {row_number}: duplicate group ({spec.position}, {spec.rs_inst}) "
+                f"after position resolution from {position_input!r}; first defined "
+                f"from {first_position_input!r} at row {first_row}"
             )
             continue
-        seen[spec.key] = row_number
+        seen[spec.key] = (row_number, position_input)
         specs.append(spec)
 
     if errors:
@@ -277,7 +294,9 @@ def _xlsx_rows(
             raise WorkbookError(f"invalid XLSX worksheet XML: {exc}") from exc
 
 
-def _read_xlsx(path: Path, config: ExcelConfig) -> list[SpecRow]:
+def _read_xlsx(
+    path: Path, config: ExcelConfig, position_mappings: Mapping[str, str]
+) -> list[SpecRow]:
     try:
         archive = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as exc:
@@ -290,10 +309,12 @@ def _read_xlsx(path: Path, config: ExcelConfig) -> list[SpecRow]:
         sheet_name, sheet_path = _sheet_target(archive, config.sheet)
         strings = _shared_strings(archive)
         rows = _xlsx_rows(archive, sheet_path, set(config.columns.values()), strings)
-        return _rows_to_specs(path, sheet_name, rows, config)
+        return _rows_to_specs(path, sheet_name, rows, config, position_mappings)
 
 
-def _read_csv(path: Path, config: ExcelConfig) -> list[SpecRow]:
+def _read_csv(
+    path: Path, config: ExcelConfig, position_mappings: Mapping[str, str]
+) -> list[SpecRow]:
     last_error: UnicodeDecodeError | None = None
     text = ""
     for encoding in ("utf-8-sig", "gb18030"):
@@ -319,16 +340,21 @@ def _read_csv(path: Path, config: ExcelConfig) -> list[SpecRow]:
     parsed_rows = []
     for row_number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
         parsed_rows.append((row_number, {index: value for index, value in enumerate(values, start=1)}))
-    return _rows_to_specs(path, "CSV", parsed_rows, config)
+    return _rows_to_specs(path, "CSV", parsed_rows, config, position_mappings)
 
 
-def read_spec_rows(path: str | Path, config: ExcelConfig) -> list[SpecRow]:
+def read_spec_rows(
+    path: str | Path,
+    config: ExcelConfig,
+    position_mappings: Mapping[str, str] | None = None,
+) -> list[SpecRow]:
     workbook_path = Path(path).resolve()
     suffix = workbook_path.suffix.lower()
+    mappings = position_mappings or {}
     if suffix in {".xlsx", ".xlsm"}:
-        return _read_xlsx(workbook_path, config)
+        return _read_xlsx(workbook_path, config, mappings)
     if suffix in {".csv", ".tsv"}:
-        return _read_csv(workbook_path, config)
+        return _read_csv(workbook_path, config, mappings)
     if suffix == ".xls":
         raise WorkbookError("legacy .xls is not supported; save the workbook as .xlsx or CSV")
     raise WorkbookError(f"unsupported workbook format {suffix!r}; use .xlsx, .xlsm, .csv, or .tsv")

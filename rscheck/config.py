@@ -109,6 +109,42 @@ def _module_rules(value: Any) -> dict[str, ModuleRule]:
     return rules
 
 
+def _position_mappings(value: Any) -> dict[str, str]:
+    raw_mappings = _require_mapping(value, "position_mappings")
+    mappings: dict[str, str] = {}
+    for raw_alias, raw_position in raw_mappings.items():
+        if not isinstance(raw_alias, str) or not raw_alias:
+            raise ConfigError("'position_mappings' keys must be non-empty strings")
+        if raw_alias != raw_alias.strip():
+            raise ConfigError(
+                f"position mapping key must not have surrounding whitespace: {raw_alias!r}"
+            )
+        if raw_alias.startswith(".") or raw_alias.endswith("."):
+            raise ConfigError(
+                f"position mapping key must not start or end with '.': {raw_alias!r}"
+            )
+        if not isinstance(raw_position, str) or not raw_position:
+            raise ConfigError(
+                f"'position_mappings.{raw_alias}' must be a non-empty string"
+            )
+        if raw_position != raw_position.strip():
+            raise ConfigError(
+                "position mapping value must not have surrounding whitespace: "
+                f"{raw_position!r}"
+            )
+        if not raw_position.strip("."):
+            raise ConfigError(
+                f"'position_mappings.{raw_alias}' must contain a non-empty RTL path"
+            )
+        mappings[raw_alias] = raw_position
+    return mappings
+
+
+def make_position_mappings(mappings: Mapping[str, str]) -> dict[str, str]:
+    """Validate and normalize an in-memory position mapping database."""
+    return _position_mappings(dict(mappings))
+
+
 def load_config(path: str | Path) -> ToolConfig:
     config_path = Path(path)
     try:
@@ -127,7 +163,12 @@ def load_config(path: str | Path) -> ToolConfig:
     columns_raw = _require_mapping(root.get("columns", {}), "columns")
     rtl_raw = _require_mapping(root.get("rtl", {}), "rtl")
     module_rules = _module_rules(root.get("module_rules"))
-    _reject_unknown(root, {"excel", "columns", "rtl", "module_rules"}, "root")
+    position_mappings = _position_mappings(root.get("position_mappings", {}))
+    _reject_unknown(
+        root,
+        {"excel", "columns", "rtl", "module_rules", "position_mappings"},
+        "root",
+    )
     _reject_unknown(
         excel_raw,
         {"sheet", "header_row", "data_start_row", "validate_headers"},
@@ -220,7 +261,12 @@ def load_config(path: str | Path) -> ToolConfig:
         crg_match=crg_match,
     )
 
-    return ToolConfig(excel=excel, rtl=rtl, module_rules=module_rules)
+    return ToolConfig(
+        excel=excel,
+        rtl=rtl,
+        module_rules=module_rules,
+        position_mappings=position_mappings,
+    )
 
 
 def config_to_dict(config: ToolConfig) -> dict[str, Any]:
@@ -240,6 +286,10 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
             "require_contiguous_indices": config.rtl.require_contiguous_indices,
             "allow_leaf_signal_match": config.rtl.allow_leaf_signal_match,
             "crg_match": config.rtl.crg_match,
+        },
+        "position_mappings": {
+            alias: position
+            for alias, position in sorted(config.position_mappings.items())
         },
         "module_rules": {
             name: {

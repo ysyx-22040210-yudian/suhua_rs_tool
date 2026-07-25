@@ -2,7 +2,7 @@
 
 该工具提供命令行（CLI）和自带的 Tkinter 桌面 GUI，把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
 
-- `position` 是否存在；
+- Excel `position` 简写是否能通过可选映射库解析到实际 RTL 全路径，以及解析后的路径是否存在；
 - 同一 `RS_inst` 前缀组的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例的 clk/rst formal port 是否存在、已连接且符合 Excel；
@@ -65,6 +65,41 @@ python -m rscheck validate \
 
 默认会校验表头，防止列号填错。工作表、表头行和数据起始行可在 JSON 中配置，也可通过 `--sheet`、`--header-row`、`--data-start-row` 覆盖。
 
+## Position 映射库
+
+Excel 的 `position` 可以填写便于维护的简写，不必重复很长的 RTL hierarchy。可选的 `position_mappings` 数据库保存“Excel 简写 -> RTL 全路径”的对应关系：
+
+```json
+"position_mappings": {
+  "tile_core": "top.u_tile",
+  "lsu_pipe": "top.u_core.u_lsu.u_pipe"
+}
+```
+
+解析时按区分大小写的简写精确查找。命中时，内部 `position`、分组、clk/rst 相对路径和 NPI positions 请求全部使用右侧全路径，report v3 的 `spec.position_alias` 保留 Excel 原值；未命中时保持兼容，把 Excel 值直接当作完整 RTL 路径，`position_alias` 为空。因此旧表仍可直接填写 `top.u_tile`。显式映射只改变路径解析，不改变 Excel 列位置、模块规则或实例前缀语义。
+
+可以在 GUI 的“Position 映射库”页维护，也可以在无图形环境使用 CLI 原子修改配置：
+
+```bash
+python -m rscheck position-db set \
+  --config config/rscheck.example.json \
+  --alias core0_lsu \
+  --rtl-path tb_top.dut.u_core0.u_lsu
+
+python -m rscheck position-db list \
+  --config config/rscheck.example.json
+
+python -m rscheck position-db resolve \
+  --config config/rscheck.example.json \
+  --position core0_lsu
+
+python -m rscheck position-db delete \
+  --config config/rscheck.example.json \
+  --alias core0_lsu
+```
+
+`set` 会新增或覆盖同名简写，`delete` 删除简写，`list --json` 和 `resolve --json` 可供脚本消费。数据库修改通过临时文件原子替换写回 `--config` 指定文件，但同一配置文件不支持多个 GUI/CLI 写入者并发合并；维护数据库时应保持单写者，外部修改后先在 GUI 重新加载再继续编辑。需要保留原配置时应先使用项目副本。
+
 ## 模块规则库和动态拍数
 
 `module_rules` 保存可选的逐模块覆盖项，不要求为 Excel 中每一种 `RS_module` 建项。工具先按区分大小写的模块名查找显式规则；精确匹配时使用该规则，否则自动使用隐式默认规则：`has_rs_cfg_en=true`、`step_parameters=[]`。因此默认仍会逐实例检查 `RS_CFG_EN=0` 和 Excel `假门控`，并让每个匹配物理实例贡献 `1` 拍：
@@ -95,7 +130,7 @@ python -m rscheck validate \
 
 ## 分组规则
 
-一行 Excel 定义一组，组键为 `(position, RS_inst)`。`position` 是组成员直接父 scope 的完整 NPI 路径。
+一行 Excel 定义一组，组键为 `(解析后的完整 position, RS_inst)`。`position` 可以是 `position_mappings` 中的简写，也可以直接是组成员父 scope 的完整 NPI 路径。
 
 若 `RS_inst=AAAA_BBB`，本地实例名必须满足：
 
@@ -105,7 +140,7 @@ AAAA_BBB + 非空字符串 + 末尾阿拉伯数字
 
 因此 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配。相同前缀但不同 suffix stem 仍属于同一组，只产生 warning。数字是否从 0 连续默认不影响 PASS；需要时把 `require_contiguous_indices` 设为 `true`。
 
-Excel 中的简单 `clk`/`rst` 名称相对 `position` 解析，例如 `position=top.u_tile`、`clk=clk_rs` 对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
+Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
 
 `RS_CFG_EN` 的列映射和精确表头始终必需，数据单元格则由匹配到的模块规则决定。实例后缀连续性仍按物理实例和数字后缀检查，不按有效拍数检查。
 
@@ -131,14 +166,14 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及九个互不重复的 1-based 列号。“模块规则库”页可搜索、新建、修改、删除规则，并把 `has_rs_cfg_en` 与逗号分隔的 `step_parameters` 原子保存回当前配置 JSON；存在未保存修改时不能运行检查。RTL 数据源可选：
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及九个互不重复的 1-based 列号。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。RTL 数据源可选：
 
 - **在线 NPI**：填写 collector、Verdi elaborated KDB、可选 NPI 库目录、超时和 inventory 保存路径；
 - **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。
 
 在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
 
-“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、Excel `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
+“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、解析后的完整 `position`、Excel position 简写、Excel `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
 
 ## 先验证 Excel
 
@@ -163,7 +198,7 @@ python -m rscheck check \
   --csv-report output/rs_report.csv
 ```
 
-CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。report v3 在原实例、端口、CRG 和全部 effective `parameters` 证据之外，新增每行 `module_rule`、`step_check.physical_instances`、`step_check.effective_step` 和逐实例 `contributions`。CSV 同步增加 `physical_instances`、`effective_step` 与 `step_contributions`。
+CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。每行 `spec.position` 是解析后的完整路径，命中映射时 `spec.position_alias` 保存 Excel 简写，否则为空。report v3 还包含每行 `module_rule`、`step_check.physical_instances`、`step_check.effective_step`、逐实例 `contributions`，以及实例、端口、CRG 和全部 effective `parameters` 证据。CSV 同步包含 `position_alias`、`physical_instances`、`effective_step` 与 `step_contributions`。
 
 `--inventory` 是面向测试和问题复现的离线模式，不证明 inventory 与当前 RTL 同步。生产签核应使用 `--collector --elab-db` 从当前 Verdi elaborated KDB 重新采集。
 
@@ -296,7 +331,7 @@ bash scripts/test_vm_verdi_gui.sh
 
 工具自带 GUI 的可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。
 
-GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。完整脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++`、启动 `verdi -elab`，再让检查工具只通过 `--elab-db` 使用同一 KDB。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
+GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。完整脚本随后运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++` 并启动 `verdi -elab`；只有新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 `top` 才进入 NPI/GUI 检查，其他启动页或无关 Verdi 窗口不能作为就绪证据。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
 
 ## 已验证环境
 

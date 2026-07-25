@@ -109,7 +109,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-delay", type=float, default=0.1)
     parser.add_argument(
         "--visible-tab",
-        choices=("config", "rules", "results", "log"),
+        choices=("config", "positions", "rules", "results", "log"),
         default="results",
         help="tab left visible after the smoke assertions pass",
     )
@@ -338,12 +338,82 @@ def main() -> int:
     source_config_text = (project_root / "config" / "rscheck.example.json").read_text(
         encoding="utf-8"
     )
-    original_module_rules = json.loads(source_config_text).get("module_rules", {})
+    source_config = json.loads(source_config_text)
+    original_position_mappings = source_config.get("position_mappings", {})
+    if original_position_mappings.get("tile_core") != "top.u_tile":
+        raise SystemExit(
+            "sample config must map position alias 'tile_core' to 'top.u_tile'"
+        )
+    original_module_rules = source_config.get("module_rules", {})
     if args.default_rule and "rs_default_pipe" in original_module_rules:
         raise SystemExit("default-rule smoke module must not be explicitly registered")
     config_path.write_text(source_config_text, encoding="utf-8")
     app.config_var.set(str(config_path))
     app._load_config_from_form()
+
+    app.position_alias_var.set("gui_smoke_position")
+    app.position_path_var.set("top.u_gui_smoke")
+    app._apply_position_mapping()
+    if not app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping edit did not set dirty state")
+    app._save_position_mappings()
+    if app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping save did not clear dirty state")
+    app._load_config_from_form()
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if saved_config.get("position_mappings", {}).get("gui_smoke_position") != (
+        "top.u_gui_smoke"
+    ):
+        raise SystemExit("GUI position mapping save/reload failed")
+    app.position_search_var.set("gui_smoke")
+    filtered_positions = app.position_tree.get_children()
+    if (
+        len(filtered_positions) != 1
+        or app._position_tree_aliases.get(filtered_positions[0])
+        != "gui_smoke_position"
+    ):
+        raise SystemExit("GUI position mapping search did not isolate the saved entry")
+    app.position_tree.selection_set(filtered_positions[0])
+    app._on_position_selected()
+    app.position_path_var.set("top.u_gui_smoke_updated")
+    app._apply_position_mapping()
+    if not app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping update did not set dirty state")
+    app._save_position_mappings()
+    if app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping update save did not clear dirty state")
+    app._load_config_from_form()
+    updated_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if updated_config.get("position_mappings", {}).get("gui_smoke_position") != (
+        "top.u_gui_smoke_updated"
+    ):
+        raise SystemExit("GUI position mapping update/reload failed")
+    app.position_search_var.set("gui_smoke")
+    filtered_positions = app.position_tree.get_children()
+    if len(filtered_positions) != 1:
+        raise SystemExit("GUI position mapping disappeared before delete")
+    app.position_tree.selection_set(filtered_positions[0])
+    app._on_position_selected()
+    app._delete_position_mapping()
+    if not app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping delete did not set dirty state")
+    app._save_position_mappings()
+    if app._position_mappings_dirty:
+        raise SystemExit("GUI position mapping delete save did not clear dirty state")
+    app._load_config_from_form()
+    restored_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if restored_config.get("position_mappings", {}) != original_position_mappings:
+        raise SystemExit(
+            "GUI position mapping delete did not restore the original mapping set"
+        )
+    app.position_search_var.set("tile_core")
+    restored_positions = app.position_tree.get_children()
+    if (
+        len(restored_positions) != 1
+        or app._position_tree_aliases.get(restored_positions[0]) != "tile_core"
+    ):
+        raise SystemExit("GUI position mapping search did not find tile_core after restore")
+
     app.module_name_var.set("gui_smoke_rule")
     app.module_has_rs_cfg_en_var.set(False)
     app.module_step_parameters_var.set("smoke_mode")
@@ -404,6 +474,9 @@ def main() -> int:
         raise SystemExit("GUI module rule search did not find rs_pipe after restore")
     expected_rows = (
         1 if args.negative or args.default_rule else args.generated_rows or 2
+    )
+    sample_position_mapping = not (
+        args.negative or args.default_rule or args.generated_rows
     )
     if args.default_rule:
         excel_path, inventory_path = _write_default_rule_inputs(output)
@@ -513,6 +586,49 @@ def main() -> int:
             )
             root.destroy()
             return
+        root.update_idletasks()
+        position_width = int(app.result_tree.column("position", "width"))
+        initial_xview = app.result_tree.xview()
+        if (
+            position_width < 520
+            or not str(app.result_tree.cget("xscrollcommand"))
+            or initial_xview[1] >= 1.0
+        ):
+            failed = True
+            print(
+                "GUI_SMOKE_FAIL: result Position column is not horizontally "
+                f"scrollable: width={position_width} xview={initial_xview!r}",
+                file=sys.stderr,
+            )
+            root.destroy()
+            return
+        app.result_tree.xview_moveto(1.0)
+        root.update_idletasks()
+        if app.result_tree.xview()[0] <= 0.0:
+            failed = True
+            print(
+                "GUI_SMOKE_FAIL: result horizontal scrollbar did not move",
+                file=sys.stderr,
+            )
+            root.destroy()
+            return
+        app.result_tree.xview_moveto(0.0)
+        if sample_position_mapping:
+            for record in app._result_records.values():
+                spec = record.get("spec", {})
+                if (
+                    not isinstance(spec, dict)
+                    or spec.get("position") != "top.u_tile"
+                    or spec.get("position_alias") != "tile_core"
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: position mapping evidence mismatch "
+                        f"{spec!r}",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
         if not args.validate_only and not args.generated_rows:
             first_result = app.result_tree.get_children()[0]
             first_values = app.result_tree.item(first_result, "values")
@@ -565,6 +681,21 @@ def main() -> int:
                 )
                 root.destroy()
                 return
+            if sample_position_mapping:
+                inventory_positions = raw_inventory.get("positions")
+                if (
+                    not isinstance(inventory_positions, dict)
+                    or set(inventory_positions) != {"top.u_tile"}
+                    or "tile_core" in inventory_positions
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: NPI inventory positions are not resolved "
+                        f"full paths only: {inventory_positions!r}",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
             expected_label = "真门控" if args.negative else "假门控"
             for record in app._result_records.values():
                 spec = record.get("spec", {})
@@ -852,12 +983,15 @@ def main() -> int:
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             f"{' contract=elab-only' if online else ''}"
+            f"{' position-map=tile_core->top.u_tile' if sample_position_mapping else ''}"
+            f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
             f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )
         visible_tabs = {
             "config": app.setup_tab,
+            "positions": app.positions_tab,
             "rules": app.rules_tab,
             "results": app.results_tab,
             "log": app.log_tab,

@@ -22,6 +22,58 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.module_rules["rs_pipe"].has_rs_cfg_en)
         self.assertEqual(config.module_rules["rs_pipe"].step_parameters, ("rs_mode",))
         self.assertFalse(config.module_rules["rs_plain"].has_rs_cfg_en)
+        self.assertEqual(config.position_mappings, {"tile_core": "top.u_tile"})
+
+    def test_position_mappings_default_to_empty_when_omitted(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        del raw["position_mappings"]
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "legacy.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.position_mappings, {})
+
+    def test_position_mappings_load_and_save_round_trip(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        raw["position_mappings"] = {
+            "tile_b": "top.cluster.u_tile_b",
+            "tile_a": "top.cluster.u_tile_a",
+        }
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name) / "source.json"
+            saved = Path(name) / "saved.json"
+            source.write_text(json.dumps(raw), encoding="utf-8")
+            config = load_config(source)
+            save_config(config, saved)
+            reloaded = load_config(saved)
+            saved_raw = json.loads(saved.read_text("utf-8"))
+        self.assertEqual(config.position_mappings["tile_a"], "top.cluster.u_tile_a")
+        self.assertEqual(reloaded, config)
+        self.assertEqual(list(saved_raw["position_mappings"]), ["tile_a", "tile_b"])
+
+    def test_invalid_position_mappings_are_rejected(self) -> None:
+        original = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        mutations = (
+            ("not_object", [], "JSON object"),
+            ("empty_key", {"": "top.u"}, "keys must be non-empty"),
+            ("key_whitespace", {" tile": "top.u"}, "key must not have surrounding"),
+            ("key_leading_dot", {".tile": "top.u"}, "must not start or end"),
+            ("key_trailing_dot", {"tile.": "top.u"}, "must not start or end"),
+            ("empty_value", {"tile": ""}, "must be a non-empty string"),
+            ("non_string_value", {"tile": 1}, "must be a non-empty string"),
+            ("value_whitespace", {"tile": "top.u "}, "value must not have surrounding"),
+            ("value_only_dots", {"tile": "..."}, "non-empty RTL path"),
+        )
+        for name, mappings, message in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                raw = json.loads(json.dumps(original))
+                raw["position_mappings"] = mappings
+                path = Path(directory) / "bad.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                with self.assertRaisesRegex(ConfigError, message):
+                    load_config(path)
 
     def test_duplicate_column_is_rejected(self) -> None:
         raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))

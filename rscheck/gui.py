@@ -107,6 +107,28 @@ def _module_rule_from_form(
     )
 
 
+def _position_mapping_from_form(short_name: str, rtl_path: str) -> tuple[str, str]:
+    alias = short_name.strip()
+    full_path = rtl_path.strip()
+    if not alias:
+        raise GuiInputError("position 简写不能为空")
+    if alias.startswith(".") or alias.endswith("."):
+        raise GuiInputError("position 简写不能以 '.' 开头或结尾")
+    if not full_path:
+        raise GuiInputError("RTL 层次全路径不能为空")
+    if not full_path.strip("."):
+        raise GuiInputError("RTL 层次全路径不能仅由 '.' 组成")
+    return alias, full_path
+
+
+def _position_display(spec: Mapping[str, Any]) -> str:
+    position = str(spec.get("position", ""))
+    alias = spec.get("position_alias", "")
+    if isinstance(alias, str) and alias:
+        return f"{alias} -> {position}"
+    return position
+
+
 class RsCheckApp:
     def __init__(self, root: Any) -> None:
         self.root = root
@@ -128,6 +150,10 @@ class RsCheckApp:
         self._module_rules_dirty = False
         self._editing_module_name = ""
         self._rule_tree_names: dict[str, str] = {}
+        self._position_mappings: dict[str, str] = {}
+        self._position_mappings_dirty = False
+        self._editing_position_alias = ""
+        self._position_tree_aliases: dict[str, str] = {}
 
         self._configure_root()
         self._create_variables()
@@ -203,6 +229,10 @@ class RsCheckApp:
         self.module_has_rs_cfg_en_var = tk.BooleanVar(value=False)
         self.module_step_parameters_var = tk.StringVar()
         self.module_rule_status_var = tk.StringVar(value="规则 0")
+        self.position_search_var = tk.StringVar()
+        self.position_alias_var = tk.StringVar()
+        self.position_path_var = tk.StringVar()
+        self.position_mapping_status_var = tk.StringVar(value="映射 0")
 
         self.source_mode_var = tk.StringVar(value=LIVE_SOURCE)
         self.collector_var = tk.StringVar(value=str(collector))
@@ -232,15 +262,18 @@ class RsCheckApp:
 
         self.setup_tab = ttk.Frame(self.notebook, padding=12)
         self.rules_tab = ttk.Frame(self.notebook, padding=10)
+        self.positions_tab = ttk.Frame(self.notebook, padding=10)
         self.results_tab = ttk.Frame(self.notebook, padding=10)
         self.log_tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.setup_tab, text="检查配置")
         self.notebook.add(self.rules_tab, text="模块规则库")
+        self.notebook.add(self.positions_tab, text="Position 映射库")
         self.notebook.add(self.results_tab, text="检查结果")
         self.notebook.add(self.log_tab, text="运行日志")
 
         self._build_setup_tab()
         self._build_rules_tab()
+        self._build_positions_tab()
         self._build_results_tab()
         self._build_log_tab()
         self._build_status_bar()
@@ -532,6 +565,86 @@ class RsCheckApp:
         )
         self.module_search_var.trace_add("write", lambda *_: self._render_rule_tree())
 
+    def _build_positions_tab(self) -> None:
+        tab = self.positions_tab
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Label(toolbar, text="搜索 position").grid(row=0, column=0, sticky="w")
+        ttk.Entry(toolbar, textvariable=self.position_search_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Label(toolbar, textvariable=self.position_mapping_status_var).grid(
+            row=0, column=2, sticky="e"
+        )
+
+        tree_frame = ttk.Frame(tab)
+        tree_frame.grid(row=1, column=0, sticky="nsew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        self.position_tree = ttk.Treeview(
+            tree_frame,
+            columns=("alias", "rtl_path"),
+            show="headings",
+            selectmode="browse",
+        )
+        for name, title, width, stretch in (
+            ("alias", "position 简写", 280, False),
+            ("rtl_path", "RTL 层次全路径", 1200, False),
+        ):
+            self.position_tree.heading(name, text=title)
+            self.position_tree.column(
+                name, width=width, minwidth=140, stretch=stretch
+            )
+        position_scroll = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self.position_tree.yview
+        )
+        position_xscroll = ttk.Scrollbar(
+            tree_frame, orient="horizontal", command=self.position_tree.xview
+        )
+        self.position_tree.configure(
+            yscrollcommand=position_scroll.set,
+            xscrollcommand=position_xscroll.set,
+        )
+        self.position_tree.grid(row=0, column=0, sticky="nsew")
+        position_scroll.grid(row=0, column=1, sticky="ns")
+        position_xscroll.grid(row=1, column=0, sticky="ew")
+        self.position_tree.bind("<<TreeviewSelect>>", self._on_position_selected)
+
+        editor = ttk.LabelFrame(tab, text="Position 映射编辑", padding=10)
+        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        editor.columnconfigure(1, weight=1)
+        editor.columnconfigure(3, weight=3)
+        ttk.Label(editor, text="position 简写").grid(row=0, column=0, sticky="w")
+        ttk.Entry(editor, textvariable=self.position_alias_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Label(editor, text="RTL 层次全路径").grid(row=0, column=2, sticky="w")
+        ttk.Entry(editor, textvariable=self.position_path_var).grid(
+            row=0, column=3, sticky="ew", padx=(8, 0)
+        )
+
+        actions = ttk.Frame(tab)
+        actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(actions, text="新建", command=self._new_position_mapping).pack(
+            side="left"
+        )
+        ttk.Button(
+            actions, text="应用修改", command=self._apply_position_mapping
+        ).pack(side="left", padx=8)
+        ttk.Button(
+            actions, text="删除", command=self._delete_position_mapping
+        ).pack(side="left")
+        ttk.Button(
+            actions, text="保存映射库", command=self._save_position_mappings
+        ).pack(side="right")
+        self.position_search_var.trace_add(
+            "write", lambda *_: self._render_position_tree()
+        )
+
     def _build_results_tab(self) -> None:
         tab = self.results_tab
         tab.rowconfigure(1, weight=3)
@@ -591,7 +704,7 @@ class RsCheckApp:
             "status": 65,
             "row": 60,
             "interface": 85,
-            "position": 180,
+            "position": 520,
             "rs_inst": 120,
             "rs_cfg_en": 90,
             "physical_instances": 75,
@@ -600,11 +713,20 @@ class RsCheckApp:
         }
         for name in columns:
             self.result_tree.heading(name, text=headings[name])
-            self.result_tree.column(name, width=widths[name], minwidth=55, stretch=name == "position")
+            self.result_tree.column(
+                name, width=widths[name], minwidth=55, stretch=False
+            )
         result_scroll = ttk.Scrollbar(result_frame, orient="vertical", command=self.result_tree.yview)
-        self.result_tree.configure(yscrollcommand=result_scroll.set)
+        result_xscroll = ttk.Scrollbar(
+            result_frame, orient="horizontal", command=self.result_tree.xview
+        )
+        self.result_tree.configure(
+            yscrollcommand=result_scroll.set,
+            xscrollcommand=result_xscroll.set,
+        )
         self.result_tree.grid(row=0, column=0, sticky="nsew")
         result_scroll.grid(row=0, column=1, sticky="ns")
+        result_xscroll.grid(row=1, column=0, sticky="ew")
         self.result_tree.tag_configure("pass", foreground="#176b3a")
         self.result_tree.tag_configure("fail", foreground="#a02124")
         self.result_tree.tag_configure("warning", foreground="#8a5a00")
@@ -726,6 +848,11 @@ class RsCheckApp:
         if selected:
             if self._module_rules_dirty and not self._confirm_discard_rule_changes():
                 return
+            if (
+                self._position_mappings_dirty
+                and not self._confirm_discard_position_changes()
+            ):
+                return
             self.config_var.set(selected)
             self._load_config_from_form(confirm_discard=False)
 
@@ -762,12 +889,17 @@ class RsCheckApp:
     def _load_config_from_form(
         self, show_error: bool = True, confirm_discard: bool = True
     ) -> None:
-        if (
-            confirm_discard
-            and self._module_rules_dirty
-            and not self._confirm_discard_rule_changes()
-        ):
-            return
+        if confirm_discard:
+            if (
+                self._module_rules_dirty
+                and not self._confirm_discard_rule_changes()
+            ):
+                return
+            if (
+                self._position_mappings_dirty
+                and not self._confirm_discard_position_changes()
+            ):
+                return
         try:
             config = load_config(self.config_var.get().strip())
         except RsCheckError as exc:
@@ -785,8 +917,12 @@ class RsCheckApp:
         self._loaded_config_path = str(Path(self.config_var.get().strip()).resolve())
         self._module_rules = dict(config.module_rules)
         self._module_rules_dirty = False
+        self._position_mappings = dict(config.position_mappings)
+        self._position_mappings_dirty = False
         self._new_rule()
+        self._new_position_mapping()
         self._render_rule_tree()
+        self._render_position_tree()
         self.status_var.set("配置已加载")
 
     def _confirm_discard_rule_changes(self) -> bool:
@@ -796,6 +932,17 @@ class RsCheckApp:
             messagebox.askyesno(
                 "未保存规则",
                 "模块规则库有未保存修改，确定放弃吗？",
+                parent=self.root,
+            )
+        )
+
+    def _confirm_discard_position_changes(self) -> bool:
+        if not self._position_mappings_dirty:
+            return True
+        return bool(
+            messagebox.askyesno(
+                "未保存映射",
+                "Position 映射库有未保存修改，确定放弃吗？",
                 parent=self.root,
             )
         )
@@ -908,18 +1055,173 @@ class RsCheckApp:
                 parent=self.root,
             )
             return
-        updated = replace(self._loaded_config, module_rules=dict(self._module_rules))
+        baseline = self._loaded_config
         try:
+            current = load_config(config_path)
+            if current.module_rules != baseline.module_rules:
+                messagebox.showerror(
+                    "保存冲突",
+                    "模块规则库已被外部修改，请先重新加载配置后再保存",
+                    parent=self.root,
+                )
+                return
+            updated = replace(current, module_rules=dict(self._module_rules))
             output = save_config(updated, config_path)
             reloaded = load_config(output)
         except RsCheckError as exc:
             messagebox.showerror("保存失败", str(exc), parent=self.root)
             return
-        self._loaded_config = reloaded
+        if self._position_mappings_dirty:
+            self._loaded_config = replace(
+                reloaded,
+                position_mappings=dict(baseline.position_mappings),
+            )
+        else:
+            self._loaded_config = reloaded
+            self._position_mappings = dict(reloaded.position_mappings)
+            self._new_position_mapping()
+            self._render_position_tree()
         self._module_rules = dict(reloaded.module_rules)
         self._module_rules_dirty = False
         self._render_rule_tree()
         self.status_var.set("模块规则库已保存")
+
+    def _render_position_tree(self) -> None:
+        if not hasattr(self, "position_tree"):
+            return
+        selected_alias = self._editing_position_alias
+        for item in self.position_tree.get_children():
+            self.position_tree.delete(item)
+        self._position_tree_aliases.clear()
+        search = self.position_search_var.get().strip().casefold()
+        selected_iid = ""
+        for index, alias in enumerate(sorted(self._position_mappings)):
+            rtl_path = self._position_mappings[alias]
+            if (
+                search
+                and search not in alias.casefold()
+                and search not in rtl_path.casefold()
+            ):
+                continue
+            iid = f"position-mapping-{index}"
+            self._position_tree_aliases[iid] = alias
+            self.position_tree.insert(
+                "", "end", iid=iid, values=(alias, rtl_path)
+            )
+            if alias == selected_alias:
+                selected_iid = iid
+        if selected_iid:
+            self.position_tree.selection_set(selected_iid)
+            self.position_tree.see(selected_iid)
+        suffix = " · 未保存" if self._position_mappings_dirty else ""
+        self.position_mapping_status_var.set(
+            f"映射 {len(self._position_mappings)}{suffix}"
+        )
+
+    def _on_position_selected(self, _event: Any = None) -> None:
+        selection = self.position_tree.selection()
+        if not selection:
+            return
+        alias = self._position_tree_aliases.get(selection[0], "")
+        rtl_path = self._position_mappings.get(alias)
+        if rtl_path is None:
+            return
+        self._editing_position_alias = alias
+        self.position_alias_var.set(alias)
+        self.position_path_var.set(rtl_path)
+
+    def _new_position_mapping(self) -> None:
+        self._editing_position_alias = ""
+        self.position_alias_var.set("")
+        self.position_path_var.set("")
+        if hasattr(self, "position_tree"):
+            self.position_tree.selection_remove(*self.position_tree.selection())
+
+    def _apply_position_mapping(self) -> None:
+        try:
+            alias, rtl_path = _position_mapping_from_form(
+                self.position_alias_var.get(), self.position_path_var.get()
+            )
+        except GuiInputError as exc:
+            messagebox.showerror("映射错误", str(exc), parent=self.root)
+            return
+        original = self._editing_position_alias
+        if alias in self._position_mappings and alias != original:
+            messagebox.showerror(
+                "映射错误",
+                f"position 简写 {alias!r} 已存在",
+                parent=self.root,
+            )
+            return
+        if original and original != alias:
+            self._position_mappings.pop(original, None)
+        self._position_mappings[alias] = rtl_path
+        self._editing_position_alias = alias
+        self._position_mappings_dirty = True
+        self._render_position_tree()
+        self.status_var.set("Position 映射已修改")
+
+    def _delete_position_mapping(self) -> None:
+        alias = self._editing_position_alias
+        if not alias or alias not in self._position_mappings:
+            return
+        if not messagebox.askyesno(
+            "删除映射",
+            f"确定删除 position 简写 {alias!r} 的映射吗？",
+            parent=self.root,
+        ):
+            return
+        del self._position_mappings[alias]
+        self._position_mappings_dirty = True
+        self._new_position_mapping()
+        self._render_position_tree()
+        self.status_var.set("Position 映射已删除")
+
+    def _save_position_mappings(self) -> None:
+        config_path = self.config_var.get().strip()
+        if self._loaded_config is None or not config_path:
+            messagebox.showerror("保存失败", "请先加载配置 JSON", parent=self.root)
+            return
+        if str(Path(config_path).resolve()) != self._loaded_config_path:
+            messagebox.showerror(
+                "保存失败",
+                "配置路径已变化，请先加载当前配置",
+                parent=self.root,
+            )
+            return
+        baseline = self._loaded_config
+        try:
+            current = load_config(config_path)
+            if current.position_mappings != baseline.position_mappings:
+                messagebox.showerror(
+                    "保存冲突",
+                    "Position 映射库已被外部修改，请先重新加载配置后再保存",
+                    parent=self.root,
+                )
+                return
+            updated = replace(
+                current,
+                position_mappings=dict(self._position_mappings),
+            )
+            output = save_config(updated, config_path)
+            reloaded = load_config(output)
+        except RsCheckError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        if self._module_rules_dirty:
+            self._loaded_config = replace(
+                reloaded,
+                module_rules=dict(baseline.module_rules),
+            )
+        else:
+            self._loaded_config = reloaded
+            self._module_rules = dict(reloaded.module_rules)
+            self._new_rule()
+            self._render_rule_tree()
+        self._position_mappings = dict(reloaded.position_mappings)
+        self._position_mappings_dirty = False
+        self._render_position_tree()
+        self.status_var.set("Position 映射库已保存")
 
     def _update_source_mode(self) -> None:
         if self.source_mode_var.get() == LIVE_SOURCE:
@@ -959,6 +1261,13 @@ class RsCheckApp:
                 parent=self.root,
             )
             return
+        if self._position_mappings_dirty:
+            messagebox.showerror(
+                "映射未保存",
+                "请先在 Position 映射库页保存修改",
+                parent=self.root,
+            )
+            return
         config_path = self.config_var.get().strip()
         if (
             self._loaded_config is None
@@ -967,7 +1276,7 @@ class RsCheckApp:
         ):
             messagebox.showerror(
                 "配置未加载",
-                "配置路径已变化，请先点击“加载”同步模块规则库",
+                "配置路径已变化，请先点击“加载”同步模块规则库和 Position 映射库",
                 parent=self.root,
             )
             return
@@ -1173,8 +1482,10 @@ class RsCheckApp:
         }
         if disabled:
             self._saved_control_states.clear()
-            stack = list(self.setup_tab.winfo_children()) + list(
-                self.rules_tab.winfo_children()
+            stack = (
+                list(self.setup_tab.winfo_children())
+                + list(self.rules_tab.winfo_children())
+                + list(self.positions_tab.winfo_children())
             )
             while stack:
                 widget = stack.pop()
@@ -1202,7 +1513,22 @@ class RsCheckApp:
             self.finding_tree.delete(item)
         self._result_records.clear()
         self._finding_records.clear()
+        self.result_tree.column("position", width=520, stretch=False)
+        self.result_tree.xview_moveto(0)
         self._set_evidence("")
+
+    def _fit_result_position_column(self, value: str) -> None:
+        try:
+            required = tkfont.nametofont("TkDefaultFont").measure(value) + 24
+        except Exception:
+            required = len(value) * 9 + 24
+        current = int(self.result_tree.column("position", "width"))
+        if required > current:
+            self.result_tree.column(
+                "position",
+                width=min(required, 2400),
+                stretch=False,
+            )
 
     def _reset_summary(self, state: str) -> None:
         self.summary_state_var.set(state)
@@ -1222,6 +1548,8 @@ class RsCheckApp:
         self.summary_warnings_var.set("警告 0")
         for index, spec in enumerate(rows):
             iid = f"validation-{index}"
+            position_text = _position_display(spec)
+            self._fit_result_position_column(position_text)
             self._result_records[iid] = {"spec": spec, "findings": [], "matched_instances": []}
             self.result_tree.insert(
                 "",
@@ -1231,7 +1559,7 @@ class RsCheckApp:
                     "VALID",
                     spec.get("row", ""),
                     spec.get("Intf_type", ""),
-                    spec.get("position", ""),
+                    position_text,
                     spec.get("RS_inst", ""),
                     spec.get("RS_CFG_EN", ""),
                     "-",
@@ -1300,6 +1628,8 @@ class RsCheckApp:
         effective_step = step_check.get("effective_step", len(instances))
         expected_step = step_check.get("expected", spec.get("step", ""))
         effective_text = "?" if effective_step is None else str(effective_step)
+        position_text = _position_display(spec)
+        self._fit_result_position_column(position_text)
         self._result_records[iid] = record
         self.result_tree.insert(
             "",
@@ -1309,7 +1639,7 @@ class RsCheckApp:
                 status,
                 spec.get("row", ""),
                 spec.get("Intf_type", ""),
-                spec.get("position", ""),
+                position_text,
                 spec.get("RS_inst", ""),
                 spec.get("RS_CFG_EN", ""),
                 physical_instances,
@@ -1421,6 +1751,11 @@ class RsCheckApp:
             threading.Thread(target=self._cancel_when_started, daemon=True).start()
             return
         if self._module_rules_dirty and not self._confirm_discard_rule_changes():
+            return
+        if (
+            self._position_mappings_dirty
+            and not self._confirm_discard_position_changes()
+        ):
             return
         self.root.destroy()
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rscheck.cli import main
+from rscheck.config import load_config
 from rscheck.inventory import load_inventory
 
 
@@ -129,6 +130,285 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         rows = json.loads(output.getvalue())
         self.assertEqual(rows[0]["RS_CFG_EN"], "假门控")
+
+    def test_validate_json_contains_resolved_position_and_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "specs.csv"
+            specs.write_text(
+                (ROOT / "tests" / "fixtures" / "specs.csv")
+                .read_text("utf-8")
+                .replace("top.u_tile", "tile_alias", 1),
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            config = directory / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "validate",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--json",
+                    ]
+                )
+            rows = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(rows[0]["position"], "top.u_tile")
+        self.assertEqual(rows[0]["position_alias"], "tile_alias")
+
+    def test_position_database_cli_crud_and_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            config = Path(name) / "config.json"
+            raw = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw["position_mappings"] = {}
+            config.write_text(json.dumps(raw), encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "position-db",
+                        "set",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        "core0_lsu",
+                        "--rtl-path",
+                        "tb_top.dut.u_core0.u_lsu",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertIn("POSITION_DB SAVED", output.getvalue())
+            self.assertEqual(
+                load_config(config).position_mappings["core0_lsu"],
+                "tb_top.dut.u_core0.u_lsu",
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "position-db",
+                        "resolve",
+                        "--config",
+                        str(config),
+                        "--position",
+                        "core0_lsu",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue()),
+                {
+                    "position": "tb_top.dut.u_core0.u_lsu",
+                    "position_alias": "core0_lsu",
+                },
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "position-db",
+                        "list",
+                        "--config",
+                        str(config),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue())["mappings"],
+                {"core0_lsu": "tb_top.dut.u_core0.u_lsu"},
+            )
+
+            with redirect_stdout(StringIO()):
+                code = main(
+                    [
+                        "position-db",
+                        "delete",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        "core0_lsu",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(load_config(config).position_mappings, {})
+
+    def test_position_database_resolve_rejects_empty_normalized_value(self) -> None:
+        for value in ("", "   ", "..."):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as name:
+                config = Path(name) / "config.json"
+                config.write_text(
+                    (ROOT / "config" / "rscheck.example.json").read_text("utf-8"),
+                    encoding="utf-8",
+                )
+                error = StringIO()
+                with redirect_stderr(error):
+                    code = main(
+                        [
+                            "position-db",
+                            "resolve",
+                            "--config",
+                            str(config),
+                            "--position",
+                            value,
+                        ]
+                    )
+            self.assertEqual(code, 2)
+            self.assertIn("must not be empty", error.getvalue())
+
+    def test_position_database_rejected_updates_leave_config_unchanged(self) -> None:
+        cases = (
+            (
+                "invalid_set",
+                ["set", "--alias", " bad_alias", "--rtl-path", "top.u"],
+                "surrounding whitespace",
+            ),
+            (
+                "missing_delete",
+                ["delete", "--alias", "missing_alias"],
+                "is not registered",
+            ),
+        )
+        for case, command, expected_error in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as name:
+                config = Path(name) / "config.json"
+                config.write_bytes(
+                    (ROOT / "config" / "rscheck.example.json").read_bytes()
+                )
+                original = config.read_bytes()
+                error = StringIO()
+                with redirect_stderr(error):
+                    code = main(
+                        ["position-db", command[0], "--config", str(config), *command[1:]]
+                    )
+                self.assertEqual(code, 2)
+                self.assertIn(expected_error, error.getvalue())
+                self.assertEqual(config.read_bytes(), original)
+
+    def test_position_database_replace_failure_leaves_config_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            config = directory / "config.json"
+            config.write_bytes(
+                (ROOT / "config" / "rscheck.example.json").read_bytes()
+            )
+            original = config.read_bytes()
+            error = StringIO()
+            with (
+                patch("rscheck.config.os.replace", side_effect=OSError("replace failed")),
+                redirect_stderr(error),
+            ):
+                code = main(
+                    [
+                        "position-db",
+                        "set",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        "new_alias",
+                        "--rtl-path",
+                        "top.u_new",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("cannot save config file", error.getvalue())
+            self.assertEqual(config.read_bytes(), original)
+            self.assertEqual(list(directory.glob(".config.json.*.tmp")), [])
+
+    def test_offline_check_uses_resolved_position_for_inventory_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "specs.csv"
+            specs.write_text(
+                (ROOT / "tests" / "fixtures" / "specs.csv")
+                .read_text("utf-8")
+                .replace("top.u_tile", "tile_alias", 1),
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            config = directory / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+            json_report = directory / "report.json"
+            csv_report = directory / "report.csv"
+            with redirect_stdout(StringIO()):
+                code = main(
+                    [
+                        "check",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--inventory",
+                        str(ROOT / "tests" / "fixtures" / "inventory.json"),
+                        "--json-report",
+                        str(json_report),
+                        "--csv-report",
+                        str(csv_report),
+                    ]
+                )
+            report = json.loads(json_report.read_text("utf-8"))
+            with csv_report.open(encoding="utf-8-sig", newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+        self.assertEqual(code, 0)
+        self.assertEqual(report["rows"][0]["spec"]["position"], "top.u_tile")
+        self.assertEqual(report["rows"][0]["spec"]["position_alias"], "tile_alias")
+        self.assertEqual(csv_rows[0]["position"], "top.u_tile")
+        self.assertEqual(csv_rows[0]["position_alias"], "tile_alias")
+
+    def test_failed_mapped_row_csv_preserves_alias_for_every_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "negative.csv"
+            specs.write_text(
+                (ROOT / "tests" / "fixtures" / "specs_negative.csv")
+                .read_text("utf-8")
+                .replace("top.u_tile", "tile_alias"),
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            config = directory / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+            csv_report = directory / "negative.csv.report.csv"
+            with redirect_stdout(StringIO()):
+                code = main(
+                    [
+                        "check",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--inventory",
+                        str(ROOT / "tests" / "fixtures" / "inventory.json"),
+                        "--csv-report",
+                        str(csv_report),
+                    ]
+                )
+            with csv_report.open(encoding="utf-8-sig", newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+        self.assertEqual(code, 1)
+        self.assertGreaterEqual(len(csv_rows), 2)
+        self.assertTrue(all(row["position"] == "top.u_tile" for row in csv_rows))
+        self.assertTrue(all(row["position_alias"] == "tile_alias" for row in csv_rows))
 
     def test_validate_accepts_unregistered_rs_module(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -275,6 +555,45 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(collect.call_args[1]["elab_db"], str(elab_db))
 
+    def test_collector_receives_resolved_position_full_path(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "specs.csv"
+            specs.write_text(
+                (ROOT / "tests" / "fixtures" / "specs.csv")
+                .read_text("utf-8")
+                .replace("top.u_tile", "tile_alias", 1),
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            config = directory / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+            elab_db = directory / "kdb"
+            elab_db.mkdir()
+            inventory = load_inventory(ROOT / "tests" / "fixtures" / "inventory.json")
+            with patch("rscheck.cli.collect_inventory", return_value=inventory) as collect:
+                with redirect_stdout(StringIO()):
+                    code = main(
+                        [
+                            "check",
+                            "--excel",
+                            str(specs),
+                            "--config",
+                            str(config),
+                            "--collector",
+                            "collector",
+                            "--elab-db",
+                            str(elab_db),
+                        ]
+                    )
+            collected_specs = collect.call_args.args[1]
+        self.assertEqual(code, 0)
+        self.assertEqual(collected_specs[0].position, "top.u_tile")
+        self.assertEqual(collected_specs[0].position_alias, "tile_alias")
+
     def test_legacy_design_passthrough_is_rejected(self) -> None:
         for option in ("-f", "-sv", "-lib"):
             with self.subTest(option=option):
@@ -330,7 +649,6 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(code, 2)
             self.assertIn("header validation failed", error.getvalue())
-
 
 if __name__ == "__main__":
     unittest.main()

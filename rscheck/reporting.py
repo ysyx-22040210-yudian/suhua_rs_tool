@@ -104,6 +104,7 @@ def _finding_row(
         "status": "PASS" if passed else finding.severity.upper(),
         "row": finding.row_number if finding.row_number is not None else "",
         "position": finding.position,
+        "position_alias": row.spec.position_alias if row is not None else "",
         "RS_inst": finding.rs_inst,
         "RS_CFG_EN": finding.rs_cfg_en,
         "instance": finding.instance,
@@ -129,6 +130,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "status",
         "row",
         "position",
+        "position_alias",
         "RS_module",
         "RS_inst",
         "RS_CFG_EN",
@@ -154,6 +156,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "status": "PASS",
                             "row": row.spec.row_number,
                             "position": row.spec.position,
+                            "position_alias": row.spec.position_alias,
                             "RS_module": row.spec.rs_module,
                             "RS_inst": row.spec.rs_inst,
                             "RS_CFG_EN": row.spec.rs_cfg_en,
@@ -184,9 +187,12 @@ def format_console_report(report: CheckReport) -> str:
         lines.append(f"[{finding.severity.upper()}] {finding.code}: {finding.message}")
     for row in report.rows:
         effective_step = "?" if row.effective_step is None else str(row.effective_step)
+        position = row.spec.position
+        if row.spec.position_alias:
+            position = f"{row.spec.position_alias} -> {row.spec.position}"
         lines.append(
             f"[{'PASS' if row.passed else 'FAIL'}] row {row.spec.row_number} "
-            f"{row.spec.intf_type} | {row.spec.position} / {row.spec.rs_inst} "
+            f"{row.spec.intf_type} | {position} / {row.spec.rs_inst} "
             f"physical={len(row.instances)} effective={effective_step} "
             f"expected={row.spec.step} "
             f"RS_CFG_EN={row.spec.rs_cfg_en or '<blank>'}"

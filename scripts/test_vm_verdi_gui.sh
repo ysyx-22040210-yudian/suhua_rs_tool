@@ -15,7 +15,6 @@ NPI_PLATFORM="${NPI_PLATFORM-}"
 NPI_INC_DIR="${NPI_INC_DIR-}"
 NPI_LIB_DIR="${NPI_LIB_DIR-}"
 GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-180}"
-VERDI_GENERIC_READY_DELAY="${VERDI_GENERIC_READY_DELAY:-10}"
 VERDI_WINDOW_REGEX="${VERDI_WINDOW_REGEX:-verdi|novas|debussy}"
 VERDI_READY_REGEX="${VERDI_READY_REGEX:-<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)}"
 NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
@@ -146,12 +145,8 @@ assert_verdi_still_ready() {
     grep -Ei "$VERDI_WINDOW_REGEX" |
     LC_ALL=C sort >"$CURRENT_WINDOWS" || true
   LC_ALL=C comm -13 "$BASELINE_WINDOWS" "$CURRENT_WINDOWS" >"$NEW_WINDOWS"
-  if [ "$VERDI_TITLE_CONFIRMED" -eq 1 ]; then
-    grep -Eq "$VERDI_READY_REGEX" "$NEW_WINDOWS" ||
-      fail "the Verdi top window disappeared during the test"
-  else
-    [ -s "$NEW_WINDOWS" ] || fail "the Verdi GUI window disappeared during the test"
-  fi
+  grep -Eq "$VERDI_READY_REGEX" "$NEW_WINDOWS" ||
+    fail "the Verdi window for elaborated top 'top' disappeared during the test"
 
   if grep -Eiq \
     'segmentation fault|core dumped|fatal([ :]|$)|license (checkout )?failed|cannot (checkout|obtain).*license' \
@@ -194,7 +189,6 @@ esac
 
 for numeric_setting in \
   "$GUI_START_TIMEOUT" \
-  "$VERDI_GENERIC_READY_DELAY" \
   "$NPI_TIMEOUT" \
   "$GUI_ONLINE_ITERATIONS" \
   "$GUI_STRESS_ITERATIONS" \
@@ -358,14 +352,9 @@ nohup "$VERDI_BIN" -elab "$ELAB_DB" >"$VERDI_LOG" 2>&1 </dev/null &
 VERDI_LAUNCH_PID=$!
 echo "Verdi launch PID=$VERDI_LAUNCH_PID"
 
-verdi_launch_uses_elab_db() {
-  pid_uses_elab_db "$VERDI_LAUNCH_PID"
-}
-
 elapsed=0
 VERDI_WINDOWS=""
 VERDI_READY=0
-VERDI_TITLE_CONFIRMED=0
 while [ "$elapsed" -lt "$GUI_START_TIMEOUT" ]; do
   xwininfo -root -tree 2>/dev/null |
     grep -Ei "$VERDI_WINDOW_REGEX" |
@@ -373,12 +362,6 @@ while [ "$elapsed" -lt "$GUI_START_TIMEOUT" ]; do
   LC_ALL=C comm -13 "$BASELINE_WINDOWS" "$CURRENT_WINDOWS" >"$NEW_WINDOWS"
   VERDI_WINDOWS="$(sed -n '1,$p' "$NEW_WINDOWS")"
   if [ -n "$VERDI_WINDOWS" ] && grep -Eq "$VERDI_READY_REGEX" "$NEW_WINDOWS"; then
-    VERDI_READY=1
-    VERDI_TITLE_CONFIRMED=1
-    break
-  fi
-  if [ -n "$VERDI_WINDOWS" ] && [ "$elapsed" -ge "$VERDI_GENERIC_READY_DELAY" ] &&
-     verdi_launch_uses_elab_db; then
     VERDI_READY=1
     break
   fi
@@ -398,14 +381,10 @@ if [ "$VERDI_READY" -ne 1 ]; then
   printf '%s\n' "$VERDI_WINDOWS" >&2
   echo "Verdi log:" >&2
   sed -n '1,200p' "$VERDI_LOG" >&2
-  fail "no new Verdi X11 window appeared within ${GUI_START_TIMEOUT}s"
+  fail "no new Verdi X11 window title matched VERDI_READY_REGEX for elaborated top 'top' within ${GUI_START_TIMEOUT}s"
 fi
 
-if [ "$VERDI_TITLE_CONFIRMED" -eq 1 ]; then
-  echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
-else
-  echo "Verdi GUI window detected after ${elapsed}s; title format differs from the tested Verdi release:"
-fi
+echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
 printf '%s\n' "$VERDI_WINDOWS"
 
 cd "$PROJECT_ROOT"
@@ -435,7 +414,8 @@ POS_LOG="$TEST_ROOT/positive_console.log"
 grep -Fq 'RESULT: PASS | rows=2 errors=0 warnings=0' "$POS_LOG"
 assert_no_collector_errors "$POS_LOG"
 
-"$PYTHON_BIN" - "$POS_REPORT" "$POS_INVENTORY" <<'PY'
+"$PYTHON_BIN" - "$POS_REPORT" "$POS_INVENTORY" "$POS_CSV" <<'PY'
+import csv
 import json
 import sys
 
@@ -443,6 +423,8 @@ with open(sys.argv[1], "r", encoding="utf-8") as stream:
     report = json.load(stream)
 with open(sys.argv[2], "r", encoding="utf-8") as stream:
     inventory = json.load(stream)
+with open(sys.argv[3], "r", encoding="utf-8-sig", newline="") as stream:
+    csv_rows = list(csv.DictReader(stream))
 
 if report.get("schema_version") != 3:
     raise SystemExit("unexpected report schema: {!r}".format(report.get("schema_version")))
@@ -450,6 +432,20 @@ if inventory.get("schema_version") != 2:
     raise SystemExit(
         "unexpected inventory schema: {!r}".format(inventory.get("schema_version"))
     )
+
+positions = inventory.get("positions")
+if not isinstance(positions, dict) or set(positions) != {"top.u_tile"}:
+    raise SystemExit(
+        "collector must receive only resolved full paths, got {!r}".format(positions)
+    )
+if "tile_core" in positions:
+    raise SystemExit("Excel position alias leaked into NPI inventory positions")
+if len(csv_rows) != 2 or any(
+    row.get("position") != "top.u_tile"
+    or row.get("position_alias") != "tile_core"
+    for row in csv_rows
+):
+    raise SystemExit("CSV report lost resolved position/alias evidence: {!r}".format(csv_rows))
 
 summary = report["summary"]
 
@@ -523,6 +519,14 @@ if set(rows_by_group) != {"AAAA_BBB", "CTRL_RS"}:
     raise SystemExit("unexpected report groups: {!r}".format(sorted(rows_by_group)))
 
 for row in report["rows"]:
+    if row["spec"].get("position") != "top.u_tile":
+        raise SystemExit(
+            "report did not use resolved full position: {!r}".format(row["spec"])
+        )
+    if row["spec"].get("position_alias") != "tile_core":
+        raise SystemExit(
+            "report lost Excel position alias: {!r}".format(row["spec"])
+        )
     if row["spec"].get("RS_CFG_EN") != "假门控":
         raise SystemExit("report lost RS_CFG_EN Excel evidence: {!r}".format(row["spec"]))
     expected_rule = {
@@ -589,6 +593,7 @@ if not isinstance(control_step, dict) or (
 ) != (1, 1, 1):
     raise SystemExit("unexpected CTRL_RS step evidence: {!r}".format(control_step))
 print("positive summary OK:", summary)
+print("position mapping evidence OK: tile_core -> top.u_tile; NPI full paths only")
 print("dynamic step inventory/report evidence OK")
 PY
 
@@ -607,6 +612,9 @@ grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=$GUI_ONLINE_ITERATIONS" \
   "$ONLINE_GUI_LOG"
 grep -Fq 'contract=elab-only schemas=report-v3/inventory-v2' "$ONLINE_GUI_LOG"
+grep -Fq \
+  'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
+  "$ONLINE_GUI_LOG"
 assert_no_collector_errors "$ONLINE_GUI_LOG"
 
 ONLINE_NEGATIVE_LOG="$TEST_ROOT/online_gui_negative.log"
@@ -647,13 +655,16 @@ OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
   --iterations "$GUI_STRESS_ITERATIONS" \
-  --visible-tab rules \
+  --visible-tab positions \
   --visible-seconds "$GUI_VISIBLE_SECONDS" \
   2>&1 | tee "$OFFLINE_STRESS_LOG"
 grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=$GUI_STRESS_ITERATIONS" \
   "$OFFLINE_STRESS_LOG"
 grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_STRESS_LOG"
+grep -Fq \
+  'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
+  "$OFFLINE_STRESS_LOG"
 
 OFFLINE_LOAD_LOG="$TEST_ROOT/offline_gui_10000_rows.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -673,7 +684,7 @@ assert_no_unexpected_collector_logs
 assert_verdi_still_ready
 
 trap - ERR
-echo "PASS: fresh KDB online positive/negative GUI checks and offline GUI stress suite completed."
+echo "PASS: position mapping, fresh KDB online positive/negative GUI checks, and offline GUI stress suite completed."
 echo "ELAB_DB=$ELAB_DB"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"

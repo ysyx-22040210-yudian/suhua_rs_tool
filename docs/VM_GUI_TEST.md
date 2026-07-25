@@ -4,7 +4,7 @@
 
 | 界面 | 用途 | 启动器 | 设计输入 |
 |---|---|---|---|
-| **rscheck 自带 GUI** | 设置九列映射和模块规则、运行检查、查看动态拍数证据/日志 | `scripts/launch_rscheck_gui.sh` | schema v2 离线 inventory，或 collector + elaborated KDB；输出 report v3 |
+| **rscheck 自带 GUI** | 设置九列、position 简写和模块规则数据库，运行检查并查看证据/日志 | `scripts/launch_rscheck_gui.sh` | schema v2 离线 inventory，或 collector + elaborated KDB；输出 report v3 |
 | **Verdi GUI** | 人工浏览 hierarchy、实例和连线 | `scripts/launch_verdi_gui.sh` | `verdi -elab <elaborated KDB>` |
 
 `rscheck` 同时提供 CLI 和自带 Tkinter GUI；GUI 不是 Verdi 的包装窗口。两个 GUI 可以查看同一份检查对象，但职责不同。
@@ -179,13 +179,15 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 “模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求假门控且每个匹配实例贡献 1。
 
+“Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；映射未保存时不能运行，保存应原子写回当前配置 JSON 并重新加载。Excel 简写命中后检查、分组、clk/rst 相对解析和 NPI positions 均使用全路径；未命中值按完整路径直通。
+
 `has_rs_cfg_en=true` 时每个 RTL 实例都必须存在该 effective parameter、值为 0，且 Excel 精确填写 `假门控`；`false` 时 Excel 必须留空且 RTL 不得实际存在该 parameter。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。
 
-“检查结果”页应分别显示“匹配实例”和“实际/期望拍”。示例首组必须显示 6 个物理实例、`5/5` 拍；证据面板应包含 `module_rule`、`step_check`、逐实例贡献 `[1,1,0,1,1,1]`、全部 effective `parameters`、port、clk 来源和源文件/行号。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
+“检查结果”页应分别显示“匹配实例”和“实际/期望拍”，Position 应显示 `tile_core -> top.u_tile`。示例首组必须显示 6 个物理实例、`5/5` 拍；证据面板应包含 `spec.position=top.u_tile`、`spec.position_alias=tile_core`、`module_rule`、`step_check`、逐实例贡献 `[1,1,0,1,1,1]`、全部 effective `parameters`、port、clk 来源和源文件/行号。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
 
 运行期间输入控件和两个启动按钮应禁用，“取消”应启用。取消后状态应显示 `CANCELLED`，CLI 和 collector 进程组都应退出；关闭正在运行的窗口时应先出现取消确认。
 
-Windows/Linux 布局仍以最小尺寸 `980x680` 验收四个页签无重叠或截断。2026-07-24 截图不含“模块规则库”和动态拍数列，不能作为当前版本证据；必须重新验收，截图仍只用于本地检查、不提交仓库。
+Windows/Linux 布局仍以最小尺寸 `980x680` 验收五个页签“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”无重叠或截断。历史截图不含当前数据库页和动态拍数列，不能作为当前版本证据；必须重新验收，截图仍只用于本地检查、不提交仓库。
 
 ## 6. VM 可见验证、离线 smoke、负载与取消测试
 
@@ -206,18 +208,18 @@ gui_session_resolve
 xdpyinfo >/dev/null
 ```
 
-先直接复制运行规则库页 smoke；它只保存临时配置，不改仓库文件：
+先直接复制运行 Position 映射库页 smoke；它只保存临时配置，不改仓库文件，并同时完成映射库和模块规则库 CRUD：
 
 ```bash
 cd "$PROJECT_ROOT"
 "$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
   --project-root "$PROJECT_ROOT" \
   --iterations 1 \
-  --visible-tab rules \
+  --visible-tab positions \
   --visible-seconds 10
 ```
 
-窗口保留期间检查 980×680 下规则表、搜索框和编辑控件无重叠，终端末行应为 `GUI_SMOKE_PASS`。
+窗口保留期间检查 980×680 下映射表、搜索框和编辑控件无重叠，确认 `tile_core -> top.u_tile`，终端末行应为 `GUI_SMOKE_PASS`。
 
 GUI “验证 Excel”路径连续 20 轮：
 
@@ -230,7 +232,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 5
 ```
 
-预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...`。
+预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...` 和 `position-map=tile_core->top.u_tile`。
 
 可见离线正例连续 100 轮：
 
@@ -242,7 +244,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、结果页 2 行 PASS、0 error、0 warning。首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
 
 可见离线反例：
 
@@ -276,7 +278,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x...
 ```
 
-2026-07-24 九列版本的历史测量为 2.12 秒、最大 RSS 175,612 KiB。当前动态 step 版本新增规则保存和 report v3 渲染，必须重新测量；旧值既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
+2026-07-24 九列版本的历史测量为 2.12 秒、最大 RSS 175,612 KiB。当前 position 映射版本又增加映射库 CRUD、alias 展示和报告证据，必须重新测量；旧值既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -347,10 +349,10 @@ gui_session_resolve
 成功判据：脚本返回 `0` 并打印：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
+3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
 
 ## 8. 打开 Verdi GUI
 
@@ -430,7 +432,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 collector、用当前示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab` 窗口检测，并用同一 KDB 做在线 NPI 检查。下面的块可在已进入仓库、当前 shell 已能正常启动 Verdi 的图形 shell 直接复制；脚本不要求特定 license 环境变量名：
+Verdi 端到端脚本会运行全量测试、构建 collector、用当前示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。下面的块可在已进入仓库、当前 shell 已能正常启动 Verdi 的图形 shell 直接复制；脚本不要求特定 license 环境变量名：
 
 ```bash
 cd "$HOME/suhua_rs_tool"
@@ -444,18 +446,18 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`OUTPUT_BASE`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS` 和 `GUI_VISIBLE_SECONDS`。默认分别运行在线 3 轮、离线 100 轮和 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`OUTPUT_BASE`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS` 和 `GUI_VISIBLE_SECONDS`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。默认分别运行在线 3 轮、离线 100 轮和 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 成功输出应包含：
 
 ```text
 Ran ... tests in ...
 OK
-Verdi GUI window detected ...
+Verdi GUI loaded elaborated top 'top' after ...
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
-PASS: fresh KDB online positive/negative GUI checks and offline GUI stress suite completed.
+[PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
+PASS: position mapping, fresh KDB online positive/negative GUI checks, and offline GUI stress suite completed.
 ```
 
 `work.lib++` 仅供同目录的 `elabcom` 准备 KDB；Verdi GUI 和 NPI 检查都使用 `kdb.elab++`。
@@ -472,10 +474,11 @@ PASS: fresh KDB online positive/negative GUI checks and offline GUI stress suite
 - SSH 转发窗口在断开后关闭：保持 `ssh -Y` 隧道；`nohup` 或后台模式不能替代 X11 隧道。
 - `xprop` 或 `xwininfo` 找不到：Debian/Ubuntu 安装 `x11-utils`；RHEL/CentOS 安装 `xorg-x11-utils`。
 - `Verdi not found`：设置 `VERDI_BIN`、`VERDI_HOME` 或 `NOVAS_INST_DIR`，或把 `verdi` 加入 `PATH`。
-- `no new Verdi X11 window appeared`：检查 GUI 日志、license、DISPLAY 权限、KDB 和 Verdi/KDB 版本兼容性；必要时调高 `GUI_START_TIMEOUT`。
+- `no new Verdi X11 window title matched VERDI_READY_REGEX`：脚本看到了的窗口不代表 elaboration 已加载完成；检查 GUI 日志、license、DISPLAY 权限、KDB、Verdi/KDB 版本和实际窗口标题。必要时调高 `GUI_START_TIMEOUT`；仅当该 Verdi 版本确实使用不同标题格式时才覆盖 `VERDI_READY_REGEX`，且表达式仍须匹配目标 top，不能放宽为任意 Verdi 窗口。
 - `npi.h` 或 `libNPI.so` 找不到：设置 `NPI_INC_DIR` 和 `NPI_LIB_DIR`；后者必须直接包含 `libNPI.so`。
 - `npi_load_design failed`：确认 KDB 来自 `elabcom -elab`、内容完整，并与当前 Verdi/NPI 版本兼容；`work.lib++` 及其符号链接别名会更早被 Python runner 拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
+- 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
 - 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`。
 - `STEP_PARAMETER_MISSING` / `STEP_PARAMETER_VALUE_UNRESOLVED`：规则要求的拍数 parameter 缺失或未知；查看 report v3 逐实例证据。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个贡献未知，整行 fail-closed。

@@ -79,6 +79,7 @@ class ToolConfig:
     excel: ExcelConfig
     rtl: RtlConfig
     module_rules: Mapping[str, ModuleRule] = field(default_factory=dict)
+    position_mappings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ class SpecRow:
     rst: str
     crg_source: str
     rs_cfg_en: str
+    position_alias: str = ""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -109,6 +111,7 @@ class SpecRow:
             "RS_module": self.rs_module,
             "RS_inst": self.rs_inst,
             "position": self.position,
+            "position_alias": self.position_alias,
             "step": self.step,
             "clk": self.clk,
             "rst": self.rst,

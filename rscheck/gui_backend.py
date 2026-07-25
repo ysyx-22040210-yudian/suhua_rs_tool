@@ -297,8 +297,19 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
             raise GuiReportError(
                 f"validation row {index + 1} is missing: {', '.join(missing)}"
             )
+        _validate_position_resolution(item, f"validation row {index + 1}")
         rows.append(dict(item))
     return tuple(rows)
+
+
+def _validate_position_resolution(value: Mapping[str, Any], name: str) -> None:
+    position = value.get("position")
+    if not isinstance(position, str) or not position:
+        raise GuiReportError(f"{name}.position must be a non-empty string")
+    if "position_alias" not in value:
+        return
+    if not isinstance(value["position_alias"], str):
+        raise GuiReportError(f"{name}.position_alias must be a string")
 
 
 def _mapping_array(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
@@ -565,6 +576,7 @@ def load_report(path: str | Path) -> LoadedReport:
             raise GuiReportError(
                 f"report row {index + 1}.spec.RS_CFG_EN must be a string"
             )
+        _validate_position_resolution(spec, f"report row {index + 1}.spec")
         if not isinstance(row.get("passed"), bool):
             raise GuiReportError(f"report row {index + 1}.passed must be true or false")
         actual_passed_rows += int(row["passed"])

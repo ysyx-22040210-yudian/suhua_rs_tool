@@ -254,8 +254,16 @@ class GuiBackendTests(unittest.TestCase):
         row = {
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+            "position_alias": "core_pipe",
         }
-        self.assertEqual(load_validation_rows(json.dumps([row]))[0]["row"], 2)
+        loaded = load_validation_rows(json.dumps([row]))[0]
+        self.assertEqual(loaded["row"], 2)
+        self.assertEqual(loaded["position_alias"], "core_pipe")
+        self.assertEqual(loaded["position"], "value-3")
+        row["position_alias"] = None
+        with self.assertRaisesRegex(GuiReportError, "position_alias must be a string"):
+            load_validation_rows(json.dumps([row]))
+        row["position_alias"] = "core_pipe"
         del row["position"]
         with self.assertRaisesRegex(GuiReportError, "missing"):
             load_validation_rows(json.dumps([row]))
@@ -264,6 +272,7 @@ class GuiBackendTests(unittest.TestCase):
         spec = {
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+            "position_alias": "core_pipe",
         }
         report = {
             "schema_version": 2,
@@ -305,6 +314,16 @@ class GuiBackendTests(unittest.TestCase):
                 loaded.rows[0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
                 "0",
             )
+            self.assertEqual(loaded.rows[0]["spec"]["position_alias"], "core_pipe")
+            self.assertEqual(loaded.rows[0]["spec"]["position"], "value-3")
+
+            spec["position_alias"] = None
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GuiReportError, "position_alias must be a string"
+            ):
+                load_report(path)
+            spec["position_alias"] = "core_pipe"
 
             parameters = report["rows"][0]["matched_instances"][0].pop("parameters")
             path.write_text(json.dumps(report), encoding="utf-8")

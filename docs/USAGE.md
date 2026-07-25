@@ -101,15 +101,15 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 |---|---|---|
 | `Intf_type` | 该组打拍 interface 的业务标签 | 当前仅写入报告，不参与 RTL 判定 |
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
-| `RS_inst` | 一组打拍实例的本地实例名前缀 | 对 `position` 直接子实例做前缀和后缀规则匹配 |
-| `position` | 该组实例的直接父 scope 完整 NPI 层次路径 | 必须能在 elaborated 层次中找到；首尾 `.` 会被去除 |
+| `RS_inst` | 一组打拍实例的本地实例名前缀 | 对解析后的完整 `position` 直接子实例做前缀和后缀规则匹配 |
+| `position` | 配置库中的 position 简写，或该组实例的直接父 scope 完整 NPI 层次路径 | 简写命中后转换为全路径；未命中时兼容完整路径输入；最终必须能在 elaborated 层次中找到 |
 | `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
 | `CRG_source` | clk 预期的唯一上游来源 | 按 `rtl.crg_match` 与上游 module definition 或实例名比较 |
 | `RS_CFG_EN` | 该组是否预期为假门控 | 由解析后的规则决定应精确填写 `假门控` 还是留空，并核对逐实例 effective 参数 |
 
-一行定义一组，唯一组键是 `(position, RS_inst)`。同一个 `position` 下可以有多组，每组占一行；相同组键重复出现会被拒绝。
+一行定义一组，唯一组键是 `(解析后的完整 position, RS_inst)`。同一个完整 `position` 下可以有多组，每组占一行；即使两行使用不同文本，只要映射到同一完整路径且 `RS_inst` 相同，也属于重复组并会被拒绝。
 
 ### 2.2 任意额外列和非连续列映射
 
@@ -120,7 +120,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Owner | position | Review_note | rst | Intf_type | RS_CFG_EN | CRG_source | RS_inst | step | Ticket | RS_module | clk | Comment |
-| alice | top.u_tile | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 5 | HW-101 | rs_pipe | clk_rs | first group |
+| alice | tile_core | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 5 | HW-101 | rs_pipe | clk_rs | first group |
 
 对应配置为：
 
@@ -191,18 +191,37 @@ python -m rscheck validate \
 
 物理实例匹配完成后，工具再按模块规则计算每个实例的 `0/1/?` 拍贡献。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，index 必须等于从 `index_base` 开始、长度为**物理实例数**的连续序列，且所有实例必须使用同一个 tag。连续性不按有效 `step` 截短。
 
-### 3.2 clk/rst 连线
+### 3.2 Position 简写与完整路径
+
+可选配置 `position_mappings` 是 Excel 简写到 RTL 全路径的数据库。例如：
+
+```json
+"position_mappings": {
+  "tile_core": "top.u_tile",
+  "lsu_pipe": "top.u_core.u_lsu.u_pipe"
+}
+```
+
+解析每行时按区分大小写的 Excel 文本精确查找：
+
+- 命中 `tile_core` 时，`SpecRow.position`、组键、clk/rst 相对路径和 NPI collector 的 positions 输入均使用 `top.u_tile`；report v3 的 `spec.position_alias` 保留 `tile_core`。
+- 未命中时，不把它当作数据库错误，而是直接把 Excel 文本当作完整 RTL 路径；此时 `position_alias` 为空。这保证原来填写 `top.u_tile` 的 Excel 向后兼容。
+- 映射只替换 `position`，不会对路径做模糊、前缀或递归映射，也不会改写 `RS_inst`、`clk`、`rst` 等其他单元格。
+
+因此映射拼写错误通常会在在线/离线检查阶段表现为 `POSITION_NOT_FOUND`。检查报告中的完整路径和简写证据，可以区分“映射已命中但 RTL 中路径不存在”和“Excel 值没有命中映射而被当作路径直通”。
+
+### 3.3 clk/rst 连线
 
 formal port 名由 `rtl.clk_port` 和 `rtl.rst_port` 指定，默认分别是 `clk`、`rst`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。
 
 比较时会忽略信号字符串中的空白，并接受：
 
 1. Excel 值与 NPI 完整连线名完全相同；
-2. NPI 连线名等于 `position + "." + Excel值`。
+2. NPI 连线名等于 `解析后的完整 position + "." + Excel值`。
 
-例如 `position=top.u_tile`、`clk=clk_rs` 可以匹配 `top.u_tile.clk_rs`。若 `allow_leaf_signal_match=true`，还允许只比较最后一级信号名，但这可能把不同 scope 的同名信号误判为一致，默认关闭。
+例如 `position=tile_core` 映射为 `top.u_tile` 后，`clk=clk_rs` 可以匹配 `top.u_tile.clk_rs`。若 `allow_leaf_signal_match=true`，还允许只比较最后一级信号名，但这可能把不同 scope 的同名信号误判为一致，默认关闭。
 
-### 3.3 CRG 来源
+### 3.4 CRG 来源
 
 collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到唯一有效的上游 module cell 时才可通过；无来源、多来源和采集 warning 都会 fail-closed。
 
@@ -216,7 +235,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 推断出的 primitive gate/buffer 会继续向上穿透；只有它在 Netlist 中表现为 module cell 时才会作为 `CRG_source` 候选。
 
-### 3.4 模块规则库
+### 3.5 模块规则库
 
 配置中的 `module_rules` 是 `RS_module` 到检查策略的可选覆盖数据库。解析顺序固定为：先按区分大小写的模块名查找显式规则；精确匹配时使用显式规则，否则使用隐式默认规则 `has_rs_cfg_en=true`、`step_parameters=[]`。因此没有模块专属项时不会导致 `validate` 或 RTL 检查失败；默认行为是要求逐实例 `RS_CFG_EN=0`、Excel 精确填写 `假门控`，并让每个匹配实例贡献 `1` 拍。
 
@@ -235,7 +254,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 显式规则名和 parameter 名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CFG_EN`。显式规则优先于默认规则，其键必须与 Excel/RTL `RS_module` 大小写完全一致。RTL 中未列入 `step_parameters` 的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
 
-### 3.5 `RS_CFG_EN` effective 参数
+### 3.6 `RS_CFG_EN` effective 参数
 
 `RS_CFG_EN` 按组内匹配实例逐一检查，读取 elaboration 后的 effective 参数值，因此实例级 override 优先于模块声明默认值。inventory schema v2 把 collector 枚举到的全部 effective parameters 记录在实例 `parameters` 对象中；字符串保留 NPI 值表示，`null` 表示参数存在但无法可靠解析。
 
@@ -250,7 +269,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `has_rs_cfg_en=false` | 参数实际存在 | 空白 | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
 | `has_rs_cfg_en=false` | 任意 | 非空 | 另报 `RS_CFG_EN_LABEL_MISMATCH` |
 
-### 3.6 `step_parameters` 和有效拍数
+### 3.7 `step_parameters` 和有效拍数
 
 `step_parameters=[]` 时，每个模块名正确的匹配实例贡献 `1`；这也是没有显式模块规则时的默认行为。数组非空时，对每个实例读取所有列出的 parameter：所有值都能确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。例如 6 个实例的 `rs_mode` 为 `1,1,0,1,1,1`，逐实例贡献为 `1,1,0,1,1,1`，因此有效拍数为 `5`。
 
@@ -260,7 +279,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 ## 4. 配置文件完整说明
 
-配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`module_rules` 四个键。未知键、错误类型和未知列名都会被拒绝。
+配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五个键。`position_mappings` 可省略，其余结构要求见下文；未知键、错误类型和未知列名都会被拒绝。
 
 完整示例：
 
@@ -291,6 +310,10 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
     "require_contiguous_indices": false,
     "allow_leaf_signal_match": false,
     "crg_match": "module"
+  },
+  "position_mappings": {
+    "tile_core": "top.u_tile",
+    "lsu_pipe": "top.u_core.u_lsu.u_pipe"
   },
   "module_rules": {
     "rs_pipe": {
@@ -332,7 +355,42 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 `suffix_regex` 会被工具自动按完整字符串匹配，无需自行添加 `^`/`$`。`index` 组在运行时必须只产生 ASCII 数字，推荐固定写成 `(?P<index>[0-9]+)`。`tag` 组不是语法必需，但要使用 tag 一致性检查时应保留。
 
-### 4.4 `module_rules`
+### 4.4 `position_mappings`
+
+`position_mappings` 可省略或设为空 JSON 对象。每个键是 Excel 可以填写的非空简写，每个值是对应的非空 RTL 完整层次路径；名称区分大小写。简写命中后，工具仅向 NPI 请求映射值，不向 collector 发送简写。没有命中的 Excel 值按完整路径直通，因此不需要把所有现有全路径重复登记到数据库。
+
+多个 Excel 行可使用同一简写；多个不同简写也可以指向同一全路径，但它们解析后参与重复组判断，所以不能用不同简写绕过相同 `(position, RS_inst)` 的唯一性约束。
+
+GUI 可视化维护之外，CLI 也提供持久化 CRUD 和单值解析：
+
+```bash
+python -m rscheck position-db set \
+  --config config/rscheck.example.json \
+  --alias core0_lsu \
+  --rtl-path tb_top.dut.u_core0.u_lsu
+
+python -m rscheck position-db list \
+  --config config/rscheck.example.json \
+  --json
+
+python -m rscheck position-db resolve \
+  --config config/rscheck.example.json \
+  --position core0_lsu \
+  --json
+
+python -m rscheck position-db delete \
+  --config config/rscheck.example.json \
+  --alias core0_lsu
+```
+
+`set` 新增或覆盖映射，`delete` 要求简写已经存在，二者都通过临时文件加原子替换写回配置。
+原子替换保证单次写入不会留下半份 JSON，但不提供跨进程合并或文件锁；同一配置必须遵守单写者
+约束，不要同时用多个 CLI 进程或 GUI 与 CLI 修改它。GUI 保存前会重新读取磁盘配置并只替换当前
+数据库，以保留其他配置项的外部修改；若外部修改的是正在编辑的同一数据库，仍应先重新加载。
+`resolve` 只查询，不读取 Excel、不加载 inventory、不启动 NPI；未命中时会返回 direct 的完整
+路径语义，即 `position_alias` 为空、`position` 等于输入值。
+
+### 4.5 `module_rules`
 
 `module_rules` 必须是 JSON 对象，可以为空。每个键是一个需要覆盖默认行为的精确模块定义名，每个值必须且只能包含：
 
@@ -343,7 +401,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 没有精确显式项的模块自动采用 `has_rs_cfg_en=true`、`step_parameters=[]`。显式项优先，名称比较区分大小写。
 
-### 4.5 命令行覆盖
+### 4.6 命令行覆盖
 
 | 参数 | 作用 |
 |---|---|
@@ -354,7 +412,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `--header-check` | 本次运行显式开启表头校验；GUI 会按复选框状态传入该参数或 `--no-header-check` |
 | `--no-header-check` | 本次运行关闭表头校验 |
 
-`--no-header-check` 只应在表头不可控且列映射已经独立确认时使用；它会降低发现错列的能力。
+`position_mappings` 和 `module_rules` 没有仅对单次检查生效的临时覆盖参数，检查始终读取当前配置 JSON。Position 映射可通过 GUI 或 `position-db` 子命令持久化维护；模块规则通过 GUI 维护。`--no-header-check` 只应在表头不可控且列映射已经独立确认时使用；它会降低发现错列的能力。
 
 ## 5. 工具自带桌面 GUI
 
@@ -404,7 +462,13 @@ bash scripts/launch_rscheck_gui.sh
 
 在线模式严格构造现有 CLI 的 `--collector ... --elab-db ...` 命令。GUI 没有 RTL、filelist、top、编译选项或 passthrough 输入框，也不会在检查时调用 `vericom/elabcom`；`Elab KDB` 必须是生产流程预先生成的 elaborated KDB，不能是 `work.lib++`。
 
-### 5.3 “模块规则库”页
+### 5.3 “Position 映射库”页
+
+加载配置后，映射页列出 Excel position 简写和 RTL 完整路径。用户可以搜索、新建、修改、删除当前配置中的对应关系；“应用新建/修改”只更新 GUI 内存，“保存映射库”才原子写回当前配置 JSON 并重新加载校验。
+
+简写和完整路径都必须为非空文本，简写不能重复。存在未保存映射时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。保存后可直接用 Excel 中的简写运行，CLI/NPI 获得的是映射后的完整路径。
+
+### 5.4 “模块规则库”页
 
 加载配置后，规则页列出模块名、是否具有 `RS_CFG_EN` 和决定拍数的 parameters。用户可以搜索规则，或通过“新建/修改”“删除”维护当前配置：
 
@@ -415,20 +479,20 @@ bash scripts/launch_rscheck_gui.sh
 
 重复 parameter、`RS_CFG_EN` 被误放入 `step_parameters`、空模块名等会在应用时拒绝。存在“未保存”规则时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。
 
-### 5.4 执行、结果和取消
+### 5.5 执行、结果和取消
 
 - `验证 Excel`：在后台运行 `validate --json`，只检查配置、表头、列映射和规格行；成功后切到“检查结果”页并显示 `VALID`。
 - `运行 RTL 检查`：在后台运行与当前界面等价的 `check` 命令；返回 `0` 显示 `PASS`，返回 `1` 显示 `FAIL` 和差异，基础设施错误显示 `ERROR`。
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
 
-“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表分别显示“匹配实例”和“实际/期望拍”，避免把物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、端口、clk 来源和源文件/行号。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、`module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、端口、clk 来源和源文件/行号。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 共四个页签：“检查配置”“模块规则库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke、映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
-`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它可以确认 `RS_CFG_EN` 映射和表头存在，但不能判断数据格应为空还是应填写 `假门控`；该判断只在 `check` 阶段执行。
+`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会解析 `position_mappings` 并在摘要中显示完整路径，也可以确认 `RS_CFG_EN` 列映射和表头存在，但不能判断 RTL 路径是否真实存在或数据格应为空还是应填写 `假门控`；这些判断只在 `check` 阶段执行。
 
 ```bash
 python -m rscheck validate \
@@ -440,8 +504,8 @@ python -m rscheck validate \
 
 ```text
 VALID: 2 specification row(s)
-row 2: top.u_tile / AAAA_BBB module=rs_pipe step=2
-row 3: top.u_tile / CTRL_RS module=rs_pipe step=1
+row 2: tile_core -> top.u_tile / AAAA_BBB module=rs_pipe step=5
+row 3: tile_core -> top.u_tile / CTRL_RS module=rs_pipe step=1
 ```
 
 输出完整规范化 JSON：
@@ -664,7 +728,7 @@ python -m rscheck check \
 在线流程为：
 
 1. Python 解析规格表和配置；
-2. 提取所有唯一 `position` 写入临时文本文件；
+2. 解析 position 简写，提取所有唯一完整 `position` 写入临时文本文件；简写不会送入 collector；
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
 5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；
@@ -734,8 +798,8 @@ Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/
 
 ```text
 RESULT: PASS | rows=2 errors=0 warnings=0
-[PASS] row 2 OUT_IF | top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
-[PASS] row 3 CTRL_IF | top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
+[PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
+[PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS physical=1 effective=1 expected=1 RS_CFG_EN=假门控
 ```
 
 ### 11.2 JSON 报告
@@ -745,7 +809,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 - `schema_version`：当前固定为 `3`；注意 NPI inventory 的 schema 仍为 `2`；
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`；
-- `rows[].spec`：规范化后的九字段规格和源行号，其中 `RS_CFG_EN` 可以是空字符串；
+- `rows[].spec`：规范化后的九字段规格和源行号；`position` 是解析后的完整 RTL 路径，命中映射时 `position_alias` 保存 Excel 原始简写，未命中时为空；`RS_CFG_EN` 可以是空字符串；
 - `rows[].module_rule`：本行最终采用的规则；无显式覆盖时也会记录隐式默认的 `has_rs_cfg_en=true` 与空 `step_parameters`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
 - `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线、clk 来源及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`；
@@ -760,11 +824,11 @@ GUI 为历史问题复现保留 report schema v2 的只读兼容显示，但 v2 
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
 ```text
-status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual
+status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual
 ```
 
 无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
-`step_contributions` 是 JSON 文本，记录每个实例的 parameter 状态和贡献。`RS_CFG_EN` 与动态拍数失败仍沿用通用 `expected` / `actual`；逐实例完整证据保存在 JSON report v3 中。
+`position` 始终是检查使用的 RTL 全路径，`position_alias` 是命中映射时的 Excel 简写。`step_contributions` 是 JSON 文本，记录每个实例的 parameter 状态和贡献。`RS_CFG_EN` 与动态拍数失败仍沿用通用 `expected` / `actual`；逐实例完整证据保存在 JSON report v3 中。
 
 ### 11.4 Python CLI 退出码
 
@@ -799,7 +863,7 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 | `column mappings must be unique` | 两个字段映射到同一列 | 调整为互不重复的 1-based 列号 |
 | `blank required fields` | 除 `RS_CFG_EN` 外的八个必填字段只填写了一部分 | 补齐八个始终必填字段，或清空整行使其被跳过；不要仅为消除此错误而填写 `RS_CFG_EN` |
 | `step must be a non-negative integer` | `step` 为负数、小数或科学计数法 | 改为非负整数，如 `0` 或 `2` |
-| `duplicate group` | 同一 `(position, RS_inst)` 出现多行 | 合并或修改重复组 |
+| `duplicate group` | 多行解析到同一完整 `(position, RS_inst)`，包括不同简写指向同一路径 | 合并或修改重复组/映射 |
 | `sheet ... not found` | sheet 名/序号不对 | 用实际工作表名或 1-based 序号覆盖 `--sheet` |
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
 | `formula cells are not supported` | XLSX/XLSM 的映射字段是公式单元格 | 将值固化为文本/数字；额外未映射列不受影响 |
@@ -810,7 +874,7 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 | `npi_init failed` | NPI 环境、license 或版本问题 | 检查 license、Verdi 安装和平台库 |
 | `npi_load_design failed` | KDB 损坏、版本不兼容、未完成 elaboration 或 top 错误 | 确认输入是 `elabcom -elab` 产物；用相同 Verdi 流程重新生成 KDB 并验证 top；`work.lib++` 会在启动 collector 前被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
-| `POSITION_NOT_FOUND` | Excel 路径不属于当前 elaborated top，或层次名错误 | 在同一 KDB 中核对完整实例层次和 `position` |
+| `POSITION_NOT_FOUND` | 映射后的路径不属于当前 elaborated top；或 Excel 简写未命中数据库，被当作完整路径直通 | 查看 report 的 `position`/`position_alias`，核对映射键、映射值和同一 KDB 中的完整 hierarchy |
 | `GROUP_NOT_FOUND` | 没有实例同时满足前缀和 suffix regex | 核对 `RS_inst` 和 `rtl.suffix_regex` |
 | `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但 suffix 不符合规则 | 修正命名或 regex；该 finding 默认是 warning |
 | 显式模块规则未生效 | 规则键与 Excel/RTL `RS_module` 大小写不完全一致 | 核对名称；没有精确匹配时工具会正常采用默认规则，而不是把近似名称当作覆盖项 |
@@ -844,6 +908,7 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
 - 当前九字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
 - `step` 是模块规则计算出的有效拍数，不等同于物理实例数；后缀连续性仍按物理实例检查。
+- position 映射是区分大小写的精确替换，不做模糊、前缀或多级递归解析；未命中值按完整路径直通。
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
 - SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 风格，需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
@@ -858,11 +923,11 @@ status,row,position,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_ste
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置九字段的 1-based 列映射；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
+2. 配置九字段的 1-based 列映射；按需维护 position 简写到 RTL 全路径的映射库；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
 3. 按最终解析规则填写 `RS_CFG_EN` 和预期有效 `step`；默认是 `假门控` 且每个物理实例贡献 1，有效拍可为 0。
-4. 执行 `validate`，确认 sheet、表头、列和规范化内容。
+4. 执行 `validate`，确认 sheet、表头、列、position 解析结果和规范化内容。
 5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
 6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。
 7. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。
-8. RTL、KDB 或模块规则变化后立即重新在线采集或重新检查。
+8. RTL、KDB、position 映射或模块规则变化后立即重新在线采集或重新检查。
 9. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。

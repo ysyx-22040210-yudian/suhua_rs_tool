@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Sequence
 
 from .checker import check_specs
-from .config import load_config
+from .config import load_config, make_position_mappings, save_config
 from .excel_reader import read_spec_rows
 from .inventory import load_inventory
 from .model import ConfigError, FIELD_NAMES, RsCheckError, ToolConfig
@@ -92,6 +92,29 @@ def _build_parser() -> argparse.ArgumentParser:
             "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
         ),
     )
+
+    position_db = subparsers.add_parser(
+        "position-db",
+        help="manage Excel position shorthand to RTL hierarchy mappings",
+    )
+    position_commands = position_db.add_subparsers(
+        dest="position_db_command", required=True
+    )
+    position_list = position_commands.add_parser("list", help="list position mappings")
+    position_list.add_argument("--config", required=True, help="JSON configuration file")
+    position_list.add_argument("--json", action="store_true", help="print JSON")
+    position_set = position_commands.add_parser("set", help="add or replace a mapping")
+    position_set.add_argument("--config", required=True, help="JSON configuration file")
+    position_set.add_argument("--alias", required=True, help="Excel position shorthand")
+    position_set.add_argument("--rtl-path", required=True, help="full RTL hierarchy path")
+    position_delete = position_commands.add_parser("delete", help="delete a mapping")
+    position_delete.add_argument("--config", required=True, help="JSON configuration file")
+    position_delete.add_argument("--alias", required=True, help="Excel position shorthand")
+    position_resolve = position_commands.add_parser("resolve", help="resolve one position value")
+    position_resolve.add_argument("--config", required=True, help="JSON configuration file")
+    position_resolve.add_argument("--position", required=True, help="Excel position value")
+    position_resolve.add_argument("--json", action="store_true", help="print JSON")
+
     return parser
 
 
@@ -157,14 +180,17 @@ def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig
 
 
 def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
-    specs = read_spec_rows(args.excel, config.excel)
+    specs = read_spec_rows(args.excel, config.excel, config.position_mappings)
     if args.json:
         print(json.dumps([spec.as_dict() for spec in specs], ensure_ascii=False, indent=2))
     else:
         print(f"VALID: {len(specs)} specification row(s)")
         for spec in specs:
+            position = spec.position
+            if spec.position_alias:
+                position = f"{spec.position_alias} -> {spec.position}"
             print(
-                f"row {spec.row_number}: {spec.position} / {spec.rs_inst} "
+                f"row {spec.row_number}: {position} / {spec.rs_inst} "
                 f"module={spec.rs_module} step={spec.step}"
             )
     return 0
@@ -176,7 +202,7 @@ def _check_command(
 ) -> int:
     if args.npi_timeout is not None and args.npi_timeout < 1:
         raise ConfigError("--npi-timeout must be >= 1")
-    specs = read_spec_rows(args.excel, config.excel)
+    specs = read_spec_rows(args.excel, config.excel, config.position_mappings)
     if args.inventory:
         if args.elab_db:
             raise ConfigError("--elab-db requires --collector")
@@ -208,6 +234,61 @@ def _check_command(
     return 0 if report.passed else 1
 
 
+def _position_db_command(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    mappings = dict(config.position_mappings)
+    command = args.position_db_command
+    if command == "list":
+        payload = {"mappings": dict(sorted(mappings.items()))}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"POSITION_DB: {len(mappings)} mapping(s)")
+            for alias, rtl_path in sorted(mappings.items()):
+                print(f"{alias} -> {rtl_path}")
+        return 0
+    if command == "resolve":
+        position_input = args.position.strip().strip(".")
+        if not position_input:
+            raise ConfigError("--position must not be empty")
+        mapped = position_input in mappings
+        resolved = mappings.get(position_input, position_input).strip(".")
+        payload = {
+            "position": resolved,
+            "position_alias": position_input if mapped else "",
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"{position_input} -> {resolved} "
+                f"({'mapped' if mapped else 'direct'})"
+            )
+        return 0
+
+    if command == "set":
+        mappings[args.alias] = args.rtl_path
+    elif command == "delete":
+        if args.alias not in mappings:
+            raise ConfigError(f"position alias {args.alias!r} is not registered")
+        del mappings[args.alias]
+    else:  # pragma: no cover - argparse limits the command set
+        raise ConfigError(f"unsupported position-db command: {command}")
+
+    updated_mappings = make_position_mappings(mappings)
+    output = save_config(
+        replace(config, position_mappings=updated_mappings), args.config
+    )
+    if command == "set":
+        print(
+            f"POSITION_DB SAVED: {args.alias} -> "
+            f"{updated_mappings[args.alias]} | {output}"
+        )
+    else:
+        print(f"POSITION_DB SAVED: deleted {args.alias} | {output}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
@@ -217,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return gui_main()
     try:
+        if args.command == "position-db":
+            return _position_db_command(args)
         config = _apply_overrides(load_config(args.config), args)
         if args.command == "validate":
             return _validate_command(args, config)

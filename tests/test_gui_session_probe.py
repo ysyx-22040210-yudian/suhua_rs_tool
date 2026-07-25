@@ -14,6 +14,25 @@ SCRIPT = ROOT / "scripts" / "test_vm_verdi_gui.sh"
 BASH = shutil.which("bash")
 
 
+class VmVerdiReadinessContractTests(unittest.TestCase):
+    def test_only_matching_elaborated_top_title_can_be_ready(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertNotIn("VERDI_GENERIC_READY_DELAY", source)
+        self.assertNotIn("VERDI_TITLE_CONFIRMED", source)
+        self.assertNotIn('[ -s "$NEW_WINDOWS" ] ||', source)
+        self.assertNotIn("title format differs", source)
+        self.assertGreaterEqual(
+            source.count('grep -Eq "$VERDI_READY_REGEX" "$NEW_WINDOWS"'),
+            2,
+        )
+        self.assertIn(
+            "no new Verdi X11 window title matched VERDI_READY_REGEX",
+            source,
+        )
+        self.assertIn("Verdi GUI loaded elaborated top 'top'", source)
+
+
 @unittest.skipUnless(
     BASH and sys.platform.startswith("linux"),
     "Linux bash is required for GUI session probe tests",
