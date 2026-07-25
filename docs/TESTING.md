@@ -365,7 +365,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... position-map=tile_core->top.u_tile
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线。当前 position 映射版本必须重新运行本节命令，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线。当前 0.6.0 fresh 验收结果见 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；若把本节 20 轮 validate-only 单独作为设备门禁，必须在目标设备重跑，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -420,7 +420,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。2026-07-24 的结果仅作历史性能对照；当前 position 映射版本的 100 轮和 10,000 行实际结果见 [Position 映射库与 GUI 压测验证记录](TEST_RESULTS_POSITION_MAPPING_2026-07-25.md)。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。此前结果仅作历史性能对照；当前 0.6.0 的 100 轮和 10,000 行实际结果见 [完整 RS_inst 本地例化名与 GUI 压测验证记录](TEST_RESULTS_FULL_INSTANCE_2026-07-25.md)。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -469,7 +469,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的历史测量为 2.12 秒墙钟时间、最大 RSS 175,612 KiB。当前 position 映射版本又增加映射库 CRUD、alias 展示和报告证据，必须重新测量；旧数字不是当前验收结果，也不是不同设备的硬门槛。若缺少 `/usr/bin/time`，先安装发行版的 `time` 包。
+2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB 仅是历史性能数据。0.6.0 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；旧数字不是当前性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -1229,4 +1229,4 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前 Position 映射版本的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`。`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是此前功能阶段的历史基线，不能替代 0.5.0 的验证记录。
+当前完整本地 `RS_inst` 版本的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`。`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是此前功能阶段的历史基线，不能替代 0.6.0 的验证记录。

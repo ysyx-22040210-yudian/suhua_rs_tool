@@ -280,7 +280,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x...
 ```
 
-2026-07-24 九列版本的历史测量为 2.12 秒、最大 RSS 175,612 KiB。当前 position 映射版本又增加映射库 CRUD、alias 展示和报告证据，必须重新测量；旧值既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
+2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB 仅是历史性能数据。0.6.0 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；旧时间和 RSS 既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -523,16 +523,8 @@ PASS: position mapping, fresh KDB online positive/negative GUI checks, and offli
 
 ## 12. 验证记录
 
-当前动态 step 状态见 `TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`；其中未完成的 VM 项必须实际重跑后才能改为 PASS。`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和以下 2026-07-24 内容均是动态规则库之前的历史基线，只用于对照。
+当前 0.6.0 完整本地 `RS_inst` 状态见 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`。该记录固定到 GitHub 提交 `e4fd87a532d90cad59d13522f7e1366038bf653f`：Windows `Ran 185 tests`、`OK (skipped=44)`，即 141 项执行通过、44 项平台限定用例按预期跳过；CentOS 185 项全部通过且无 skip；fresh elaborated KDB、真实 NPI `CTRL_RS_D0` 完整名证据、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
 
-- CentOS 89 项全量自动测试通过，无 skipped。
-- CentOS 7.9、Python 3.8.13、G++ 11.2.1、Verdi/NPI O-2018.09-SP2 环境完成真实 collector/KDB 正向链路验证。
-- 清空 `DISPLAY`、`XAUTHORITY`、`DBUS_SESSION_BUS_ADDRESS` 和 `XDG_RUNTIME_DIR` 后，GUI 会话发现仍自动选中 `DISPLAY=:0`，不依赖 `gnome-session-binary`。
-- GUI “验证 Excel”20 轮均为 2 行 VALID、0 error、0 warning；可见离线正例 100 轮均为 2 行 PASS、0 error、0 warning。
-- 10,000 行 GUI 负载最终测量为 1.98–2.08 秒，最大 RSS 150060–150148 KiB，0 error、0 warning。
-- 取消启动竞态连续 100 轮通过，总耗时约 15.3 秒。
-- Verdi launcher 能打开真实 elaborated KDB；同一 KDB 的在线 GUI smoke 连续 3 轮均为 2 行 PASS、0 error、0 warning。
-- Windows 实测发现 89 项自动测试，其中 21 项 Linux Bash/X11 测试和 1 项 POSIX 进程组测试按预期 skipped，其余 67 项通过；macOS 预期只跳过 21 项 Linux-only 测试。
-- Windows 工具自带 GUI 在最小窗口 `980x680` 完成截图布局验收，无文字/控件重叠；截图没有提交仓库。
+`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 
 具体 VM 每次压力和在线 smoke 的终端输出应随提交一起记录在测试说明或提交信息中，但不得包含主机、密码、license 或会话认证路径。
