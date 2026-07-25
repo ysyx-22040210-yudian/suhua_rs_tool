@@ -611,7 +611,8 @@ ONLINE_GUI_LOG="$TEST_ROOT/online_gui_positive.log"
 grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=$GUI_ONLINE_ITERATIONS" \
   "$ONLINE_GUI_LOG"
-grep -Fq 'contract=elab-only schemas=report-v3/inventory-v2' "$ONLINE_GUI_LOG"
+grep -Fq 'contract=elab-only' "$ONLINE_GUI_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$ONLINE_GUI_LOG"
 grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$ONLINE_GUI_LOG"
@@ -632,7 +633,8 @@ ONLINE_NEGATIVE_LOG="$TEST_ROOT/online_gui_negative.log"
 grep -Eq \
   'state=FAIL rows=行数 1 errors=错误 [1-9][0-9]* warnings=警告 0 mode=online case=negative iterations=1' \
   "$ONLINE_NEGATIVE_LOG"
-grep -Fq 'contract=elab-only schemas=report-v3/inventory-v2' "$ONLINE_NEGATIVE_LOG"
+grep -Fq 'contract=elab-only' "$ONLINE_NEGATIVE_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$ONLINE_NEGATIVE_LOG"
 assert_no_collector_errors "$ONLINE_NEGATIVE_LOG"
 
 DEFAULT_RULE_LOG="$TEST_ROOT/offline_gui_default_rule.log"

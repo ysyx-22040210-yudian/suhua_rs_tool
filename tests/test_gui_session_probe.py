@@ -32,6 +32,19 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         )
         self.assertIn("Verdi GUI loaded elaborated top 'top'", source)
 
+    def test_gui_smoke_contract_fields_are_order_independent(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            "contract=elab-only schemas=report-v3/inventory-v2",
+            source,
+        )
+        self.assertGreaterEqual(source.count("grep -Fq 'contract=elab-only'"), 2)
+        self.assertGreaterEqual(
+            source.count("grep -Fq 'schemas=report-v3/inventory-v2'"),
+            4,
+        )
+
 
 @unittest.skipUnless(
     BASH and sys.platform.startswith("linux"),
