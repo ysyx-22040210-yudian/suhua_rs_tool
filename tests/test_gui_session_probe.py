@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "test_vm_verdi_gui.sh"
+SITE_ENV_RUNNER = ROOT / "scripts" / "lib" / "run_with_env_file.sh"
 BASH = shutil.which("bash")
 
 
@@ -44,6 +45,376 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
             source.count("grep -Fq 'schemas=report-v3/inventory-v2'"),
             4,
         )
+
+    def test_license_environment_import_contract_is_safe(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        runner = SITE_ENV_RUNNER.read_text(encoding="utf-8")
+        helper = source.split(
+            "# BEGIN VERDI LICENSE ENVIRONMENT HELPERS", 1
+        )[1].split("# END VERDI LICENSE ENVIRONMENT HELPERS", 1)[0]
+
+        self.assertIn('source "$RSCHECK_SITE_ENV_FILE"', runner)
+        self.assertIn('"$SCRIPT_DIR/lib/run_with_env_file.sh"', source)
+        self.assertIn(
+            'runuser -u "$GUI_SESSION_SELECTED_USER" -- bash -lc', helper
+        )
+        self.assertIn("VERDI_AUTO_LICENSE_IMPORT", source)
+        self.assertNotIn('"LM_LICENSE_FILE=$LM_LICENSE_FILE"', source)
+        self.assertNotIn('"SNPSLMD_LICENSE_FILE=$SNPSLMD_LICENSE_FILE"', source)
+        self.assertIn('"PROJECT_ROOT=$RSCHECK_FIXED_PROJECT_ROOT"', source)
+        self.assertIn('"OUTPUT_BASE=$RSCHECK_FIXED_OUTPUT_BASE"', source)
+        self.assertIn("-u SHELLOPTS", runner)
+        self.assertIn("{ set +x; } 2>/dev/null", source)
+        self.assertIn("{ set +x; } 2>/dev/null", runner)
+        self.assertNotIn("/home/host", helper)
+        self.assertNotIn("eval ", helper)
+        self.assertNotIn(".bashrc", helper)
+        probe_exit = source.index('if [ "$GUI_PROBE_ONLY" -eq 1 ]')
+        import_call = source.index("\nresolve_verdi_license_environment\n", probe_exit)
+        self.assertGreater(import_call, probe_exit)
+        self.assertIn(
+            '[ "${1-}" = "--gui-probe-only" ]', source
+        )
+
+
+@unittest.skipUnless(
+    BASH and sys.platform.startswith("linux"),
+    "Linux bash is required for site environment isolation tests",
+)
+class SiteEnvironmentRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _run(
+        self,
+        env_content: str,
+        command: list[str],
+        **overrides: str,
+    ) -> subprocess.CompletedProcess[str]:
+        assert BASH is not None
+        env_file = self.root / "site-env.sh"
+        env_file.write_text(env_content, encoding="utf-8")
+        environment = os.environ.copy()
+        for name in (
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "PS4",
+            "BASH_XTRACEFD",
+            "LM_LICENSE_FILE",
+            "SNPSLMD_LICENSE_FILE",
+        ):
+            environment.pop(name, None)
+        environment.update(overrides)
+        return subprocess.run(
+            [BASH, str(SITE_ENV_RUNNER), str(env_file), *command],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_site_environment_is_isolated_and_xtrace_cannot_leak(self) -> None:
+        secret = "license-secret-must-not-appear"
+        expected_file = self.root / "expected-license"
+        expected_file.write_text(secret, encoding="utf-8")
+        result = self._run(
+            "export LM_LICENSE_FILE=" + secret + "\n"
+            "export PROJECT_ROOT=/wrong/project\n"
+            "export OUTPUT_BASE=/wrong/output\n"
+            "PS4=\"$LM_LICENSE_FILE\"\n"
+            "set -x\n"
+            "trap 'printf \\\"%s\\\\n\\\" \\\"$LM_LICENSE_FILE\\\"' DEBUG RETURN EXIT\n"
+            "cd /\n",
+            [
+                "/usr/bin/env",
+                "PROJECT_ROOT=/verified/project",
+                "OUTPUT_BASE=/verified/artifacts",
+                BASH,
+                "-c",
+                'expected=$(cat "$TEST_EXPECTED_LICENSE_FILE") && '
+                '[ "$PROJECT_ROOT" = /verified/project ] && '
+                '[ "$OUTPUT_BASE" = /verified/artifacts ] && '
+                '[ "$(pwd -P)" = "$TEST_EXPECT_CWD" ] && '
+                '[ "$LM_LICENSE_FILE" = "$expected" ] && '
+                "cmdline=$(tr '\\0' ' ' </proc/$$/cmdline) && "
+                'case "$cmdline" in *"$expected"*) exit 91 ;; esac && '
+                "printf 'CONTRACT_PASS\\n'",
+            ],
+            TEST_EXPECT_CWD=str(ROOT),
+            TEST_EXPECTED_LICENSE_FILE=str(expected_file),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTRACT_PASS", result.stdout)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertNotIn("/wrong/project", result.stdout + result.stderr)
+
+    def test_failed_site_environment_never_launches_command(self) -> None:
+        marker = self.root / "command-ran"
+        result = self._run(
+            "export LM_LICENSE_FILE=partial-secret\nreturn 23\n",
+            [BASH, "-c", 'touch "$TEST_COMMAND_MARKER"'],
+            TEST_COMMAND_MARKER=str(marker),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(marker.exists())
+        self.assertNotIn("partial-secret", result.stdout + result.stderr)
+        self.assertIn("initialization failed", result.stderr)
+
+    def test_exit_exec_and_noexec_cannot_fake_success(self) -> None:
+        for label, env_content in (
+            ("exit-zero", "exit 0\n"),
+            ("exec-true", "exec true\n"),
+            ("noexec", "set -n\n"),
+        ):
+            with self.subTest(label=label):
+                marker = self.root / (label + "-command-ran")
+                result = self._run(
+                    env_content,
+                    [BASH, "-c", 'touch "$TEST_COMMAND_MARKER"'],
+                    TEST_COMMAND_MARKER=str(marker),
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(marker.exists())
+                self.assertIn(
+                    "before environment initialization completed", result.stderr
+                )
+
+    def test_existing_license_has_precedence_without_argv_exposure(self) -> None:
+        existing = "existing-license-must-not-be-an-argument"
+        expected_file = self.root / "expected-existing-license"
+        expected_file.write_text(existing, encoding="utf-8")
+        result = self._run(
+            "export LM_LICENSE_FILE=site-replacement\n",
+            [
+                BASH,
+                "-c",
+                'expected=$(cat "$TEST_EXPECTED_LICENSE_FILE") && '
+                '[ "$LM_LICENSE_FILE" = "$expected" ] && '
+                "cmdline=$(tr '\\0' ' ' </proc/$$/cmdline) && "
+                'case "$cmdline" in *"$expected"*) exit 92 ;; esac',
+            ],
+            LM_LICENSE_FILE=existing,
+            TEST_EXPECTED_LICENSE_FILE=str(expected_file),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(existing, result.stdout + result.stderr)
+
+    def test_startup_hooks_and_shell_options_are_removed(self) -> None:
+        hook = self.root / "bash-env-hook.sh"
+        marker = self.root / "bash-env-ran"
+        hook.write_text('touch "$TEST_HOOK_MARKER"\n', encoding="utf-8")
+        result = self._run(
+            "export BASH_ENV=\"$TEST_HOOK_FILE\"\n"
+            "export SHELLOPTS\n",
+            [BASH, "-c", '[ ! -e "$TEST_HOOK_MARKER" ]'],
+            TEST_HOOK_FILE=str(hook),
+            TEST_HOOK_MARKER=str(marker),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_unset_exported_value_is_propagated(self) -> None:
+        result = self._run(
+            "unset TEST_STALE_VALUE\n",
+            [BASH, "-c", '[ -z "${TEST_STALE_VALUE+x}" ]'],
+            TEST_STALE_VALUE="stale",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_relative_site_environment_path_is_rejected(self) -> None:
+        assert BASH is not None
+        result = subprocess.run(
+            [BASH, str(SITE_ENV_RUNNER), "relative-env.sh", "true"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("absolute path", result.stderr)
+
+
+@unittest.skipUnless(
+    BASH and sys.platform.startswith("linux"),
+    "Linux bash is required for Verdi license environment contract tests",
+)
+class VerdiLicenseEnvironmentContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.bin_dir = self.root / "bin"
+        self.bin_dir.mkdir()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _command(self, name: str, content: str) -> Path:
+        path = self.bin_dir / name
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def _run_helper(
+        self, body: str, **overrides: str
+    ) -> subprocess.CompletedProcess[str]:
+        source = SCRIPT.read_text(encoding="utf-8")
+        helper = source.split(
+            "# BEGIN VERDI LICENSE ENVIRONMENT HELPERS", 1
+        )[1].split("# END VERDI LICENSE ENVIRONMENT HELPERS", 1)[0]
+        environment = os.environ.copy()
+        for name in (
+            "BASH_ENV",
+            "ENV",
+            "LM_LICENSE_FILE",
+            "SNPSLMD_LICENSE_FILE",
+            "VERDI_ENV_FILE",
+            "VERDI_AUTO_LICENSE_IMPORT",
+            "GUI_SESSION_SELECTED_USER",
+        ):
+            environment.pop(name, None)
+        environment["PATH"] = str(self.bin_dir) + os.pathsep + environment["PATH"]
+        environment.update(overrides)
+        return subprocess.run(
+            [BASH, "-c", "set -e\n" + helper + "\n" + body],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_existing_license_values_are_preserved(self) -> None:
+        result = self._run_helper(
+            "resolve_verdi_license_environment\n"
+            '[ "$LM_LICENSE_FILE" = existing-lm ]\n'
+            '[ "$SNPSLMD_LICENSE_FILE" = existing-snps ]\n'
+            "printf 'CONTRACT_PASS\\n'\n",
+            VERDI_AUTO_LICENSE_IMPORT="0",
+            LM_LICENSE_FILE="existing-lm",
+            SNPSLMD_LICENSE_FILE="existing-snps",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTRACT_PASS", result.stdout)
+        self.assertNotIn("existing-lm", result.stdout + result.stderr)
+        self.assertNotIn("existing-snps", result.stdout + result.stderr)
+
+    def test_single_existing_license_value_is_mirrored(self) -> None:
+        for source_name, target_name, value in (
+            ("LM_LICENSE_FILE", "SNPSLMD_LICENSE_FILE", "lm-only"),
+            ("SNPSLMD_LICENSE_FILE", "LM_LICENSE_FILE", "snps-only"),
+        ):
+            with self.subTest(source_name=source_name):
+                result = self._run_helper(
+                    "resolve_verdi_license_environment\n"
+                    f'[ "${{{source_name}}}" = "{value}" ]\n'
+                    f'[ "${{{target_name}}}" = "{value}" ]\n'
+                    "printf 'CONTRACT_PASS\\n'\n",
+                    VERDI_AUTO_LICENSE_IMPORT="0",
+                    **{source_name: value},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("CONTRACT_PASS", result.stdout)
+                self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_root_imports_only_license_values_via_runuser(self) -> None:
+        self._command(
+            "id",
+            """#!/usr/bin/env bash
+case "${1-}" in
+  -u) printf '0\\n' ;;
+  -un) printf 'root\\n' ;;
+  *) exit 1 ;;
+esac
+""",
+        )
+        self._command(
+            "runuser",
+            """#!/usr/bin/env bash
+printf 'profile chatter that must stay captured\\n'
+printf '__RSCHECK_LM_LICENSE_FILE__auto-lm\\n'
+printf 'PATH=/untrusted/path\\n'
+printf '__RSCHECK_SNPSLMD_LICENSE_FILE__auto-snps\\n'
+""",
+        )
+        result = self._run_helper(
+            "original_path=$PATH\n"
+            "resolve_verdi_license_environment\n"
+            '[ "$LM_LICENSE_FILE" = auto-lm ]\n'
+            '[ "$SNPSLMD_LICENSE_FILE" = auto-snps ]\n'
+            '[ "$PATH" = "$original_path" ]\n'
+            "printf 'CONTRACT_PASS\\n'\n",
+            GUI_SESSION_SELECTED_USER="desktop-user",
+            VERDI_AUTO_LICENSE_IMPORT="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTRACT_PASS", result.stdout)
+        self.assertNotIn("auto-lm", result.stdout + result.stderr)
+        self.assertNotIn("auto-snps", result.stdout + result.stderr)
+        self.assertNotIn("profile chatter", result.stdout + result.stderr)
+
+    def test_auto_import_can_be_disabled(self) -> None:
+        marker = self.root / "runuser-called"
+        self._command(
+            "id",
+            """#!/usr/bin/env bash
+case "${1-}" in
+  -u) printf '0\\n' ;;
+  -un) printf 'root\\n' ;;
+esac
+""",
+        )
+        self._command(
+            "runuser",
+            """#!/usr/bin/env bash
+touch "$FAKE_RUNUSER_MARKER"
+exit 1
+""",
+        )
+        result = self._run_helper(
+            "resolve_verdi_license_environment\n"
+            '[ -z "${LM_LICENSE_FILE:-}" ]\n'
+            '[ -z "${SNPSLMD_LICENSE_FILE:-}" ]\n'
+            '[ ! -e "$FAKE_RUNUSER_MARKER" ]\n'
+            "printf 'CONTRACT_PASS\\n'\n",
+            GUI_SESSION_SELECTED_USER="desktop-user",
+            VERDI_AUTO_LICENSE_IMPORT="0",
+            FAKE_RUNUSER_MARKER=str(marker),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTRACT_PASS", result.stdout)
+
+    def test_auto_import_failure_continues_without_values(self) -> None:
+        self._command(
+            "id",
+            """#!/usr/bin/env bash
+case "${1-}" in
+  -u) printf '0\\n' ;;
+  -un) printf 'root\\n' ;;
+esac
+""",
+        )
+        self._command("runuser", "#!/usr/bin/env bash\nexit 42\n")
+        result = self._run_helper(
+            "resolve_verdi_license_environment\n"
+            '[ -z "${LM_LICENSE_FILE:-}" ]\n'
+            '[ -z "${SNPSLMD_LICENSE_FILE:-}" ]\n'
+            "printf 'CONTRACT_PASS\\n'\n",
+            GUI_SESSION_SELECTED_USER="desktop-user",
+            VERDI_AUTO_LICENSE_IMPORT="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CONTRACT_PASS", result.stdout)
+        self.assertIn("continuing with Verdi native diagnostics", result.stderr)
 
 
 @unittest.skipUnless(

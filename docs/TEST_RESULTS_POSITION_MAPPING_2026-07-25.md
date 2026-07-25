@@ -117,3 +117,11 @@ positive_inventory.json 8be93ba0583c9536a31b6a5ce634338fe55648f6120099d666f361d3
 `rtl-rs-check 0.5.0` 已在 Windows 与 CentOS/Verdi VM 上完成 position 简写数据库、解析后全路径、
 报告证据、GUI CRUD/冲突保护/长路径显示，以及真实 NPI online 和两档 GUI 压测验证。该结论覆盖
 仓库示例和记录提交；生产 RTL 仍应使用正式流程生成的 elaborated KDB 执行同一套检查。
+
+后续设备复现不改写上述历史执行事实。应从当前 bootstrap checkout 使用仓库自带驱动，并把需要验证的完整提交号传给它：
+
+```bash
+bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+```
+
+驱动会重新从 GitHub 克隆到 VM 本机 `/root/rscheck_fresh.*`，核对完整 HEAD，并永久保留每次 clone、`full_vm_test.log` 和 `artifacts` 供审计。

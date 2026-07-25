@@ -1185,13 +1185,22 @@ bash scripts/launch_verdi_gui.sh \
 
 `scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
-在当前 shell 已能正常启动 Verdi 的图形 shell 中执行。脚本不要求特定 license 环境变量名；站点若需要初始化脚本，应提前 source：
+在当前 shell 已能正常启动 Verdi 的图形 shell 中执行。正式 VM 复现推荐使用仓库外层 fresh-checkout 驱动；它默认测试克隆时的 `origin/main`，运行根目录位于当前用户 `$HOME`，也可用 `VM_RUN_BASE` 的绝对路径指向其他可写目录：
 
 ```bash
 cd "$HOME/suhua_rs_tool"
 bash scripts/launch_verdi_gui.sh --probe-only
-bash scripts/test_vm_verdi_gui.sh
+bash scripts/test_vm_fresh_checkout.sh
 ```
+
+固定到完整提交号或静默加载站点环境文件。`VERDI_ENV_FILE` 必须是可信的绝对路径；它在隔离子进程中加载，输出/xtrace 被抑制，返回非零时不启动正式测试：
+
+```bash
+bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+```
+
+fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BASE:-$HOME}` 生成唯一根目录，最多三次带 TERM/KILL 上限的 clone 并保留每个 `repo_attemptN`；完整输出为 `full_vm_test.log`，正式产物固定在 `artifacts`，PASS/FAIL 后均不自动删除。root 且未设置 license 时，正式脚本会自动读取已选中桌面用户的登录初始化，但只导入 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE`，不导入 PATH 等其他内容，也不打印值；已有 license 值优先，`VERDI_AUTO_LICENSE_IMPORT=0` 可禁用。只有已信任、已核对且位于 VM 本机文件系统的 checkout 才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
 
 可移植覆盖项：
 
@@ -1203,7 +1212,9 @@ bash scripts/test_vm_verdi_gui.sh
 | 测试工具链 | `PYTHON_BIN`、`CXX` |
 | 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR` |
 | GUI 压测规模 | `GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS` |
+| fresh 运行目录 | `VM_RUN_BASE`（绝对路径） |
+| 站点环境/license | `VERDI_ENV_FILE`（绝对路径）、`VERDI_AUTO_LICENSE_IMPORT` |
 
-`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
+`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
 当前 Position 映射版本的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`。`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是此前功能阶段的历史基线，不能替代 0.5.0 的验证记录。

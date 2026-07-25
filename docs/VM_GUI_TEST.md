@@ -18,7 +18,9 @@
 - `scripts/launch_rscheck_gui.sh`：发现 X11/Xwayland 会话并启动工具自带 GUI。
 - `scripts/test_rscheck_gui_smoke.py`：可见离线正例、反例、批量压力和在线 KDB smoke。
 - `scripts/lib/gui_session.sh`：两个 launcher 共用的 DISPLAY/Xauthority 发现与 `xdpyinfo` 探测。
+- `scripts/lib/run_with_env_file.sh`：隔离加载可信站点环境并移除 xtrace/启动钩子。
 - `scripts/launch_verdi_gui.sh`：只用 `verdi -elab <KDB>` 打开 Verdi GUI。
+- `scripts/test_vm_fresh_checkout.sh`：在 `${VM_RUN_BASE:-$HOME}` 创建独立 fresh checkout、锁定提交并保存完整 VM 测试现场。
 - `scripts/test_vm_verdi_gui.sh`：运行测试、构建 collector、生成示例 KDB、打开 Verdi 并执行在线正例；默认退出时关闭本次 Verdi。
 - `tests/test_gui_backend.py`、`tests/test_gui_lifecycle.py`：GUI 命令、报告、取消和生命周期回归。
 - `tests/test_rscheck_gui_launcher.py`、`tests/test_gui_session_probe.py`、`tests/test_verdi_gui_launcher.py`：Linux 启动器和跨桌面会话回归。
@@ -77,7 +79,7 @@ Verdi/NPI 在线测试还需要 Bash 4.2+、Python 3.8+、支持 C++11 的编译
 
 ## 3. 获取仓库并探测 GUI
 
-在新设备克隆并安装可编辑入口：
+在新设备克隆 bootstrap checkout 并安装可编辑入口。该 checkout 用于取得启动器；第 10 节的正式复现会另外创建 VM 本机 fresh checkout：
 
 ```bash
 git clone https://github.com/ysyx-22040210-yudian/suhua_rs_tool.git "$HOME/suhua_rs_tool"
@@ -432,11 +434,39 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 collector、用当前示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。下面的块可在已进入仓库、当前 shell 已能正常启动 Verdi 的图形 shell 直接复制；脚本不要求特定 license 环境变量名：
+Verdi 端到端脚本会运行全量测试、构建 collector、用当前示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
+
+正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
 ```bash
 cd "$HOME/suhua_rs_tool"
 bash scripts/launch_verdi_gui.sh --probe-only
+bash scripts/test_vm_fresh_checkout.sh
+```
+
+精确复现指定提交：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+```
+
+如果当前图形 shell 尚未加载站点 Verdi/NPI 环境，可让驱动在正式测试前静默加载一个可信的绝对路径文件。该文件只在隔离子进程中执行；它不能改变 fresh 驱动核对过的仓库/产物路径，stdout/stderr 和 xtrace 不写入日志，返回非零时立即终止。里面设置的 Verdi/NPI/GUI 变量会传给正式脚本：
+
+```bash
+cd "$HOME/suhua_rs_tool"
+VERDI_ENV_FILE=/path/to/site_env.sh \
+bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+```
+
+无论 PASS 或 FAIL，退出信息都会打印 `RUN_ROOT`、`FULL_LOG`、`ARTIFACT_ROOT` 和 clone 尝试位置。驱动不会删除任何运行目录或失败 clone。`CLONE_TIMEOUT` 可覆盖单次 clone 的默认 180 秒，`VM_RUN_BASE` 可用绝对路径覆盖运行父目录；正式脚本的其他环境变量不变。
+
+root 通过非交互 SSH 启动、当前环境没有 license 时，正式脚本会从 GUI 会话解析出的桌面用户登录环境中自动导入 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE`。该流程不写死用户名/home、不执行解析到的文本、不导入 PATH，也不输出 license 值；已有 license 值优先。站点使用其他机制时可设置 `VERDI_AUTO_LICENSE_IMPORT=0`，让 Verdi 自行诊断。
+
+只有当前 checkout 已经可信并位于 VM 本机文件系统时，才可跳过 fresh clone 直接执行：
+
+```bash
+cd "$HOME/suhua_rs_tool"
 bash scripts/test_vm_verdi_gui.sh
 ```
 
@@ -446,7 +476,7 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`OUTPUT_BASE`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS` 和 `GUI_VISIBLE_SECONDS`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。默认分别运行在线 3 轮、离线 100 轮和 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。fresh 驱动另支持 `VM_RUN_BASE` 和 `CLONE_TIMEOUT`；直接运行正式脚本时还可设置 `OUTPUT_BASE`，fresh 驱动会固定覆盖为本轮 `artifacts`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。默认分别运行在线 3 轮、离线 100 轮和 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 成功输出应包含：
 

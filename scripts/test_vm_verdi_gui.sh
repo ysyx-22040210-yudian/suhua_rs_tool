@@ -2,11 +2,68 @@
 
 # End-to-end test for the sample RTL: Python tests, NPI build, fresh KDB,
 # Verdi/tool GUI checks, and offline GUI stability/load coverage.
+{ set +x; } 2>/dev/null
 set -Ee -o pipefail
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
+VERDI_ENV_FILE="${VERDI_ENV_FILE-}"
+RSCHECK_VERDI_ENV_APPLIED="${RSCHECK_VERDI_ENV_APPLIED:-0}"
+RSCHECK_FIXED_PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
+RSCHECK_FIXED_OUTPUT_BASE="${OUTPUT_BASE:-$RSCHECK_FIXED_PROJECT_ROOT/output}"
+RSCHECK_LOAD_SITE_ENV=1
+if [ "$#" -eq 1 ] && [ "${1-}" = "--gui-probe-only" ]; then
+  RSCHECK_LOAD_SITE_ENV=0
+fi
+
+case "$RSCHECK_VERDI_ENV_APPLIED" in
+  0|1) ;;
+  *)
+    echo "ERROR: RSCHECK_VERDI_ENV_APPLIED must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
+
+if [ -n "$VERDI_ENV_FILE" ] &&
+   [ "$RSCHECK_VERDI_ENV_APPLIED" -eq 0 ] &&
+   [ "$RSCHECK_LOAD_SITE_ENV" -eq 1 ]; then
+  case "$VERDI_ENV_FILE" in
+    /*) ;;
+    *)
+      echo "ERROR: VERDI_ENV_FILE must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  [ -f "$VERDI_ENV_FILE" ] && [ -r "$VERDI_ENV_FILE" ] || {
+    echo "ERROR: VERDI_ENV_FILE is not a readable regular file" >&2
+    exit 1
+  }
+
+  BASH_BIN="$(command -v bash 2>/dev/null || true)"
+  [ -n "$BASH_BIN" ] || {
+    echo "ERROR: bash is required to load VERDI_ENV_FILE" >&2
+    exit 1
+  }
+  SITE_ENV_RUNNER="$SCRIPT_DIR/lib/run_with_env_file.sh"
+  [ -f "$SITE_ENV_RUNNER" ] || {
+    echo "ERROR: site environment runner not found: $SITE_ENV_RUNNER" >&2
+    exit 1
+  }
+
+  site_env_command=(
+    /usr/bin/env
+    RSCHECK_VERDI_ENV_APPLIED=1
+    VERDI_ENV_FILE=
+    "PROJECT_ROOT=$RSCHECK_FIXED_PROJECT_ROOT"
+    "OUTPUT_BASE=$RSCHECK_FIXED_OUTPUT_BASE"
+  )
+  site_env_command+=("$BASH_BIN" "$SCRIPT_DIR/test_vm_verdi_gui.sh" "$@")
+
+  exec "$BASH_BIN" "$SITE_ENV_RUNNER" \
+    "$VERDI_ENV_FILE" "${site_env_command[@]}"
+fi
+
+PROJECT_ROOT="$RSCHECK_FIXED_PROJECT_ROOT"
 VERDI_HOME="${VERDI_HOME:-${NOVAS_INST_DIR:-}}"
 VERDI_BIN="${VERDI_BIN-}"
 VERICOM_BIN="${VERICOM_BIN-}"
@@ -18,7 +75,7 @@ GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-180}"
 VERDI_WINDOW_REGEX="${VERDI_WINDOW_REGEX:-verdi|novas|debussy}"
 VERDI_READY_REGEX="${VERDI_READY_REGEX:-<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)}"
 NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
-OUTPUT_BASE="${OUTPUT_BASE:-$PROJECT_ROOT/output}"
+OUTPUT_BASE="$RSCHECK_FIXED_OUTPUT_BASE"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
@@ -30,6 +87,7 @@ GCC_ENABLE_IS_SET="${GCC_ENABLE+x}"
 PYTHON_ENABLE="${PYTHON_ENABLE-}"
 GCC_ENABLE="${GCC_ENABLE-}"
 KEEP_VERDI_GUI="${KEEP_VERDI_GUI:-0}"
+VERDI_AUTO_LICENSE_IMPORT="${VERDI_AUTO_LICENSE_IMPORT:-1}"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/gui_session.sh"
@@ -108,6 +166,63 @@ fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
+
+# BEGIN VERDI LICENSE ENVIRONMENT HELPERS
+resolve_verdi_license_environment() {
+  local current_user=""
+  local imported_lm=""
+  local imported_snps=""
+  local license_output=""
+  local line=""
+
+  if [ -z "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ] &&
+     [ "${VERDI_AUTO_LICENSE_IMPORT:-1}" = 1 ]; then
+    current_user="$(id -un 2>/dev/null || true)"
+    if [ "$(id -u 2>/dev/null || true)" = 0 ] &&
+       [ -n "${GUI_SESSION_SELECTED_USER-}" ] &&
+       [ "$GUI_SESSION_SELECTED_USER" != "$current_user" ]; then
+      if ! command -v runuser >/dev/null 2>&1; then
+        echo "WARNING: runuser is unavailable; continuing with Verdi native license diagnostics" >&2
+      elif license_output="$(
+        runuser -u "$GUI_SESSION_SELECTED_USER" -- bash -lc '
+          printf "__RSCHECK_LM_LICENSE_FILE__%s\n" "${LM_LICENSE_FILE-}"
+          printf "__RSCHECK_SNPSLMD_LICENSE_FILE__%s\n" "${SNPSLMD_LICENSE_FILE-}"
+        ' 2>/dev/null
+      )"; then
+        while IFS= read -r line; do
+          case "$line" in
+            __RSCHECK_LM_LICENSE_FILE__*)
+              imported_lm="${line#__RSCHECK_LM_LICENSE_FILE__}"
+              ;;
+            __RSCHECK_SNPSLMD_LICENSE_FILE__*)
+              imported_snps="${line#__RSCHECK_SNPSLMD_LICENSE_FILE__}"
+              ;;
+          esac
+        done <<<"$license_output"
+        if [ -n "$imported_lm" ]; then
+          export LM_LICENSE_FILE="$imported_lm"
+        fi
+        if [ -n "$imported_snps" ]; then
+          export SNPSLMD_LICENSE_FILE="$imported_snps"
+        fi
+        if [ -n "$imported_lm" ] || [ -n "$imported_snps" ]; then
+          echo "License environment: imported from selected GUI user's bash initialization"
+        else
+          echo "WARNING: selected GUI user's bash initialization provided no license variables; continuing with Verdi native diagnostics" >&2
+        fi
+      else
+        echo "WARNING: selected GUI user's bash initialization failed; continuing with Verdi native diagnostics" >&2
+      fi
+    fi
+  fi
+
+  if [ -n "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ]; then
+    export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
+  elif [ -n "${SNPSLMD_LICENSE_FILE:-}" ] && [ -z "${LM_LICENSE_FILE:-}" ]; then
+    export LM_LICENSE_FILE="$SNPSLMD_LICENSE_FILE"
+  fi
+}
+# END VERDI LICENSE ENVIRONMENT HELPERS
 
 collector_error_pattern='error\[(ELAB_DB|NPI_INIT|NPI_LOAD|NPI_END|OUTPUT|INTERNAL)\]|NPI collector (timed out|exited with code|succeeded but did not create|failed to start)|npi_load_design failed'
 
@@ -214,6 +329,12 @@ if [ "$GUI_PROBE_ONLY" -eq 1 ]; then
   exit 0
 fi
 
+case "$VERDI_AUTO_LICENSE_IMPORT" in
+  0|1) ;;
+  *) fail "VERDI_AUTO_LICENSE_IMPORT must be 0 or 1" ;;
+esac
+resolve_verdi_license_environment
+
 for command_name in xwininfo make ldd mktemp nohup sort comm tee grep find pgrep sed; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     if [ "$command_name" = xwininfo ]; then
@@ -289,11 +410,6 @@ fi
 [ -d "$PROJECT_ROOT" ] || fail "PROJECT_ROOT is not a directory: $PROJECT_ROOT"
 [ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
 
-if [ -n "${LM_LICENSE_FILE:-}" ] && [ -z "${SNPSLMD_LICENSE_FILE:-}" ]; then
-  export SNPSLMD_LICENSE_FILE="$LM_LICENSE_FILE"
-elif [ -n "${SNPSLMD_LICENSE_FILE:-}" ] && [ -z "${LM_LICENSE_FILE:-}" ]; then
-  export LM_LICENSE_FILE="$SNPSLMD_LICENSE_FILE"
-fi
 export VERDI_HOME NPI_PLATFORM
 export NOVAS_INST_DIR="$VERDI_HOME"
 export PYTHONDONTWRITEBYTECODE=1
