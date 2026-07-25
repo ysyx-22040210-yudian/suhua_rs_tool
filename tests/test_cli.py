@@ -308,22 +308,23 @@ class CliTests(unittest.TestCase):
             )
             original = config.read_bytes()
             error = StringIO()
-            with (
-                patch("rscheck.config.os.replace", side_effect=OSError("replace failed")),
-                redirect_stderr(error),
+            with patch(
+                "rscheck.config.os.replace",
+                side_effect=OSError("replace failed"),
             ):
-                code = main(
-                    [
-                        "position-db",
-                        "set",
-                        "--config",
-                        str(config),
-                        "--alias",
-                        "new_alias",
-                        "--rtl-path",
-                        "top.u_new",
-                    ]
-                )
+                with redirect_stderr(error):
+                    code = main(
+                        [
+                            "position-db",
+                            "set",
+                            "--config",
+                            str(config),
+                            "--alias",
+                            "new_alias",
+                            "--rtl-path",
+                            "top.u_new",
+                        ]
+                    )
             self.assertEqual(code, 2)
             self.assertIn("cannot save config file", error.getvalue())
             self.assertEqual(config.read_bytes(), original)

@@ -209,14 +209,14 @@ class GuiLifecycleTests(unittest.TestCase):
         app._render_position_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
-        with (
-            patch("rscheck.gui.save_config", return_value=config_path) as save_current,
-            patch(
+        with patch(
+            "rscheck.gui.save_config", return_value=config_path
+        ) as save_current:
+            with patch(
                 "rscheck.gui.load_config",
                 side_effect=(current_disk_config, reloaded_config),
-            ) as load_current,
-        ):
-            app._save_position_mappings()
+            ) as load_current:
+                app._save_position_mappings()
 
         saved_config = save_current.call_args.args[0]
         self.assertEqual(saved_config.module_rules, external_rules)
@@ -267,14 +267,14 @@ class GuiLifecycleTests(unittest.TestCase):
         app._render_rule_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
-        with (
-            patch("rscheck.gui.save_config", return_value=config_path) as save_current,
-            patch(
+        with patch(
+            "rscheck.gui.save_config", return_value=config_path
+        ) as save_current:
+            with patch(
                 "rscheck.gui.load_config",
                 side_effect=(current_disk_config, reloaded_config),
-            ) as load_current,
-        ):
-            app._save_module_rules()
+            ) as load_current:
+                app._save_module_rules()
 
         saved_config = save_current.call_args.args[0]
         self.assertEqual(saved_config.module_rules, edited_rules)
@@ -319,11 +319,11 @@ class GuiLifecycleTests(unittest.TestCase):
         app._render_position_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
-        with (
-            patch("rscheck.gui.save_config", return_value=config_path),
-            patch("rscheck.gui.load_config", side_effect=(current, reloaded)),
-        ):
-            app._save_position_mappings()
+        with patch("rscheck.gui.save_config", return_value=config_path):
+            with patch(
+                "rscheck.gui.load_config", side_effect=(current, reloaded)
+            ):
+                app._save_position_mappings()
 
         self.assertIs(app._loaded_config, reloaded)
         self.assertEqual(app._module_rules, {"external": external_rule})
@@ -359,11 +359,11 @@ class GuiLifecycleTests(unittest.TestCase):
         app._render_rule_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
-        with (
-            patch("rscheck.gui.save_config", return_value=config_path),
-            patch("rscheck.gui.load_config", side_effect=(current, reloaded)),
-        ):
-            app._save_module_rules()
+        with patch("rscheck.gui.save_config", return_value=config_path):
+            with patch(
+                "rscheck.gui.load_config", side_effect=(current, reloaded)
+            ):
+                app._save_module_rules()
 
         self.assertIs(app._loaded_config, reloaded)
         self.assertEqual(
@@ -384,12 +384,10 @@ class GuiLifecycleTests(unittest.TestCase):
         app._position_mappings = {"core": "tb.dut.local"}
         app._position_mappings_dirty = True
 
-        with (
-            patch("rscheck.gui.load_config", return_value=current),
-            patch("rscheck.gui.save_config") as save_config,
-            patch("rscheck.gui.messagebox.showerror") as showerror,
-        ):
-            app._save_position_mappings()
+        with patch("rscheck.gui.load_config", return_value=current):
+            with patch("rscheck.gui.save_config") as save_config:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._save_position_mappings()
 
         save_config.assert_not_called()
         showerror.assert_called_once_with(
@@ -415,12 +413,10 @@ class GuiLifecycleTests(unittest.TestCase):
         app._module_rules = {"rs_pipe": local_rule}
         app._module_rules_dirty = True
 
-        with (
-            patch("rscheck.gui.load_config", return_value=current),
-            patch("rscheck.gui.save_config") as save_config,
-            patch("rscheck.gui.messagebox.showerror") as showerror,
-        ):
-            app._save_module_rules()
+        with patch("rscheck.gui.load_config", return_value=current):
+            with patch("rscheck.gui.save_config") as save_config:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._save_module_rules()
 
         save_config.assert_not_called()
         showerror.assert_called_once_with(
