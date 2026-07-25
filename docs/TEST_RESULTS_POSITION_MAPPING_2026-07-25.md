@@ -124,4 +124,38 @@ positive_inventory.json 8be93ba0583c9536a31b6a5ce634338fe55648f6120099d666f361d3
 bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
 ```
 
-驱动会重新从 GitHub 克隆到 VM 本机 `/root/rscheck_fresh.*`，核对完整 HEAD，并永久保留每次 clone、`full_vm_test.log` 和 `artifacts` 供审计。
+驱动会重新从 GitHub 克隆到 VM 本机 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，核对完整 HEAD，并永久保留每次 clone、`full_vm_test.log` 和 `artifacts` 供审计。
+
+## 5. VM 脚本自包含复验
+
+2026-07-25 对提交 `6e7537c762c7a731d4bb7e429c750b92216c6acc` 完成了脚本修复后的正式复验。VM 启动入口与该提交中的 Git 对象 `1e3ae7050cf664932ef05ae0fbcbd27a10c1fcc3` 完全一致，入口 SHA-256 为 `ba9b1302c685f365f07958daa813cee683daa38eac2c1320394a05c10445849d`。正式命令未在外层 source 任何用户配置：
+
+```bash
+bash /root/test_vm_fresh_checkout_6e7537c.sh \
+  --commit 6e7537c762c7a731d4bb7e429c750b92216c6acc
+```
+
+正式运行证据：
+
+- `RUN_ROOT=/root/rscheck_fresh.sEzVRZtu`
+- `ARTIFACT_ROOT=/root/rscheck_fresh.sEzVRZtu/artifacts`
+- `TEST_ROOT=/root/rscheck_fresh.sEzVRZtu/artifacts/verdi_gui_test.HdnGPloT`
+- clone attempt 1 因 Git RPC/HTTP 中断返回 `128` 并保留现场；attempt 2 返回 `0`
+- 成功 checkout 的完整 HEAD 为 `6e7537c762c7a731d4bb7e429c750b92216c6acc`，工作区为空
+- 自动发现 `host` 的 `DISPLAY=:0`，并从该 GUI 用户登录初始化中只导入 license 变量；日志未输出变量值
+- CentOS 7 / Python 3.8 全量 `180` 项测试通过，无 skip
+- NPI collector 使用 Verdi O-2018.09-SP2 构建，输入为 fresh `kdb.elab++`，未使用 filelist/work library 作为 NPI 输入
+- Verdi 严格 top 窗口在 2 秒内匹配；在线正例 3 轮、在线预期反例、默认模块规则、离线 100 轮和 10,000 行负载全部满足断言
+- position 映射证据为 `tile_core -> top.u_tile`；6 个物理实例按 `rs_mode` 得到 5 个有效实例
+- 正式脚本和 fresh 驱动退出码均为 `0`；退出后不存在 `verdi`/`Novas` 进程
+
+关键文件 SHA-256：
+
+```text
+ce3eef738b25eb16611a7903fd5fe4836af7b5df07b86a23b4652e23910638ab  full_vm_test.log
+ff471fd04769f41261151607b996d53929efe20ebd7ee912af66c210928faf00  positive_report.json
+9787c9cd75611fbfd1515fb0703643876fadba256b75516883979ef06207f283  positive_report.csv
+c60fa489da969cede811e2930cad5ec17448b4ba3a75029b459d4b79bbf1e579  verdi_gui.log
+```
+
+本轮同时验证了脚本自身的失败路径：license 不进入 argv/日志，环境文件的 `exit 0`、`exec true`、`set -n`、xtrace、DEBUG trap、启动钩子、控制路径覆盖和变量 unset 都不能形成假 PASS；fake Git 集成测试锁定了三次限时重试、失败目录保留、完整提交核对和固定产物路径。
