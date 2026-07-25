@@ -16,6 +16,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [Position 映射库与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_POSITION_MAPPING_2026-07-25.md)
 - [动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md)
 - [2026-07-24 GUI 发布验证记录](docs/TEST_RESULTS_2026-07-24.md)
 - [rscheck 自带 GUI 与 Verdi GUI 的 VM 复现指南](docs/VM_GUI_TEST.md)
@@ -335,7 +336,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-2026-07-25 已在以下环境重新完成动态 step 版本的真实构建、fresh KDB、在线正负例和 GUI 压测：
+2026-07-25 已在以下环境重新完成 Position 映射库 0.5.0 版本的真实构建、fresh KDB、在线正负例和 GUI 压测：
 
 ```text
 CentOS 7.9
@@ -345,8 +346,10 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md) 记录了 Windows 回归，以及 VM 上 fresh KDB、真实 NPI、在线正负例、可见 GUI、100 轮和 10,000 行压力的实测结果。
+[Position 映射库与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_POSITION_MAPPING_2026-07-25.md) 记录了 Windows 回归，以及 VM 上 fresh KDB、真实 NPI、严格 top 窗口、在线正负例、可见 GUI、100 轮和 10,000 行压力的当前实测结果。
 
-[RS_CFG_EN 九字段版本验证记录](docs/TEST_RESULTS_RS_CFG_EN_2026-07-24.md) 是引入动态 `step_parameters` 之前的历史基线；其中 102 项测试和压力数字不能代表当前动态 step 版本。
+[动态 step 版本验证记录（2026-07-25）](docs/TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md) 是引入 Position 映射库之前的 0.4.0 历史基线。
+
+[RS_CFG_EN 九字段版本验证记录](docs/TEST_RESULTS_RS_CFG_EN_2026-07-24.md) 是引入动态 `step_parameters` 之前的历史基线；其中 102 项测试和压力数字不能代表当前 Position 映射版本。
 
 [2026-07-24 GUI 发布验证记录](docs/TEST_RESULTS_2026-07-24.md) 保留的是引入 `RS_CFG_EN` 前的八字段历史基线，仅用于对照。

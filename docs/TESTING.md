@@ -416,7 +416,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。2026-07-24 的 100 轮结果仅作历史性能对照；当前 position 映射版本必须重新运行后才能标记为已验证。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。2026-07-24 的结果仅作历史性能对照；当前 position 映射版本的 100 轮和 10,000 行实际结果见 [Position 映射库与 GUI 压测验证记录](TEST_RESULTS_POSITION_MAPPING_2026-07-25.md)。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -1206,4 +1206,4 @@ bash scripts/test_vm_verdi_gui.sh
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。生成的 KDB、日志、collector 和报告位于 `.gitignore` 排除的目录，不应提交仓库。
 
-动态 step 版本的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`。`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是功能引入前的历史基线，不能替代当前规则库版本的验证记录。
+当前 Position 映射版本的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`。`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是此前功能阶段的历史基线，不能替代 0.5.0 的验证记录。
