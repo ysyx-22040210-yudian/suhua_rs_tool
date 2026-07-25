@@ -3,7 +3,7 @@
     "sheet": "RS_Check",
     "header_row": 1,
     "data_start_row": 2,
-    "validate_headers": true
+    "validate_headers": false
   },
   "columns": {
     "Intf_type": 1,

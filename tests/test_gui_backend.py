@@ -45,7 +45,7 @@ class GuiBackendTests(unittest.TestCase):
             sheet="1",
             header_row="1",
             data_start_row="2",
-            validate_headers=True,
+            validate_headers=False,
             source_mode=LIVE_SOURCE,
             collector_path=str(ROOT / "npi" / "build" / "rs_npi_collector"),
             elab_db_path=str(ROOT / "output" / "design with spaces" / "kdb.elab++"),
@@ -80,12 +80,17 @@ class GuiBackendTests(unittest.TestCase):
             if value == "--column"
         ]
         self.assertEqual(mappings, [f"{name}={columns[name]}" for name in FIELD_NAMES])
-        self.assertIn("--header-check", command)
-
-    def test_header_check_can_be_explicitly_disabled(self) -> None:
-        command = build_validate_command(self._request(validate_headers=False))
         self.assertIn("--no-header-check", command)
         self.assertNotIn("--header-check", command)
+
+    def test_header_check_can_be_explicitly_enabled(self) -> None:
+        command = build_validate_command(self._request(validate_headers=True))
+        self.assertIn("--header-check", command)
+        self.assertNotIn("--no-header-check", command)
+
+    def test_gui_request_defaults_to_column_mapping_without_header_check(self) -> None:
+        request = GuiRunRequest(excel_path="spec.xlsx", config_path="config.json")
+        self.assertFalse(request.validate_headers)
 
     def test_default_columns_include_rs_cfg_en_as_ninth_mapping(self) -> None:
         columns = default_columns()

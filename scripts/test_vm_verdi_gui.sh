@@ -509,6 +509,56 @@ POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
 POS_LOG="$TEST_ROOT/positive_console.log"
 
+"$PYTHON_BIN" - \
+  "$PROJECT_ROOT/examples/specs.csv" \
+  "$PROJECT_ROOT/config/rscheck.example.json" <<'PY'
+import csv
+import json
+import sys
+
+internal_fields = [
+    "Intf_type",
+    "RS_module",
+    "RS_inst",
+    "position",
+    "step",
+    "clk",
+    "rst",
+    "CRG_source",
+    "RS_CFG_EN",
+]
+expected_headers = [
+    "接口分类",
+    "模块类型",
+    "实例组",
+    "位置简称",
+    "有效拍数",
+    "时钟连接",
+    "复位连接",
+    "时钟源模块",
+    "假门控标记",
+]
+with open(sys.argv[1], "r", encoding="utf-8-sig", newline="") as stream:
+    actual_headers = next(csv.reader(stream))
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    config = json.load(stream)
+
+if actual_headers != expected_headers:
+    raise SystemExit(
+        "example must use arbitrary business headers: {!r}".format(actual_headers)
+    )
+if set(actual_headers) & set(internal_fields):
+    raise SystemExit("example headers unexpectedly reuse internal field names")
+if config.get("excel", {}).get("validate_headers") is not False:
+    raise SystemExit("strict header validation must be disabled by default")
+expected_columns = {
+    field_name: index for index, field_name in enumerate(internal_fields, start=1)
+}
+if config.get("columns") != expected_columns:
+    raise SystemExit("unexpected internal-field column mapping: {!r}".format(config.get("columns")))
+print("column mapping evidence OK: arbitrary headers -> internal fields by 1-based index")
+PY
+
 # The checker receives only the elaborated KDB as its design input. RTL and
 # filelist arguments are intentionally not accepted by this command.
 "$PYTHON_BIN" -m rscheck check \
@@ -805,11 +855,20 @@ grep -Fq \
   "$OFFLINE_LOAD_LOG"
 grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_LOAD_LOG"
 
+for gui_log in \
+  "$ONLINE_GUI_LOG" \
+  "$ONLINE_NEGATIVE_LOG" \
+  "$DEFAULT_RULE_LOG" \
+  "$OFFLINE_STRESS_LOG" \
+  "$OFFLINE_LOAD_LOG"; do
+  grep -Fq 'header-map=column-index strict-header=false' "$gui_log"
+done
+
 assert_no_unexpected_collector_logs
 assert_verdi_still_ready
 
 trap - ERR
-echo "PASS: position mapping, fresh KDB online positive/negative GUI checks, and offline GUI stress suite completed."
+echo "PASS: arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
 echo "ELAB_DB=$ELAB_DB"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"

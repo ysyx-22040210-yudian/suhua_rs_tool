@@ -627,7 +627,7 @@ class CliTests(unittest.TestCase):
             raw_config = json.loads(
                 (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
             )
-            raw_config["excel"]["validate_headers"] = False
+            self.assertFalse(raw_config["excel"]["validate_headers"])
             config = root / "config.json"
             config.write_text(json.dumps(raw_config), encoding="utf-8")
 
@@ -650,6 +650,44 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(code, 2)
             self.assertIn("header validation failed", error.getvalue())
+
+    def test_no_header_check_can_disable_strict_config(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            specs = root / "specs.csv"
+            specs.write_text(
+                "接口列,模块列,实例列,位置列,拍数列,时钟列,复位列,时钟源列,门控列\n"
+                "OUT,rs_pipe,PIPE,top.u,1,clk,rst,crg,\n",
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["excel"]["validate_headers"] = True
+            config = root / "config.json"
+            config.write_text(json.dumps(raw_config), encoding="utf-8")
+
+            error = StringIO()
+            with redirect_stderr(error):
+                self.assertEqual(
+                    main(["validate", "--excel", str(specs), "--config", str(config)]),
+                    2,
+                )
+            self.assertIn("header validation failed", error.getvalue())
+            with redirect_stdout(StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "validate",
+                            "--excel",
+                            str(specs),
+                            "--config",
+                            str(config),
+                            "--no-header-check",
+                        ]
+                    ),
+                    0,
+                )
 
 if __name__ == "__main__":
     unittest.main()

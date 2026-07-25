@@ -45,7 +45,7 @@ class ExcelConfig:
     sheet: str | int = 1
     header_row: int = 1
     data_start_row: int = 2
-    validate_headers: bool = True
+    validate_headers: bool = False
     columns: Mapping[str, int] = field(default_factory=dict)
 
 

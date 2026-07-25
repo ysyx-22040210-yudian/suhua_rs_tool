@@ -39,7 +39,7 @@ Python 端要求 3.8 或更高版本，CLI 没有第三方运行时依赖；桌�
 
 ## 列映射
 
-复制并修改 [config/rscheck.example.json](config/rscheck.example.json)。Excel 允许包含任意其他列；工具只读取映射的九列。列号从 1 开始，九列可以任意排列、无需连续，但必须为正数且互不重复：
+复制并修改 [config/rscheck.example.json](config/rscheck.example.json)。`Intf_type`、`RS_module` 等九个名称是工具内部属性键，不要求 Excel 对应列使用同名表头；实际表头可以是任意业务名称。每个键的 1-based `columns` 值唯一决定该属性从哪一列读取。Excel 允许包含任意其他列；九个映射列可以任意排列、无需连续，但列号必须为正数且互不重复：
 
 ```json
 "columns": {
@@ -55,7 +55,7 @@ Python 端要求 3.8 或更高版本，CLI 没有第三方运行时依赖；桌�
 }
 ```
 
-也可以在命令行临时覆盖。下面示例假定新表把两个表头移到了第 10、11 列；这两个列号不会与配置中其余七个默认映射冲突：
+也可以在命令行临时覆盖。下面示例把内部属性 `Intf_type`、`RS_module` 分别映射到第 10、11 列；这两个列号不会与配置中其余七个默认映射冲突：
 
 ```bash
 python -m rscheck validate \
@@ -65,7 +65,9 @@ python -m rscheck validate \
   --column RS_module=11
 ```
 
-默认会校验表头，防止列号填错。工作表、表头行和数据起始行可在 JSON 中配置，也可通过 `--sheet`、`--header-row`、`--data-start-row` 覆盖。
+默认 `validate_headers=false`，解析只按列号映射，不比较实际表头文字。只有用户显式设置 `validate_headers=true`、传入 `--header-check` 或在 GUI 勾选“严格校验表头（可选）”时，工具才额外要求映射列的表头精确等于内部属性名。工作表、表头行和数据起始行可在 JSON 中配置，也可通过 `--sheet`、`--header-row`、`--data-start-row` 覆盖。
+
+从 0.6.0 或更早版本复制的配置可能已经显式写入 `"validate_headers": true`；该值会继续启用严格诊断。使用自定义业务表头时请改为 `false`、在 GUI 取消勾选，或在单次 CLI 运行中传 `--no-header-check`。
 
 ## Position 映射库
 
@@ -142,7 +144,7 @@ python -m rscheck position-db delete \
 
 Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
 
-`RS_CFG_EN` 的列映射和精确表头始终必需，数据单元格则由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
+`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；数据单元格则由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
 
 ## 工具自带桌面 GUI
 
@@ -166,7 +168,7 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、表头校验，以及九个互不重复的 1-based 列号。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。RTL 数据源可选：
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。RTL 数据源可选：
 
 - **在线 NPI**：填写 collector、Verdi elaborated KDB、可选 NPI 库目录、超时和 inventory 保存路径；
 - **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。

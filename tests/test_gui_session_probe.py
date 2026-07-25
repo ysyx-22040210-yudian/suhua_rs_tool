@@ -46,6 +46,24 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
             4,
         )
 
+    def test_vm_flow_requires_arbitrary_header_column_mapping_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('"接口分类"', source)
+        self.assertIn('"假门控标记"', source)
+        self.assertIn(
+            "strict header validation must be disabled by default",
+            source,
+        )
+        self.assertIn(
+            "column mapping evidence OK: arbitrary headers -> internal fields",
+            source,
+        )
+        self.assertIn(
+            "grep -Fq 'header-map=column-index strict-header=false'",
+            source,
+        )
+
     def test_license_environment_import_contract_is_safe(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         runner = SITE_ENV_RUNNER.read_text(encoding="utf-8")

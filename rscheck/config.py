@@ -217,7 +217,7 @@ def load_config(path: str | Path) -> ToolConfig:
         header_row=_positive_int(excel_raw.get("header_row", 1), "excel.header_row"),
         data_start_row=_positive_int(excel_raw.get("data_start_row", 2), "excel.data_start_row"),
         validate_headers=_boolean(
-            excel_raw.get("validate_headers", True), "excel.validate_headers"
+            excel_raw.get("validate_headers", False), "excel.validate_headers"
         ),
         columns=columns,
     )

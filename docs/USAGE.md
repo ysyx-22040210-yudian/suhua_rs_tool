@@ -93,11 +93,11 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 
 ## 2. 规格表要求
 
-### 2.1 九个映射字段
+### 2.1 九个内部属性与列映射
 
-规格表必须映射以下九个字段，名称区分大小写。前八个字段的数据单元格始终必填；`RS_CFG_EN` 的表头和列映射必需，但数据单元格按 RTL 参数是否存在而条件填写：
+工具使用以下九个区分大小写的内部属性键。它们只用于 JSON、CLI 和 GUI 中标识属性，不要求 Excel 对应列使用同名表头；实际表头可以是任意业务名称。每个内部属性的 1-based 列号唯一决定从哪一列读取。前八个属性对应的数据单元格始终必填；`RS_CFG_EN` 的列号映射必需，但数据单元格按 RTL 参数是否存在而条件填写：
 
-| 字段 | 含义 | 检查方式 |
+| 内部属性 | 含义 | 检查方式 |
 |---|---|---|
 | `Intf_type` | 该组打拍 interface 的业务标签 | 当前仅写入报告，不参与 RTL 判定 |
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
@@ -113,13 +113,13 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 
 ### 2.2 任意额外列和非连续列映射
 
-规格表可以包含任意数量的额外列。九个映射字段可以乱序、彼此不连续，并位于任意正数列号。列号从 **1** 开始，九个映射必须互不重复；未映射列会被忽略，即使其中包含公式也不会参与读取。
+规格表可以包含任意数量的额外列。九个内部属性可以映射到乱序、彼此不连续的任意正数列号。列号从 **1** 开始，九个映射必须互不重复；未映射列会被忽略，即使其中包含公式也不会参与读取。实际表头文字不参与属性归属判断。
 
 例如，一个 13 列工作表可以这样排列：
 
 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Owner | position | Review_note | rst | Intf_type | RS_CFG_EN | CRG_source | RS_inst | step | Ticket | RS_module | clk | Comment |
+| Owner | Scope label | Review_note | Reset net | Interface role | Gate policy | Clock origin | Instance selector | Pipeline depth | Ticket | Module kind | Clock net | Comment |
 | alice | tile_core | checked | rst_n | OUT_IF | 假门控 | crg_core | AAAA_BBB | 5 | HW-101 | rs_pipe | clk_rs | first group |
 
 对应配置为：
@@ -157,16 +157,16 @@ python -m rscheck validate \
   --column clk=12
 ```
 
-覆盖后仍会检查九个列号是否为正数且互不重复。
+覆盖后仍会检查九个列号是否为正数且互不重复。上表示例的实际表头与内部属性名不同，但默认解析仍会按这些列号得到正确数据。
 
 ### 2.3 单元格和行规则
 
-- 映射字段会去除首尾空白。
+- 映射数据单元格会去除首尾空白。
 - 除 `RS_CFG_EN` 外的八个字段均为必填；这些字段和 `RS_CFG_EN` 全部为空时跳过整行，八个必填字段中只有部分为空时报错。
 - `RS_inst` 单元格本身不能留空。可以填写组前缀，也可以填写完整的 NPI 本地例化名，例如 `CTRL_RS_D0`；不要填写 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
 - `RS_CFG_EN` 可以为空或填写文本。是否应为空由 `RS_module` 对应规则的 `has_rs_cfg_en` 决定；其他非空文本会保留到 RTL 检查阶段并产生清晰 finding。
 - `step` 接受 `0`、`2` 或 Excel 常见的 `2.0`，但不接受负数、小数或科学计数法。
-- 默认会在 `excel.header_row` 对九个映射单元格做精确表头校验，包括即使数据格允许留空也必须存在的 `RS_CFG_EN` 表头。
+- 默认 `excel.validate_headers=false`，不检查或比较九个映射列的表头文字。只有显式开启严格表头诊断时，才会在 `excel.header_row` 要求九个表头精确等于内部属性名。
 - XLSX/XLSM 映射字段中的公式单元格会被拒绝，防止使用未刷新的 Excel 缓存值；CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
 - `.xlsm` 中的宏不会执行。
 - CSV 优先按 UTF-8 BOM/UTF-8 读取，失败后尝试 GB18030；CSV 可探测逗号、分号或制表符，`.tsv` 固定使用制表符。
@@ -290,7 +290,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 ## 4. 配置文件完整说明
 
-配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五个键。`position_mappings` 可省略，其余结构要求见下文；未知键、错误类型和未知列名都会被拒绝。
+配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五个键。`position_mappings` 可省略，其余结构要求见下文；未知键、错误类型和未知内部属性名都会被拒绝。
 
 完整示例：
 
@@ -300,7 +300,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
     "sheet": "RS_Check",
     "header_row": 1,
     "data_start_row": 2,
-    "validate_headers": true
+    "validate_headers": false
   },
   "columns": {
     "Intf_type": 5,
@@ -346,11 +346,13 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `excel.sheet` | 非空字符串或正整数 | `1` | XLSX/XLSM 的工作表名或 1-based 工作表序号；CSV/TSV 没有工作表 |
 | `excel.header_row` | 正整数 | `1` | 表头所在行 |
 | `excel.data_start_row` | 正整数 | `2` | 第一条数据所在行，必须大于 `header_row` |
-| `excel.validate_headers` | JSON 布尔值 | `true` | 是否要求映射表头精确等于九个字段名 |
+| `excel.validate_headers` | JSON 布尔值 | `false` | 可选严格诊断；`true` 时要求映射表头精确等于九个内部属性名，`false` 时表头文字任意 |
+
+0.6.0 及更早版本的示例配置曾显式使用 `true`。升级不会擅自覆盖已有配置中的显式值；若要采用当前默认的任意业务表头语义，请把该值改为 `false`、在 GUI 取消勾选，或对单次 CLI 运行传 `--no-header-check`。
 
 ### 4.2 `columns`
 
-`columns` 必须恰好包含九个字段：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。每个值都是正整数形式的 1-based 列号；也接受只包含十进制数字的 JSON 字符串。列号必须唯一，不要求连续或按字段顺序排列。
+`columns` 必须恰好包含九个内部属性键：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。这些键区分大小写，但它们不是对 Excel 表头的命名要求。每个值都是正整数形式的 1-based 列号；也接受只包含十进制数字的 JSON 字符串。列号唯一决定属性归属，必须互不重复，不要求连续或按属性顺序排列。
 
 ### 4.3 `rtl`
 
@@ -419,11 +421,11 @@ python -m rscheck position-db delete \
 | `--sheet NAME_OR_INDEX` | 覆盖 `excel.sheet`；全数字值解释为 1-based 序号 |
 | `--header-row N` | 覆盖表头行 |
 | `--data-start-row N` | 覆盖数据起始行 |
-| `--column FIELD=INDEX` | 覆盖一个字段的列号，可重复 |
-| `--header-check` | 本次运行显式开启表头校验；GUI 会按复选框状态传入该参数或 `--no-header-check` |
-| `--no-header-check` | 本次运行关闭表头校验 |
+| `--column FIELD=INDEX` | 覆盖一个内部属性的 1-based 列号，可重复 |
+| `--header-check` | 本次运行显式开启严格表头诊断，要求映射表头等于内部属性名 |
+| `--no-header-check` | 本次运行按列号解析且不比较表头文字；这是默认行为，也可覆盖配置中的 `true` |
 
-`position_mappings` 和 `module_rules` 没有仅对单次检查生效的临时覆盖参数，检查始终读取当前配置 JSON。Position 映射可通过 GUI 或 `position-db` 子命令持久化维护；模块规则通过 GUI 维护。`--no-header-check` 只应在表头不可控且列映射已经独立确认时使用；它会降低发现错列的能力。
+`position_mappings` 和 `module_rules` 没有仅对单次检查生效的临时覆盖参数，检查始终读取当前配置 JSON。Position 映射可通过 GUI 或 `position-db` 子命令持久化维护；模块规则通过 GUI 维护。严格表头诊断默认关闭；仅当规格表主动采用九个标准内部属性名作为表头，并希望用它额外发现错列时，才使用 `--header-check`。
 
 ## 5. 工具自带桌面 GUI
 
@@ -461,8 +463,8 @@ bash scripts/launch_rscheck_gui.sh
 | 规格输入 | `配置 JSON`、`加载` | 选择配置；“加载”把 sheet、行号及九列映射载入界面 |
 | 规格输入 | `工作表` | 工作表名或 1-based 序号；CSV/TSV 不使用 sheet |
 | 规格输入 | `表头行`、`数据起始行` | 均为 1-based 正整数，数据起始行必须晚于表头行 |
-| 规格输入 | `校验映射表头` | 开启时九个映射列的表头必须与字段名精确一致 |
-| Excel 列映射 | 九个列号 | `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；均从 1 开始、必须互不重复，其他列忽略 |
+| 规格输入 | `严格校验表头（可选）` | 默认未勾选；勾选后九个映射列的表头必须与内部属性名精确一致 |
+| 内部属性 -> Excel 列号 | 九个列号 | `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；均从 1 开始、必须互不重复，实际表头任意，其他列忽略 |
 | 报告输出 | `JSON` | 必填；结构化检查报告，GUI 也从它读取结果 |
 | 报告输出 | `CSV` | 可选；UTF-8 BOM 明细报告，可直接由 Excel 打开 |
 
@@ -492,7 +494,7 @@ bash scripts/launch_rscheck_gui.sh
 
 ### 5.5 执行、结果和取消
 
-- `验证 Excel`：在后台运行 `validate --json`，只检查配置、表头、列映射和规格行；成功后切到“检查结果”页并显示 `VALID`。
+- `验证 Excel`：在后台运行 `validate --json`，检查配置、列映射和规格行；只有勾选可选严格诊断时才额外比较表头。成功后切到“检查结果”页并显示 `VALID`。
 - `运行 RTL 检查`：在后台运行与当前界面等价的 `check` 命令；返回 `0` 显示 `PASS`，返回 `1` 显示 `FAIL` 和差异，基础设施错误显示 `ERROR`。
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
@@ -503,7 +505,7 @@ GUI 共五个页签：“检查配置”“模块规则库”“Position 映射�
 
 ## 6. 先运行 `validate`
 
-`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会解析 `position_mappings` 并在摘要中显示完整路径，也可以确认 `RS_CFG_EN` 列映射和表头存在，但不能判断 RTL 路径是否真实存在或数据格应为空还是应填写 `假门控`；这些判断只在 `check` 阶段执行。
+`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会确认包括 `RS_CFG_EN` 在内的九个列号映射，解析 `position_mappings` 并在摘要中显示完整路径；默认不判断实际表头文字，只有显式开启严格诊断时才比较表头。它不能判断 RTL 路径是否真实存在，也不能判断数据格应为空还是应填写 `假门控`；这些判断只在 `check` 阶段执行。
 
 ```bash
 python -m rscheck validate \
@@ -528,7 +530,7 @@ python -m rscheck validate \
   --json
 ```
 
-建议在每次调整列映射、sheet、表头行、数据起始行或 suffix 规则后先执行 `validate`。注意：`validate` 成功只说明规格输入合法，不代表 RTL 检查会通过。
+建议在每次调整列映射、sheet、数据起始行或 suffix 规则后先执行 `validate`；若开启了严格表头诊断，调整表头行后也应重新执行。注意：`validate` 成功只说明规格输入合法，不代表 RTL 检查会通过。
 
 ## 7. 可信离线 inventory 模式
 
@@ -869,9 +871,9 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 
 | 错误或 finding | 常见原因 | 处理建议 |
 |---|---|---|
-| `header validation failed` | 列号错、表头行错、字段大小写不一致 | 用 `validate` 和 `--json` 检查规范化结果；修正映射，不要优先关闭表头检查 |
-| `missing/unknown column mappings` | 九字段映射不完整或拼写错误 | `columns` 必须恰好包含九个规定字段 |
-| `column mappings must be unique` | 两个字段映射到同一列 | 调整为互不重复的 1-based 列号 |
+| `header validation failed` | 已显式开启严格诊断，但列号、表头行或标准表头大小写不匹配 | 若规格表应使用标准表头，修正列映射或表头；若业务表头本来就自定义，关闭该可选诊断并以列号映射为准 |
+| `missing/unknown column mappings` | 九个内部属性映射不完整或属性键拼写错误 | `columns` 必须恰好包含九个规定的内部属性键 |
+| `column mappings must be unique` | 两个内部属性映射到同一列 | 调整为互不重复的 1-based 列号 |
 | `blank required fields` | 除 `RS_CFG_EN` 外的八个必填字段只填写了一部分 | 补齐八个始终必填字段，或清空整行使其被跳过；不要仅为消除此错误而填写 `RS_CFG_EN` |
 | `step must be a non-negative integer` | `step` 为负数、小数或科学计数法 | 改为非负整数，如 `0` 或 `2` |
 | `duplicate group` | 多行解析到同一完整 `(position, RS_inst)`，包括不同简写指向同一路径 | 合并或修改重复组/映射 |
@@ -934,9 +936,9 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置九字段的 1-based 列映射；按需维护 position 简写到 RTL 全路径的映射库；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
+2. 配置九个内部属性的 1-based 列映射；实际表头可任意命名；按需维护 position 简写到 RTL 全路径的映射库；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
 3. 按最终解析规则填写 `RS_CFG_EN` 和预期有效 `step`；默认是 `假门控` 且每个物理实例贡献 1，有效拍可为 0。
-4. 执行 `validate`，确认 sheet、表头、列、position 解析结果和规范化内容。
+4. 执行 `validate`，确认 sheet、列号映射、position 解析结果和规范化内容；只有主动采用标准表头时才按需开启严格表头诊断。
 5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
 6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。
 7. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。

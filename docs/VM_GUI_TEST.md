@@ -171,13 +171,15 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 “检查配置”页应包含：
 
 - `Excel / CSV`、`配置 JSON` 和配置“加载”按钮；
-- `工作表`、`表头行`、`数据起始行`、`校验映射表头`；
-- 九个独立的 1-based 列映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；
+- `工作表`、`表头行`、`数据起始行`、默认未勾选的 `严格校验表头（可选）`；
+- “内部属性 -> Excel 列号”区域中的九个独立 1-based 映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；这些名称是工具内部属性键，实际 Excel 表头可以任意命名；
 - 数据源单选项 `在线 NPI（elaborated KDB）` 和 `离线 Inventory`；
 - 在线字段 `Collector`、`Elab KDB`、`NPI 库目录`、`保存 Inventory`、`超时（秒）`；
 - 离线字段 `Inventory JSON`；
 - `JSON` 和可选 `CSV` 报告路径；
 - `验证 Excel`、`运行 RTL 检查`、`取消`、`打开报告目录`。
+
+加载示例配置后必须确认严格表头诊断保持未勾选。当前 `examples/specs.csv` 使用“接口分类”“模块类型”等业务表头，与九个内部属性名均不同；GUI 的“验证 Excel”和后续检查仍应按配置中的 1-based 列号正常通过。手工勾选严格诊断后再次验证该文件，应按预期报告 `header validation failed`，证明精确表头比较只是 opt-in 诊断。
 
 “模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求假门控且每个匹配实例贡献 1。
 
@@ -221,7 +223,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-窗口保留期间检查 980×680 下映射表、搜索框和编辑控件无重叠，确认 `tile_core -> top.u_tile`，终端末行应为 `GUI_SMOKE_PASS`。
+窗口保留期间检查 980×680 下映射表、搜索框和编辑控件无重叠，确认 `tile_core -> top.u_tile`，终端末行应为 `GUI_SMOKE_PASS`，并包含 `header-map=column-index strict-header=false`。
 
 GUI “验证 Excel”路径连续 20 轮：
 
@@ -234,7 +236,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 5
 ```
 
-预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...` 和 `position-map=tile_core->top.u_tile`。
+预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...`、`header-map=column-index strict-header=false` 和 `position-map=tile_core->top.u_tile`。
 
 可见离线正例连续 100 轮：
 
@@ -246,7 +248,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
 
 可见离线反例：
 
@@ -277,7 +279,7 @@ cd "$PROJECT_ROOT"
 预期末行：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x...
+GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x... header-map=column-index strict-header=false
 ```
 
 2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB 仅是历史性能数据。0.6.0 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；旧时间和 RSS 既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
@@ -351,10 +353,10 @@ gui_session_resolve
 成功判据：脚本返回 `0` 并打印：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... header-map=column-index strict-header=false contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
+3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning，日志必须包含 `header-map=column-index strict-header=false`。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
 
 ## 8. 打开 Verdi GUI
 

@@ -36,7 +36,7 @@ class GuiRunRequest:
     sheet: str = ""
     header_row: str = ""
     data_start_row: str = ""
-    validate_headers: bool = True
+    validate_headers: bool = False
     source_mode: str = LIVE_SOURCE
     collector_path: str = ""
     elab_db_path: str = ""

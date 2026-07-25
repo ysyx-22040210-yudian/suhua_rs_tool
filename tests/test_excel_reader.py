@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from rscheck.config import load_config
 from rscheck.excel_reader import column_letters_to_index, read_spec_rows
@@ -27,6 +28,7 @@ COLUMNS = {
 def _xlsx(
     path: Path,
     *,
+    headers: tuple[str, ...] | None = None,
     formula_step: bool = False,
     formula_rs_cfg_en: bool = False,
     main_namespace: str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -34,6 +36,7 @@ def _xlsx(
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     ),
 ) -> None:
+    header_names = headers or tuple(COLUMNS)
     step_cell = "<f>1+1</f><v>2</v>" if formula_step else "<v>2</v>"
     rs_cfg_en_cell = (
         '<c r="I2"><f>0</f><v>0</v></c>'
@@ -44,7 +47,7 @@ def _xlsx(
         "<row r=\"1\">"
         + "".join(
             f'<c r="{letter}1" t="inlineStr"><is><t>{name}</t></is></c>'
-            for letter, name in zip("ABCDEFGHI", COLUMNS)
+            for letter, name in zip("ABCDEFGHI", header_names)
         )
         + "</row>",
         "<row r=\"2\">"
@@ -167,6 +170,34 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertEqual(rows[0].clk, "clk_rs")
         self.assertEqual(rows[0].rs_cfg_en, "假门控")
 
+    def test_arbitrary_xlsx_headers_use_mapped_column_positions(self) -> None:
+        headers = (
+            "接口分类",
+            "模块类型",
+            "实例组",
+            "位置简称",
+            "有效拍数",
+            "时钟连接",
+            "复位连接",
+            "时钟源模块",
+            "假门控标记",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "arbitrary_headers.xlsx"
+            _xlsx(path, headers=headers)
+            rows = read_spec_rows(path, self.config)
+            strict = ExcelConfig(
+                sheet="RS_Check",
+                validate_headers=True,
+                columns=COLUMNS,
+            )
+            with self.assertRaisesRegex(WorkbookError, "header validation failed"):
+                read_spec_rows(path, strict)
+
+        self.assertEqual(rows[0].intf_type, "OUT_IF")
+        self.assertEqual(rows[0].rs_module, "rs_pipe")
+        self.assertEqual(rows[0].rs_inst, "AAAA_BBB")
+
     def test_normal_excel_shared_strings_are_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "shared.xlsx"
@@ -215,6 +246,40 @@ class ExcelReaderTests(unittest.TestCase):
             )
         )
 
+    def test_repository_excel_table_metadata_matches_visible_headers(self) -> None:
+        expected = {
+            "xl/tables/table1.xml": [
+                "接口分类",
+                "模块类型",
+                "实例组",
+                "位置简称",
+                "有效拍数",
+                "时钟连接",
+                "复位连接",
+                "时钟源模块",
+                "假门控标记",
+            ],
+            "xl/tables/table2.xml": [
+                "默认列",
+                "工具内部属性",
+                "必填 / 类型",
+                "含义",
+                "示例",
+                "RTL 检查方式",
+                "填写注意",
+            ],
+        }
+        with zipfile.ZipFile(ROOT / "examples" / "RS_Check_Excel_Template.xlsx") as archive:
+            for entry_name, expected_columns in expected.items():
+                with self.subTest(entry=entry_name), archive.open(entry_name) as stream:
+                    table = ET.parse(stream).getroot()
+                    actual_columns = [
+                        element.attrib["name"]
+                        for element in table.iter()
+                        if element.tag.rsplit("}", 1)[-1] == "tableColumn"
+                    ]
+                self.assertEqual(actual_columns, expected_columns)
+
     def test_formula_in_mapped_cell_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "formula.xlsx"
@@ -253,7 +318,7 @@ class ExcelReaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "shuffled.csv"
             path.write_text(
-                "unused,RS_inst,clk,Intf_type,CRG_source,step,position,rst,RS_module,RS_CFG_EN,notes\n"
+                "备注甲,实例列,时钟列,接口列,时钟源列,拍数列,位置列,复位列,模块列,门控列,备注乙\n"
                 "x,PIPE_X,clk_i,IN_IF,my_crg,1,top.u,rst_n,my_pipe, 假门控 ,n\n",
                 encoding="utf-8",
             )

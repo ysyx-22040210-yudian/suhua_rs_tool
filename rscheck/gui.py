@@ -220,7 +220,7 @@ class RsCheckApp:
         self.sheet_var = tk.StringVar(value="1")
         self.header_row_var = tk.StringVar(value="1")
         self.data_start_row_var = tk.StringVar(value="2")
-        self.header_check_var = tk.BooleanVar(value=True)
+        self.header_check_var = tk.BooleanVar(value=False)
         self.column_vars = {
             name: tk.StringVar(value=value) for name, value in default_columns().items()
         }
@@ -333,11 +333,15 @@ class RsCheckApp:
         ).grid(row=0, column=5, sticky="w", padx=(8, 18))
         ttk.Checkbutton(
             excel_options,
-            text="校验映射表头",
+            text="严格校验表头（可选）",
             variable=self.header_check_var,
         ).grid(row=0, column=6, sticky="e")
 
-        columns_group = ttk.LabelFrame(tab, text="Excel 列映射（从 1 开始）", padding=10)
+        columns_group = ttk.LabelFrame(
+            tab,
+            text="内部属性 -> Excel 列号（从 1 开始）",
+            padding=10,
+        )
         columns_group.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
         columns_group.columnconfigure(1, weight=1)
         columns_group.columnconfigure(3, weight=1)

@@ -25,7 +25,7 @@ def _common_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="FIELD=INDEX",
-        help="override a 1-based column mapping; may be repeated",
+        help="map an internal field to a 1-based input column; may be repeated",
     )
     parser.add_argument("--header-row", type=int, help="override header row")
     parser.add_argument("--data-start-row", type=int, help="override first data row")
@@ -34,13 +34,13 @@ def _common_parser() -> argparse.ArgumentParser:
         "--header-check",
         dest="header_check",
         action="store_true",
-        help="require mapped header cells to equal field names",
+        help="opt in to requiring mapped header cells to equal internal field names",
     )
     header_check.add_argument(
         "--no-header-check",
         dest="header_check",
         action="store_false",
-        help="do not require mapped header cells to equal field names",
+        help="use mapped column numbers regardless of header text (default)",
     )
     parser.set_defaults(header_check=None)
     return parser

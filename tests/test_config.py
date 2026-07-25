@@ -17,12 +17,37 @@ class ConfigTests(unittest.TestCase):
         config = load_config(ROOT / "config" / "rscheck.example.json")
         self.assertEqual(config.excel.columns["RS_inst"], 3)
         self.assertEqual(config.excel.columns["RS_CFG_EN"], 9)
+        self.assertFalse(config.excel.validate_headers)
         self.assertEqual(config.rtl.crg_match, "module")
         self.assertFalse(config.rtl.require_contiguous_indices)
         self.assertTrue(config.module_rules["rs_pipe"].has_rs_cfg_en)
         self.assertEqual(config.module_rules["rs_pipe"].step_parameters, ("rs_mode",))
         self.assertFalse(config.module_rules["rs_plain"].has_rs_cfg_en)
         self.assertEqual(config.position_mappings, {"tile_core": "top.u_tile"})
+
+    def test_header_validation_is_optional_and_defaults_to_disabled(self) -> None:
+        original = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        for name, configured, expected in (
+            ("omitted", None, False),
+            ("disabled", False, False),
+            ("strict_opt_in", True, True),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                raw = json.loads(json.dumps(original))
+                if configured is None:
+                    raw["excel"].pop("validate_headers", None)
+                else:
+                    raw["excel"]["validate_headers"] = configured
+                path = Path(directory) / "config.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                config = load_config(path)
+            self.assertEqual(config.excel.validate_headers, expected)
+            self.assertEqual(
+                config_to_dict(config)["excel"]["validate_headers"],
+                expected,
+            )
 
     def test_position_mappings_default_to_empty_when_omitted(self) -> None:
         raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))

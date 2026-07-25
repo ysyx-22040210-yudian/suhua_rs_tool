@@ -110,9 +110,9 @@ python scripts/test_rscheck_gui_smoke.py `
 if ($LASTEXITCODE -ne 0) { throw "Visible GUI smoke failed" }
 ```
 
-### 3.3 使用 Excel 生成“乱序列 + 额外列”XLSX
+### 3.3 使用 Excel 生成“乱序列 + 自定义表头 + 额外列”XLSX
 
-本节需要安装桌面版 Microsoft Excel。脚本生成一个真实 `.xlsx`，其中九个目标字段被打乱，并在首尾各加入一个无关列。
+本节需要安装桌面版 Microsoft Excel。脚本生成一个真实 `.xlsx`，其中九个内部属性映射到乱序列，实际表头全部使用与内部属性名不同的业务名称，并在首尾各加入一个无关列。默认 `validate_headers=false`，因此属性归属只由 1-based 列号决定。
 
 ```powershell
 $ProjectRoot = "C:\path\to\suhua_rs_tool"
@@ -131,8 +131,9 @@ try {
     $worksheet.Name = "RS_Check"
 
     $headers = @(
-        "unused", "RS_inst", "clk", "Intf_type", "CRG_source",
-        "step", "position", "rst", "RS_module", "RS_CFG_EN", "notes"
+        "unrelated", "Instance selector", "Clock connection", "Interface label",
+        "Clock source", "Expected stages", "Scope alias", "Reset connection",
+        "Module definition", "Gating class", "notes"
     )
     $values = @(
         "ignore", "PIPE_X", "clk_i", "IN_IF", "my_crg",
@@ -183,6 +184,12 @@ python -m rscheck @ValidateArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Shuffled XLSX validation failed with exit code $LASTEXITCODE"
 }
+
+# 可选严格诊断要求实际表头等于内部属性名，因此同一自定义表头文件应返回基础设施错误 2。
+python -m rscheck @ValidateArgs --header-check
+if ($LASTEXITCODE -ne 2) {
+    throw "Strict header diagnostic should fail with exit code 2"
+}
 ```
 
 预期输出包含：
@@ -192,7 +199,13 @@ VALID: 1 specification row(s)
 row 2: top.u / PIPE_X module=rs_pipe step=1
 ```
 
-这证明列号可由用户定义，额外列不会参与解析，表头校验仍会按照覆盖后的列号执行。
+显式开启严格诊断的第二次运行退出码为 `2`，标准错误包含：
+
+```text
+ERROR: header validation failed at row 1
+```
+
+第一次运行证明内部属性只按用户定义的列号读取：实际表头任意，额外列不会参与解析。第二次运行证明精确表头比较仍作为 opt-in 诊断保留，只有显式传入 `--header-check` 时才执行。
 
 配置示例中没有 `top.u` 的 position 简写，因此本用例也同时证明：未命中 `position_mappings` 的 Excel 值会按完整 RTL 路径直通，`validate` 不会要求所有路径都登记数据库。
 
@@ -362,7 +375,7 @@ cd "$PROJECT_ROOT"
 预期末行包含：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... position-map=tile_core->top.u_tile
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile
 ```
 
 2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线。当前 0.6.0 fresh 验收结果见 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；若把本节 20 轮 validate-only 单独作为设备门禁，必须在目标设备重跑，不能沿用旧结果。
@@ -416,6 +429,7 @@ test "$POS_GUI_RC" -eq 0
 grep -F 'Width:' "$GUI_WINDOW_INFO"
 grep -F 'Height:' "$GUI_WINDOW_INFO"
 grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=100 window=mapped' "$POS_GUI_LOG"
+grep -F 'header-map=column-index strict-header=false' "$POS_GUI_LOG"
 grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_GUI_LOG"
 )
 ```
@@ -839,7 +853,7 @@ grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
 )
 ```
 
-成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...` 和 `contract=elab-only`。运行日志中的命令必须包含 `--collector` 和 `--elab-db`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS，首组显示 6 个物理实例、有效/期望拍 `5/5`。inventory 必须是 schema v2，report 必须是 schema v3，贡献必须为 `[1,1,0,1,1,1]`。在线 smoke 的报告和临时 inventory 位于系统临时目录，退出后自动清理。2026-07-24 记录不包含动态 step，不能作为本项证据。
+成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...`、`header-map=column-index strict-header=false` 和 `contract=elab-only`。运行日志中的命令必须包含 `--collector` 和 `--elab-db`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS，首组显示 6 个物理实例、有效/期望拍 `5/5`。inventory 必须是 schema v2，report 必须是 schema v3，贡献必须为 `[1,1,0,1,1,1]`。在线 smoke 的报告和临时 inventory 位于系统临时目录，退出后自动清理。2026-07-24 记录不包含动态 step，不能作为本项证据。
 
 ## 9. 在线反例
 
@@ -1060,9 +1074,11 @@ work_lib_as_elab.log
 
 ### 14.2 `header validation failed`
 
+- 该错误只会在配置 `validate_headers=true`、命令行传入 `--header-check` 或 GUI 勾选“严格校验表头（可选）”时出现；默认解析不比较表头文字。
 - 检查 `--sheet`、`header_row` 和 `data_start_row`。
 - 检查九个 `--column FIELD=INDEX` 是否全部为 1-based 正整数且互不重复。
-- 确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。
+- 若有意使用严格诊断，确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。
+- 若实际表头本来就是自定义业务名称，关闭该可选诊断；内部属性仍由九个列号映射，不由表头文字决定。
 
 ### 14.3 `NPI collector executable not found`
 

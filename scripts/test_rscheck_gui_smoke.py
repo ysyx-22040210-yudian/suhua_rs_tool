@@ -37,6 +37,17 @@ _ONLINE_OPTIONS_WITH_VALUE = frozenset(
     }
 )
 _ONLINE_FLAG_OPTIONS = frozenset({"--header-check", "--no-header-check"})
+_BUSINESS_HEADERS = (
+    "接口分类",
+    "模块类型",
+    "实例组",
+    "位置简称",
+    "有效拍数",
+    "时钟连接",
+    "复位连接",
+    "时钟源模块",
+    "假门控标记",
+)
 
 
 def _window_identifier(root: object) -> str:
@@ -129,19 +140,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
     positions = {}
     with specs_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(
-            (
-                "Intf_type",
-                "RS_module",
-                "RS_inst",
-                "position",
-                "step",
-                "clk",
-                "rst",
-                "CRG_source",
-                "RS_CFG_EN",
-            )
-        )
+        writer.writerow(_BUSINESS_HEADERS)
         for index in range(row_count):
             position = f"top.load_{index:05d}"
             prefix = f"PIPE_{index:05d}"
@@ -209,19 +208,7 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
     module = "rs_default_pipe"
     with specs_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(
-            (
-                "Intf_type",
-                "RS_module",
-                "RS_inst",
-                "position",
-                "step",
-                "clk",
-                "rst",
-                "CRG_source",
-                "RS_CFG_EN",
-            )
-        )
+        writer.writerow(_BUSINESS_HEADERS)
         writer.writerow(
             (
                 "DEFAULT_IF",
@@ -350,6 +337,10 @@ def main() -> int:
     config_path.write_text(source_config_text, encoding="utf-8")
     app.config_var.set(str(config_path))
     app._load_config_from_form()
+    if source_config.get("excel", {}).get("validate_headers") is not False:
+        raise SystemExit("sample config must disable strict header validation by default")
+    if app.header_check_var.get():
+        raise SystemExit("GUI loaded strict header validation as enabled by default")
 
     app.position_alias_var.set("gui_smoke_position")
     app.position_path_var.set("top.u_gui_smoke")
@@ -982,6 +973,7 @@ def main() -> int:
             f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
+            " header-map=column-index strict-header=false"
             f"{' contract=elab-only' if online else ''}"
             f"{' position-map=tile_core->top.u_tile' if sample_position_mapping else ''}"
             f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
