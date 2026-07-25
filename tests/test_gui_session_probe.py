@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "test_vm_verdi_gui.sh"
+GUI_SMOKE_SCRIPT = ROOT / "scripts" / "test_rscheck_gui_smoke.py"
 SITE_ENV_RUNNER = ROOT / "scripts" / "lib" / "run_with_env_file.sh"
 BASH = shutil.which("bash")
 
@@ -66,6 +67,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
 
     def test_vm_flow_requires_partial_npi_load_evidence(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
         rtl = (ROOT / "examples" / "rtl" / "rs_example.sv").read_text(
             encoding="utf-8"
         )
@@ -76,6 +78,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("RESULT: PASS | rows=2 errors=0 warnings=1", source)
         self.assertIn("--expect-partial-load", source)
         self.assertIn("notice=NPI_LOAD_PARTIAL", source)
+        self.assertGreaterEqual(gui_smoke.count('if iid == "global":'), 2)
 
     def test_license_environment_import_contract_is_safe(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

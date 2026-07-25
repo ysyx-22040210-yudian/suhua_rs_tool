@@ -619,7 +619,9 @@ def main() -> int:
             return
         app.result_tree.xview_moveto(0.0)
         if sample_position_mapping:
-            for record in app._result_records.values():
+            for iid, record in app._result_records.items():
+                if iid == "global":
+                    continue
                 spec = record.get("spec", {})
                 if (
                     not isinstance(spec, dict)
