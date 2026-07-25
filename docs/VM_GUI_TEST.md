@@ -282,7 +282,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x... header-map=column-index strict-header=false
 ```
 
-2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB 仅是历史性能数据。0.6.0 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`；旧时间和 RSS 既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
+2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB 仅是历史性能数据。0.7.1 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`；旧时间和 RSS 既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -492,7 +492,7 @@ Verdi GUI loaded elaborated top 'top' after ...
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
 [PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS_D0 physical=1 effective=1 expected=1 RS_CFG_EN=假门控
-PASS: position mapping, fresh KDB online positive/negative GUI checks, and offline GUI stress suite completed.
+PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed.
 ```
 
 正例第 3 行故意把完整本地例化名 `CTRL_RS_D0` 填入 `RS_inst`。该行通过证明空 remainder 合法，而且实例仍完成 module、parameters、step、clk/rst 和 CRG 检查；这里不能改填 `top.u_tile.CTRL_RS_D0`。空后缀实例不参与 tag/index/连续编号检查。若同一 scope 另有符合 suffix 规则的 `CTRL_RS_D0_*数字`，较短的 `RS_inst=CTRL_RS_D0` 仍会按前缀语义一并匹配，当前没有 exact-only 模式。
@@ -529,8 +529,8 @@ PASS: position mapping, fresh KDB online positive/negative GUI checks, and offli
 
 ## 12. 验证记录
 
-当前 0.6.0 完整本地 `RS_inst` 状态见 `TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`。该记录固定到 GitHub 提交 `e4fd87a532d90cad59d13522f7e1366038bf653f`：Windows `Ran 185 tests`、`OK (skipped=44)`，即 141 项执行通过、44 项平台限定用例按预期跳过；CentOS 185 项全部通过且无 skip；fresh elaborated KDB、真实 NPI `CTRL_RS_D0` 完整名证据、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
+当前 0.7.1 状态见 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`。该记录固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows `Ran 196 tests`、`OK (skipped=44)`，即 152 项执行通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
 
-`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
+`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 
 具体 VM 每次压力和在线 smoke 的终端输出应随提交一起记录在测试说明或提交信息中，但不得包含主机、密码、license 或会话认证路径。

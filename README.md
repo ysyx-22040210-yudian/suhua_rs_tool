@@ -16,6 +16,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)
 - [任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md)
 - [完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_FULL_INSTANCE_2026-07-25.md)
 - [Position 映射库与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_POSITION_MAPPING_2026-07-25.md)
@@ -347,7 +348,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-2026-07-25 已在以下环境重新完成完整本地 `RS_inst` 0.6.0 版本的真实构建、fresh KDB、在线正负例和 GUI 压测：
+2026-07-25 已在以下环境完成 `0.7.1` 的真实构建、partial/clean fresh KDB、在线正负例和 GUI 压测：
 
 ```text
 CentOS 7.9
@@ -357,7 +358,11 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_FULL_INSTANCE_2026-07-25.md) 记录了 Windows 185 项回归、Excel 模板复核，以及 VM 上 fresh KDB、真实 NPI 完整名证据、严格 top 窗口、在线正负例、可见 GUI、100 轮和 10,000 行压力的当前实测结果。
+[NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md) 固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows 196 项回归中 152 项通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB 的 collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、100 轮和 10,000 行负载均通过。
+
+[任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md) 是本次 partial-load 修复之前的 0.7.0 历史基线。
+
+[完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_FULL_INSTANCE_2026-07-25.md) 是任意业务表头支持之前的 0.6.0 历史基线。
 
 [Position 映射库与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_POSITION_MAPPING_2026-07-25.md) 是完整本地实例名功能之前的 0.5.0 历史基线。
 
