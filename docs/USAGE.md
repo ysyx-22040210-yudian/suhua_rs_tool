@@ -654,6 +654,20 @@ python -m rscheck check \
 
 `--inventory` 与 `--collector` 互斥。离线模式不能使用 `--elab-db`、`--keep-inventory` 或 `--npi-lib-dir`。
 
+仓库自带的当前格式样例可直接复现两行离线 PASS；它是 schema v3，主 RS 组的 `clock_trace` 与示例 RTL 的 `u_occ -> u_clk_mux -> {u_crg, u_aux_crg}` 三层分支一致：
+
+```bash
+python -m rscheck check \
+  --excel examples/specs.csv \
+  --config config/rscheck.example.json \
+  --sheet 1 \
+  --inventory examples/inventory.json \
+  --json-report output/rs_report.json \
+  --csv-report output/rs_report.csv
+```
+
+`tests/fixtures/inventory.json` 刻意保留为 schema v2，只用于自动化 legacy 兼容回归，不作为当前格式的示例或 GUI 压测输入。
+
 ### 7.1 信任边界和新鲜度警告
 
 > **离线 inventory 是受信任输入，不提供 KDB 来源或新鲜度证明。**

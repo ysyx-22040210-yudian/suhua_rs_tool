@@ -229,10 +229,10 @@ ERROR: header validation failed at row 1
 ```powershell
 Set-Location $ProjectRoot
 python -m rscheck check `
-  --excel tests/fixtures/specs.csv `
+  --excel examples/specs.csv `
   --config config/rscheck.example.json `
   --sheet 1 `
-  --inventory tests/fixtures/inventory.json
+  --inventory examples/inventory.json
 if ($LASTEXITCODE -ne 0) {
     throw "Offline positive check failed with exit code $LASTEXITCODE"
 }
@@ -252,7 +252,7 @@ python -m rscheck check `
   --excel tests/fixtures/specs_negative.csv `
   --config config/rscheck.example.json `
   --sheet 1 `
-  --inventory tests/fixtures/inventory.json `
+  --inventory examples/inventory.json `
   --json-report $NegativeReport
 if ($LASTEXITCODE -ne 1) {
     throw "Offline negative check did not return 1"
@@ -1296,10 +1296,10 @@ cd "$PROJECT_ROOT"
 
 set +e
 "$PYTHON_BIN" -m rscheck check \
-  --excel tests/fixtures/specs.csv \
+  --excel examples/specs.csv \
   --config config/rscheck.example.json \
   --sheet 1 \
-  --inventory tests/fixtures/inventory.json \
+  --inventory examples/inventory.json \
   --elab-db "$ELAB_DB"
 MODE_RC=$?
 set -e

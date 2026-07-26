@@ -263,6 +263,10 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _current_sample_inventory_path(project_root: Path) -> Path:
+    return project_root / "examples" / "inventory.json"
+
+
 def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
     specs_path = output / "generated_specs.csv"
     inventory_path = output / "generated_inventory.json"
@@ -1307,10 +1311,10 @@ def main() -> int:
         excel_path, inventory_path = _write_crg_source_mapping_inputs(output)
     elif args.custom_port:
         excel_path = _write_custom_port_spec(output)
-        inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
+        inventory_path = _current_sample_inventory_path(project_root)
     elif args.clk_without_rst:
         excel_path = _write_clk_without_rst_spec(output)
-        inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
+        inventory_path = _current_sample_inventory_path(project_root)
     elif args.generated_rows:
         excel_path, inventory_path = _write_generated_inputs(
             output, args.generated_rows
@@ -1321,7 +1325,7 @@ def main() -> int:
             if args.negative
             else project_root / "examples" / "specs.csv"
         )
-        inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
+        inventory_path = _current_sample_inventory_path(project_root)
     app.excel_var.set(str(excel_path))
     app.config_var.set(str(config_path))
     app.sheet_var.set("1")

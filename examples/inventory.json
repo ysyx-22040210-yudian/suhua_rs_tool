@@ -1,0 +1,936 @@
+{
+  "schema_version": 3,
+  "positions": {
+    "top.u_tile": {
+      "found": true,
+      "instances": [
+        {
+          "name": "AAAA_BBB_C0",
+          "full_name": "top.u_tile.AAAA_BBB_C0",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 135,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.data_in",
+              "type": "npiNet"
+            },
+            "q": {
+              "connection": "top.u_tile.stage_0",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "AAAA_BBB_C1",
+          "full_name": "top.u_tile.AAAA_BBB_C1",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 145,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.stage_0",
+              "type": "npiReg"
+            },
+            "q": {
+              "connection": "top.u_tile.stage_1",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "AAAA_BBB_C2",
+          "full_name": "top.u_tile.AAAA_BBB_C2",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 155,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.stage_1",
+              "type": "npiReg"
+            },
+            "q": {
+              "connection": "top.u_tile.stage_2",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "0"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "AAAA_BBB_C3",
+          "full_name": "top.u_tile.AAAA_BBB_C3",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 165,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.stage_2",
+              "type": "npiReg"
+            },
+            "q": {
+              "connection": "top.u_tile.stage_3",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "AAAA_BBB_C4",
+          "full_name": "top.u_tile.AAAA_BBB_C4",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 175,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.stage_3",
+              "type": "npiReg"
+            },
+            "q": {
+              "connection": "top.u_tile.stage_4",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "AAAA_BBB_C5",
+          "full_name": "top.u_tile.AAAA_BBB_C5",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 185,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.stage_4",
+              "type": "npiReg"
+            },
+            "q": {
+              "connection": "top.u_tile.data_out",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "CLK_ONLY_RS",
+          "full_name": "top.u_tile.CLK_ONLY_RS",
+          "module": "rs_clk_only",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 215,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.data_in",
+              "type": "npiNet"
+            },
+            "q": {
+              "connection": "top.u_tile.clk_only_stage",
+              "type": "npiReg"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "CTRL_RS_D0",
+          "full_name": "top.u_tile.CTRL_RS_D0",
+          "module": "rs_pipe",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 195,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.clk_aux",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.data_in",
+              "type": "npiNet"
+            },
+            "q": {
+              "connection": "top.u_tile.ctrl_out",
+              "type": "npiReg"
+            },
+            "rst": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0",
+            "WIDTH": "1",
+            "rs_mode": "1"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_aux_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "CUSTOM_RS",
+          "full_name": "top.u_tile.CUSTOM_RS",
+          "module": "rs_custom",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 205,
+          "ports": {
+            "clock_i": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "d": {
+              "connection": "top.u_tile.data_in",
+              "type": "npiNet"
+            },
+            "q": {
+              "connection": "top.u_tile.custom_stage",
+              "type": "npiReg"
+            },
+            "reset_ni": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {
+            "RS_CRG_EN": "0"
+          },
+          "clk_sources": [
+            {
+              "instance": "top.u_tile.u_occ",
+              "module": "clk_occ"
+            },
+            {
+              "instance": "top.u_tile.u_clk_mux",
+              "module": "clk_mux"
+            },
+            {
+              "instance": "top.u_tile.u_aux_crg",
+              "module": "crg_aux"
+            },
+            {
+              "instance": "top.u_tile.u_crg",
+              "module": "crg_core"
+            }
+          ],
+          "clock_trace": {
+            "clock_port": "clock_i",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk",
+              "rst_n"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_occ",
+                "module": "clk_occ",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "module": "clk_mux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          }
+        },
+        {
+          "name": "u_aux_crg",
+          "full_name": "top.u_tile.u_aux_crg",
+          "module": "crg_aux",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 110,
+          "ports": {
+            "clk_out": {
+              "connection": "top.u_tile.clk_aux",
+              "type": "npiReg"
+            },
+            "ref_clk": {
+              "connection": "top.u_tile.ref_clk",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null
+        },
+        {
+          "name": "u_clk_mux",
+          "full_name": "top.u_tile.u_clk_mux",
+          "module": "clk_mux",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 117,
+          "ports": {
+            "clk_out": {
+              "connection": "top.u_tile.clk_muxed",
+              "type": "npiReg"
+            },
+            "functional_in": {
+              "connection": "top.u_tile.clk_core",
+              "type": "npiReg"
+            },
+            "select_in": {
+              "connection": "top.u_tile.data_in",
+              "type": "npiNet"
+            },
+            "test_in": {
+              "connection": "top.u_tile.clk_aux",
+              "type": "npiReg"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null
+        },
+        {
+          "name": "u_crg",
+          "full_name": "top.u_tile.u_crg",
+          "module": "crg_core",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 105,
+          "ports": {
+            "clk_out": {
+              "connection": "top.u_tile.clk_core",
+              "type": "npiReg"
+            },
+            "ref_clk": {
+              "connection": "top.u_tile.ref_clk",
+              "type": "npiNet"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null
+        },
+        {
+          "name": "u_occ",
+          "full_name": "top.u_tile.u_occ",
+          "module": "clk_occ",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 124,
+          "ports": {
+            "clk": {
+              "connection": "top.u_tile.ref_clk",
+              "type": "npiNet"
+            },
+            "clk_out": {
+              "connection": "top.u_tile.clk_rs",
+              "type": "npiReg"
+            },
+            "enable_in": {
+              "connection": "",
+              "type": "npiConstant"
+            },
+            "rst_n": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            },
+            "source_in": {
+              "connection": "top.u_tile.clk_muxed",
+              "type": "npiReg"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null
+        }
+      ]
+    }
+  },
+  "warnings": [],
+  "notices": []
+}

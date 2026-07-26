@@ -256,10 +256,12 @@ python -m rscheck check \
   --excel examples/specs.csv \
   --config config/rscheck.example.json \
   --sheet 1 \
-  --inventory tests/fixtures/inventory.json \
+  --inventory examples/inventory.json \
   --json-report output/rs_report.json \
   --csv-report output/rs_report.csv
 ```
+
+仓库的 `examples/inventory.json` 是与当前示例 RTL 三层分支时钟路径一致的 schema v3 样例，每个实例都显式包含 `clock_trace`；`tests/fixtures/inventory.json` 则刻意保留为 schema v2，只用于 legacy loader/checker 兼容回归。
 
 CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。当前 collector 生成 inventory v3，当前 JSON report 为 v4；inventory loader 兼容 v2/v3，GUI report loader 兼容 v2/v3/v4。每行 `spec.position` 和 `spec.CRG_source` 都保存解析后的完整路径；映射命中时，`spec.position_alias`、`spec.crg_source_alias` 分别保存 Excel 简写。report v4 在既有模块规则、动态 step、端口和 parameter 证据之外新增 `crg_source_check`；每个 matched instance 还保存 inventory 的 `clock_trace`。CSV 新增 `crg_trace_status`、`crg_trace_max_depth` 和 `crg_trace_evidence`。
 
