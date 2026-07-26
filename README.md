@@ -7,7 +7,7 @@
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例的 clk/rst formal port 是否存在、已连接且符合 Excel；
 - clk 是否可追到唯一上游模块，且模块定义名等于 `CRG_source`；
-- 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CFG_EN` 和有效拍贡献条件；
+- 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CRG_EN` 和有效拍贡献条件；Excel/internal 字段仍使用兼容键 `RS_CFG_EN` 保存“假门控”标签；
 - 重叠的 `RS_inst` 导致同一实例匹配多个 Excel 组时，明确报错。
 
 `Intf_type` 作为业务标签进入报告，不参与 RTL 判定。仅凭当前九个字段无法可靠检查各拍之间的数据串接，详见“当前边界”。
@@ -108,7 +108,7 @@ python -m rscheck position-db delete \
 
 ## 模块规则库和动态拍数
 
-`module_rules` 保存可选的逐模块覆盖项，不要求为 Excel 中每一种 `RS_module` 建项。工具先按区分大小写的模块名查找显式规则；精确匹配时使用该规则，否则自动使用隐式默认规则：`has_rs_cfg_en=true`、`step_parameters=[]`。因此默认仍会逐实例检查 `RS_CFG_EN=0` 和 Excel `假门控`，并让每个匹配物理实例贡献 `1` 拍：
+`module_rules` 保存可选的逐模块覆盖项，不要求为 Excel 中每一种 `RS_module` 建项。工具先按区分大小写的模块名查找显式规则；精确匹配时使用该规则，否则自动使用隐式默认规则：`has_rs_cfg_en=true`、`step_parameters=[]`。`has_rs_cfg_en` 是为兼容既有配置保留的规则键，它控制的实际 RTL parameter 是 `RS_CRG_EN`。因此默认会逐实例检查 `RS_CRG_EN=0` 和 Excel/internal `RS_CFG_EN` 列中的 `假门控`，并让每个匹配物理实例贡献 `1` 拍：
 
 ```json
 "module_rules": {
@@ -123,10 +123,11 @@ python -m rscheck position-db delete \
 }
 ```
 
-- `has_rs_cfg_en=true`：该模块每个匹配 RTL 实例都必须具有 effective `RS_CFG_EN`，值必须为数值 `0`，且 Excel 本行 `RS_CFG_EN` 必须精确填写 `假门控`。
-- `has_rs_cfg_en=false`：Excel 本行必须留空；RTL 实例若实际仍存在 `RS_CFG_EN`，报 `RS_CFG_EN_PARAMETER_UNEXPECTED`。
+- `has_rs_cfg_en=true`：该模块每个匹配 RTL 实例都必须具有 effective `RS_CRG_EN`，值必须为数值 `0`，且 Excel 本行的兼容字段 `RS_CFG_EN` 必须精确填写 `假门控`。
+- `has_rs_cfg_en=false`：Excel 本行 `RS_CFG_EN` 必须留空；RTL 实例若实际仍存在 `RS_CRG_EN`，报兼容 finding code `RS_CFG_EN_PARAMETER_UNEXPECTED`。
 - `step_parameters=[]`：每个匹配物理实例贡献 `1` 拍。
 - `step_parameters` 非空：所有参数值均可确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。多个参数采用“全部非零”语义。
+- `RS_CRG_EN` 由专门逻辑处理，不能放入 `step_parameters`；工具不会回退匹配 RTL `RS_CFG_EN`。RTL 中名为 `RS_CFG_EN` 的 parameter 不再具有门控特殊语义，但可作为普通动态拍参数使用。
 - 任一参数缺失、值为 `null`、包含 X/Z/`?` 或不是可解析数值时，贡献为未知并 fail-closed，即使另一个参数已知为零也不使用部分证据计算 `step`。
 - 未列入 `step_parameters` 的其他 RTL parameter（例如 `WIDTH`）允许存在并保留在报告证据中，但不影响拍数。
 
@@ -146,13 +147,13 @@ python -m rscheck position-db delete \
 
 Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名默认是 `clk`、`rst`，可通过 `rtl.clk_port`、`rtl.rst_port` 修改。
 
-`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；数据单元格则由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
+`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；这个兼容字段只保存“假门控”标签，RTL 中实际匹配的 parameter 名为 `RS_CRG_EN`。数据单元格由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
 
 ## 工具自带桌面 GUI
 
 这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so` 和 elaborated KDB 在线采集只支持 Linux：
 
-当前 `0.8.0` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
+当前 `0.8.1` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
 
 ```bash
 python -m rscheck gui
@@ -172,7 +173,7 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护兼容规则键 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`，其中前者控制 RTL `RS_CRG_EN` parameter 检查。任一数据库存在未保存修改时不能运行检查。
 
 “配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。导出以当前界面的 Excel 选项和九列列号、已加载配置的完整 `rtl`、两个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
 
@@ -185,7 +186,7 @@ RTL 数据源可选：
 
 在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
 
-“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、解析后的完整 `position`、Excel position 简写、Excel `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
+“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、解析后的完整 `position`、Excel position 简写、Excel/internal `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`，其中门控参数证据键为 `RS_CRG_EN`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
 
 ## 先验证 Excel
 
@@ -321,7 +322,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 - 当前版本仅把 `Intf_type` 作为报告标签。若要检查 interface 数据链，需要补充 input/output formal port 映射、首尾预期信号和 stage 顺序定义。
 - clk/rst 的复合表达式（concat、运算、mux 等）不会做字符串猜测，而是报 `UNSUPPORTED_CONNECTION`。
 - `CRG_source` 默认与第一个唯一上游模块的 `npiDefName` 精确比较；以 NPI module cell 表示的 clock gate/buffer 会被视作 source，primitive gate/buffer 会继续向上追踪。多驱动或顶层输入等无法确定来源的场景会 fail-closed。
-- `RS_CFG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
+- `RS_CRG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - inventory `warnings` 中的 NPI traversal/driver 问题都按 `NPI_UNRESOLVED` 硬错误处理；partial load 本身写入可选 `notices` 并显示为非致命 warning，只有目标证据仍完整时检查才可能 PASS。
 - 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
 - SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式；单个元素可按完整本地名填写，按数组前缀分组则需要定制 suffix 规则。
@@ -332,7 +333,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、partial-load notice、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、partial KDB、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、schema v2 inventory、schema v3 report、partial-load notice、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、partial KDB、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 

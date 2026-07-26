@@ -368,7 +368,6 @@ def _validate_v3_row(
                 for item in step_parameters
             )
             or len(set(step_parameters)) != len(step_parameters)
-            or "RS_CFG_EN" in step_parameters
         ):
             raise GuiReportError(
                 f"report row {row_number}.module_rule.step_parameters is invalid"

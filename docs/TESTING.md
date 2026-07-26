@@ -14,7 +14,7 @@
 | L2 | Windows + Microsoft Excel | 真实 XLSX 九字段乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | position 简写 + schema v2 离线正例 inventory + report v3 | `0` | `tile_core` 解析为 `top.u_tile`，NPI/inventory 只使用全路径；6 个物理实例贡献 `[1,1,0,1,1,1]`，两组均 PASS |
 | L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH` |
-| L5 | 通用本地环境 | position 映射、默认/显式模块规则、动态 step、`RS_CFG_EN` 和旧 inventory | `0` | 映射命中/直通/重复组、隐式默认规则、显式覆盖优先、0/非0/缺失/`null`/X/Z、多 parameter AND 语义、step 0 及 schema v1 拒绝均有独立用例 |
+| L5 | 通用本地环境 | position 映射、默认/显式模块规则、动态 step、RTL `RS_CRG_EN`、Excel/internal `RS_CFG_EN` 和旧 inventory | `0` | 映射命中/直通/重复组、隐式默认规则、显式覆盖优先、0/非0/缺失/`null`/X/Z、多 parameter AND 语义、step 0 及 schema v1 拒绝均有独立用例 |
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
@@ -27,7 +27,7 @@
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
 | V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 新窗口标题匹配 `VERDI_READY_REGEX`，明确显示 elaborated top `top` |
 | N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过；首组 physical=6、effective=5、expected=5，report schema v3 |
-| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 `RS_CFG_EN` 标签差异 |
+| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 Excel/internal `RS_CFG_EN` 标签差异；实际 RTL parameter 为 `RS_CRG_EN` |
 | N3 | Linux + Verdi/NPI + Tk | 带 elaboration error 但 top 可查询的 partial KDB | `0` | collector/CLI/GUI 继续；2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
 | G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
@@ -73,7 +73,7 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 五根完整配置导入/导出的事务与副本语义、未编辑纯数字 sheet 名的字符串类型保持、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 五根完整配置导入/导出的事务与副本语义、未编辑纯数字 sheet 名的字符串类型保持、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
 实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/clk/rst/CRG 检查并计入物理实例数及规则计算后的有效 `step`，但不得进入 tag/index/连续编号判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
@@ -98,7 +98,7 @@ python -m pip install -e .
 rtl-rs-check-gui
 ```
 
-窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。最后修改 GUI Excel 设置和两个内存数据库，导出完整配置副本并重新导入，确认五个根对象完整恢复。截图必须基于当前 `0.8.0` 重新验收，且不提交仓库。
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的兼容配置键 `has_rs_cfg_en=true`、`step_parameters=rs_mode`，并确认界面将该规则说明为 RTL `RS_CRG_EN` parameter。最后修改 GUI Excel 设置和两个内存数据库，导出完整配置副本并重新导入，确认五个根对象完整恢复。截图必须基于当前版本重新验收，且不提交仓库。
 
 从仓库根目录可直接复制运行可见 GUI smoke。脚本使用临时配置验证 position 映射和模块规则的新建/保存/重载/删除，并把当前 Excel/列号、完整 `rtl`、包含未单独保存修改的两个数据库导出为副本后重新导入；它不会修改仓库配置，成功后把“Position 映射库”页保留 10 秒：
 
@@ -261,25 +261,28 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 
 预期 finding 至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`。当前反例的模块名、clk/rst 和 CRG 故意保持正确，因此不得要求旧版本的五类无关差异。
 
-### 3.5 模块规则、动态 step 和 `RS_CFG_EN` 合同回归
+### 3.5 模块规则、动态 step、RTL `RS_CRG_EN` 和兼容标签合同回归
 
 全量测试必须独立覆盖下列情况；不能只依赖一个同时触发多种 finding 的反例：
 
 | 规则/实例条件 | 预期 |
 |---|---|
-| 没有模块专属显式规则 | 使用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；`validate` 接受输入 |
+| 没有模块专属显式规则 | 使用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；兼容规则键实际要求 RTL `RS_CRG_EN`；`validate` 接受输入 |
 | 默认规则，6 个物理实例 | 每个实例贡献 1，有效拍数 6 |
-| 存在大小写精确匹配的显式规则 | 显式 `has_rs_cfg_en` 和 `step_parameters` 覆盖默认值 |
+| 存在大小写精确匹配的显式规则 | 显式 `has_rs_cfg_en` 和 `step_parameters` 覆盖默认值；前者控制 RTL `RS_CRG_EN` |
 | `step_parameters=["rs_mode"]`，值为 `1,1,0,1,1,1` | 贡献 `[1,1,0,1,1,1]`，有效拍数 5 |
 | 两个 step parameters 且值都已解析 | 只有全部非零的实例贡献 1，至少一个为 0 贡献 0 |
 | step parameter 缺失 | `STEP_PARAMETER_MISSING` + `STEP_CALCULATION_UNRESOLVED` |
 | step parameter 为 `null`、X/Z、`?` 或非法值 | `STEP_PARAMETER_VALUE_UNRESOLVED` + `STEP_CALCULATION_UNRESOLVED` |
 | 全部实例贡献 0，Excel `step=0` | PASS |
 | 没有物理匹配实例，Excel `step=0` | `GROUP_NOT_FOUND`，不能 PASS |
-| `has_rs_cfg_en=true`，RTL 参数为 0，Excel 为 `假门控` | PASS |
-| `has_rs_cfg_en=true`，RTL 参数缺失/非零/未知 | 对应 `MISSING`/`VALUE_MISMATCH`/`VALUE_UNRESOLVED` |
-| `has_rs_cfg_en=false`，RTL 参数不存在且 Excel 留空 | PASS |
-| `has_rs_cfg_en=false`，RTL 实际存在该参数 | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
+| `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 为 0，Excel/internal `RS_CFG_EN` 为 `假门控` | PASS |
+| `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 缺失/非零/未知 | 对应兼容 code `MISSING`/`VALUE_MISMATCH`/`VALUE_UNRESOLVED` |
+| `has_rs_cfg_en=true`，实例只有同名 RTL `RS_CFG_EN=0`、没有 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_MISSING`；不得回退匹配旧 parameter 名 |
+| `has_rs_cfg_en=false`，RTL `RS_CRG_EN` 不存在且 Excel `RS_CFG_EN` 留空 | PASS |
+| `has_rs_cfg_en=false`，RTL 实际存在 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
+| `step_parameters` 包含 `RS_CRG_EN` | 配置错误；该 parameter 由专门逻辑处理 |
+| `step_parameters` 包含另一个真实 RTL parameter `RS_CFG_EN` | 作为普通动态拍参数接受，不与 Excel/internal 标签字段混淆 |
 
 还必须断言 report `schema_version=3`，每行都包含最终采用的默认或显式 `module_rule`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。
 
@@ -388,7 +391,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.8.0` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.8.1` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -445,7 +448,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.8.0` 必须重新运行并出现 config-io marker。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.8.1` 必须重新运行并出现 config-io marker。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -495,7 +498,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.8.0` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
+2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.8.1` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -717,7 +720,7 @@ for name, expected_mode in expected_modes.items():
     parameters = instances[name].get("parameters")
     if (
         not isinstance(parameters, dict)
-        or parameters.get("RS_CFG_EN") != "0"
+        or parameters.get("RS_CRG_EN") != "0"
         or parameters.get("rs_mode") != expected_mode
     ):
         raise SystemExit("inventory lost effective parameters for {}: {!r}".format(name, parameters))
@@ -749,7 +752,7 @@ for row in report["rows"]:
         raise SystemExit("unexpected module rule evidence: {!r}".format(rule))
     for instance in row["matched_instances"]:
         parameters = instance.get("parameters")
-        if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+        if not isinstance(parameters, dict) or parameters.get("RS_CRG_EN") != "0":
             raise SystemExit("report lost effective parameter evidence: {!r}".format(instance))
 
 out_row = next(row for row in report["rows"] if row["spec"]["RS_inst"] == "AAAA_BBB")
@@ -869,7 +872,7 @@ grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
 
 ## 9. 在线反例
 
-反例复用同一个 `$ELAB_DB`，只把规格替换为 `tests/fixtures/specs_negative.csv`。该规格保留正确模块、clk/rst 和 CRG，只把有效拍数 `5` 写成 `6`，并把 `RS_CFG_EN=0` 的标签写成 `真门控`。
+反例复用同一个 `$ELAB_DB`，只把规格替换为 `tests/fixtures/specs_negative.csv`。该规格保留正确模块、clk/rst 和 CRG；RTL `RS_CRG_EN=0` 保持不变，只把有效拍数 `5` 写成 `6`，并把 Excel/internal `RS_CFG_EN` 标签写成 `真门控`。
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -1144,19 +1147,19 @@ work_lib_as_elab.log
 - collector 的 traversal/driver warning 会 fail-closed，不应通过忽略 warning 来获得 PASS。
 - 检查 clock gate/buffer 后实际被追踪到的第一个模块是否与 `CRG_source` 一致。
 
-### 14.10 `RS_CFG_EN` 参数检查失败
+### 14.10 RTL `RS_CRG_EN` 检查失败（兼容 code 为 `RS_CFG_EN_*`）
 
-- `RS_CFG_EN_PARAMETER_MISSING`：模块规则声明 `has_rs_cfg_en=true`，但实例证据没有该键；修正规则或 RTL/KDB。
-- `RS_CFG_EN_PARAMETER_UNEXPECTED`：规则声明 `has_rs_cfg_en=false`，但 RTL 实际仍有该 parameter；不能仅靠 Excel 留空规避。
-- `RS_CFG_EN_LABEL_MISMATCH`：Excel 没有按模块规则填写精确 `假门控` 或空白。
-- `RS_CFG_EN_VALUE_MISMATCH`：实例参数字符串不表示数值 `0`；检查实例 override 和本次 elaborated KDB，不能只改 Excel 标签。
-- `RS_CFG_EN_VALUE_UNRESOLVED`：inventory 中该键为 `null`；检查 collector/NPI 参数遍历和 KDB，不能把 `null` 当作参数不存在。
+- `RS_CFG_EN_PARAMETER_MISSING`：兼容规则键 `has_rs_cfg_en=true`，但实例证据没有 `RS_CRG_EN`；修正规则或 RTL/KDB。
+- `RS_CFG_EN_PARAMETER_UNEXPECTED`：`has_rs_cfg_en=false`，但 RTL 实际仍有 `RS_CRG_EN`；不能仅靠 Excel `RS_CFG_EN` 留空规避。
+- `RS_CFG_EN_LABEL_MISMATCH`：Excel/internal `RS_CFG_EN` 没有按模块规则填写精确 `假门控` 或空白。
+- `RS_CFG_EN_VALUE_MISMATCH`：实例 `RS_CRG_EN` 字符串不表示数值 `0`；检查实例 override 和本次 elaborated KDB，不能只改 Excel 标签。
+- `RS_CFG_EN_VALUE_UNRESOLVED`：inventory 中 `parameters.RS_CRG_EN` 为 `null`；检查 collector/NPI 参数遍历和 KDB，不能把 `null` 当作参数不存在。
 - schema v1 或实例缺少整个 `parameters` 对象属于输入契约错误，应重新使用当前 collector 生成 schema v2 inventory。
 - 同组多个实例时检查 finding 的实例路径；每个实例使用自己的 effective 值，任一失败都会使整行 FAIL。
 
 ### 14.11 模块规则或动态 step 检查失败
 
-- 显式规则没有生效：规则键与 `RS_module` 大小写不完全一致。工具会采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；核对 report v3 的 `module_rule`。
+- 显式规则没有生效：规则键与 `RS_module` 大小写不完全一致。工具会采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求 RTL `RS_CRG_EN`；核对 report v3 的 `module_rule`。
 - `STEP_PARAMETER_MISSING`：规则中的 parameter 不存在于该实例；核对拼写、模块类型和 KDB。
 - `STEP_PARAMETER_VALUE_UNRESOLVED`：parameter 为 `null`、X/Z/`?` 或非法值；该实例贡献未知。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个实例贡献未知；查看 report v3 的 `step_check.contributions`，先解决根因。

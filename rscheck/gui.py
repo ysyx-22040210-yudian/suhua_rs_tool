@@ -90,8 +90,8 @@ def _parse_step_parameters(value: str) -> tuple[str, ...]:
     parameters = [item for item in parameters if item]
     if len(set(parameters)) != len(parameters):
         raise GuiInputError("决定 step 的 parameter 名不能重复")
-    if "RS_CFG_EN" in parameters:
-        raise GuiInputError("RS_CFG_EN 不能同时作为决定 step 的 parameter")
+    if "RS_CRG_EN" in parameters:
+        raise GuiInputError("RS_CRG_EN 不能同时作为决定 step 的 parameter")
     return tuple(parameters)
 
 
@@ -562,7 +562,7 @@ class RsCheckApp:
         )
         for name, title, width in (
             ("module", "RS_module", 260),
-            ("rs_cfg_en", "RS_CFG_EN parameter", 170),
+            ("rs_cfg_en", "RS_CRG_EN parameter", 170),
             ("step_parameters", "决定 step 的 parameters", 420),
         ):
             self.rule_tree.heading(name, text=title)
@@ -590,7 +590,7 @@ class RsCheckApp:
         )
         ttk.Checkbutton(
             editor,
-            text="有 RS_CFG_EN",
+            text="有 RS_CRG_EN",
             variable=self.module_has_rs_cfg_en_var,
         ).grid(row=0, column=2, sticky="w", padx=(0, 18))
         ttk.Label(editor, text="step parameters").grid(row=0, column=3, sticky="w")

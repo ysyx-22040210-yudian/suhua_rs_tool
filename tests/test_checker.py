@@ -157,6 +157,35 @@ class CheckerTests(unittest.TestCase):
         self.assertTrue(report.passed)
         self.assertEqual(report.rows[0].effective_step, 4)
 
+    def test_rs_cfg_en_can_be_an_ordinary_step_parameter(self) -> None:
+        def mutate(raw) -> None:
+            instances = raw["positions"]["top.u_tile"]["instances"]
+            for instance in instances:
+                if instance["name"].startswith("AAAA_BBB"):
+                    instance["parameters"]["RS_CFG_EN"] = "1"
+            instances[2]["parameters"]["RS_CFG_EN"] = "0"
+
+        rule = ModuleRule(
+            name="rs_pipe",
+            has_rs_cfg_en=True,
+            step_parameters=("RS_CFG_EN",),
+        )
+        report = check_specs(
+            [self.specs[0]],
+            self._mutated_inventory(mutate),
+            self.rtl,
+            {"rs_pipe": rule},
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].effective_step, 5)
+        self.assertTrue(
+            all(
+                "RS_CRG_EN" in instance.parameters
+                for instance in report.rows[0].instances
+            )
+        )
+
     def test_registered_module_without_step_parameters_counts_every_instance(self) -> None:
         rule = ModuleRule(name="rs_pipe", has_rs_cfg_en=True, step_parameters=())
         spec = replace(self.specs[0], step=6)
@@ -197,10 +226,10 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(mismatch.actual["physical_instances"], 6)
         self.assertEqual(mismatch.actual["effective_step"], 6)
 
-    def test_default_rule_requires_rs_cfg_en_on_every_instance(self) -> None:
+    def test_default_rule_requires_rs_crg_en_on_every_instance(self) -> None:
         def mutate(raw) -> None:
             raw["positions"]["top.u_tile"]["instances"][0]["parameters"].pop(
-                "RS_CFG_EN"
+                "RS_CRG_EN"
             )
 
         spec = replace(self.specs[0], step=6)
@@ -216,10 +245,29 @@ class CheckerTests(unittest.TestCase):
         missing = report.rows[0].findings[0]
         self.assertEqual(missing.instance, "top.u_tile.AAAA_BBB_C0")
 
-    def test_default_rule_rejects_nonzero_rs_cfg_en(self) -> None:
+    def test_legacy_rtl_rs_cfg_en_does_not_alias_rs_crg_en(self) -> None:
+        def mutate(raw) -> None:
+            parameters = raw["positions"]["top.u_tile"]["instances"][0][
+                "parameters"
+            ]
+            parameters["RS_CFG_EN"] = parameters.pop("RS_CRG_EN")
+
+        report = check_specs(
+            [self.specs[0]], self._mutated_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"RS_CFG_EN_PARAMETER_MISSING"},
+        )
+        missing = report.rows[0].findings[0]
+        self.assertEqual(missing.instance, "top.u_tile.AAAA_BBB_C0")
+
+    def test_default_rule_rejects_nonzero_rs_crg_en(self) -> None:
         def mutate(raw) -> None:
             raw["positions"]["top.u_tile"]["instances"][0]["parameters"][
-                "RS_CFG_EN"
+                "RS_CRG_EN"
             ] = "1"
 
         spec = replace(self.specs[0], step=6)
@@ -258,7 +306,7 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(report.rows[0].module_rule, self.rules["rs_pipe"])
         self.assertEqual(report.rows[0].effective_step, 5)
 
-    def test_rs_cfg_en_truth_matrix(self) -> None:
+    def test_rs_crg_en_truth_matrix(self) -> None:
         missing = object()
         cases = (
             ("zero_false_gate", "0", "假门控", True, set()),
@@ -369,9 +417,9 @@ class CheckerTests(unittest.TestCase):
                     instances = raw["positions"]["top.u_tile"]["instances"][:2]
                     for instance in instances:
                         if parameter_value is missing:
-                            instance["parameters"].pop("RS_CFG_EN", None)
+                            instance["parameters"].pop("RS_CRG_EN", None)
                         else:
-                            instance["parameters"]["RS_CFG_EN"] = parameter_value
+                            instance["parameters"]["RS_CRG_EN"] = parameter_value
 
                 spec = replace(self.specs[0], rs_cfg_en=excel_value)
                 report = check_specs(
@@ -381,10 +429,10 @@ class CheckerTests(unittest.TestCase):
                 codes = {item.code for item in report.rows[0].findings}
                 self.assertEqual(codes, expected_codes)
 
-    def test_rs_cfg_en_checks_every_instance_in_group(self) -> None:
+    def test_rs_crg_en_checks_every_instance_in_group(self) -> None:
         def mutate(raw) -> None:
             instances = raw["positions"]["top.u_tile"]["instances"]
-            instances[1]["parameters"]["RS_CFG_EN"] = "1"
+            instances[1]["parameters"]["RS_CRG_EN"] = "1"
 
         report = check_specs(
             [self.specs[0]], self._mutated_inventory(mutate), self.rtl, self.rules
@@ -402,7 +450,7 @@ class CheckerTests(unittest.TestCase):
         def mutate(raw) -> None:
             for instance in raw["positions"]["top.u_tile"]["instances"]:
                 if instance["name"].startswith("AAAA_BBB"):
-                    instance["parameters"].pop("RS_CFG_EN")
+                    instance["parameters"].pop("RS_CRG_EN")
                     instance["parameters"]["SOME_OTHER_PARAMETER"] = None
 
         spec = replace(self.specs[0], rs_cfg_en="")
@@ -414,7 +462,7 @@ class CheckerTests(unittest.TestCase):
         )
         self.assertTrue(report.passed)
 
-    def test_rs_cfg_en_database_presence_mismatch_fails(self) -> None:
+    def test_rs_crg_en_database_presence_mismatch_fails(self) -> None:
         spec = replace(self.specs[0], rs_cfg_en="")
         rule = ModuleRule(
             name="rs_pipe", has_rs_cfg_en=False, step_parameters=("rs_mode",)
@@ -436,7 +484,7 @@ class CheckerTests(unittest.TestCase):
         instance = raw["positions"]["top.u_tile"]["instances"][0]
         self.assertEqual(raw["schema_version"], 2)
         self.assertEqual(raw["notices"], ["partial load remains queryable"])
-        self.assertEqual(instance["parameters"]["RS_CFG_EN"], "0")
+        self.assertEqual(instance["parameters"]["RS_CRG_EN"], "0")
         self.assertEqual(instance["parameters"]["WIDTH"], "1")
 
     def test_old_inventory_schema_is_rejected(self) -> None:
@@ -473,15 +521,15 @@ class CheckerTests(unittest.TestCase):
             ("array", lambda instance: instance.__setitem__("parameters", [])),
             (
                 "numeric_value",
-                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": 0}),
+                lambda instance: instance.__setitem__("parameters", {"RS_CRG_EN": 0}),
             ),
             (
                 "boolean_value",
-                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": False}),
+                lambda instance: instance.__setitem__("parameters", {"RS_CRG_EN": False}),
             ),
             (
                 "object_value",
-                lambda instance: instance.__setitem__("parameters", {"RS_CFG_EN": {}}),
+                lambda instance: instance.__setitem__("parameters", {"RS_CRG_EN": {}}),
             ),
             (
                 "empty_name",

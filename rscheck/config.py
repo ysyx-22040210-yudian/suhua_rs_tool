@@ -93,9 +93,9 @@ def _module_rules(value: Any) -> dict[str, ModuleRule]:
                     f"'module_rules.{name}.step_parameters[{index}]' "
                     "must not contain whitespace"
                 )
-            if parameter == "RS_CFG_EN":
+            if parameter == "RS_CRG_EN":
                 raise ConfigError(
-                    f"'module_rules.{name}.step_parameters' must not include RS_CFG_EN"
+                    f"'module_rules.{name}.step_parameters' must not include RS_CRG_EN"
                 )
             if parameter in parameters:
                 raise ConfigError(

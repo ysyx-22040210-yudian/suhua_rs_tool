@@ -638,7 +638,7 @@ class GuiLifecycleTests(unittest.TestCase):
             "matched_instances": [
                 {
                     "full_name": "top.u.PIPE_C0",
-                    "parameters": {"RS_CFG_EN": "0"},
+                    "parameters": {"RS_CRG_EN": "0"},
                 }
             ],
         }
@@ -653,7 +653,7 @@ class GuiLifecycleTests(unittest.TestCase):
         evidence = _evidence_payload(record, finding)
 
         self.assertEqual(
-            evidence["matched_instances"][0]["parameters"]["RS_CFG_EN"], "0"
+            evidence["matched_instances"][0]["parameters"]["RS_CRG_EN"], "0"
         )
         self.assertEqual(evidence["finding"]["code"], "RS_CFG_EN_LABEL_MISMATCH")
         self.assertEqual(evidence["step_check"]["effective_step"], 1)
@@ -668,7 +668,8 @@ class GuiLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(GuiInputError, "不能重复"):
             _parse_step_parameters("rs_mode,rs_mode")
         with self.assertRaisesRegex(GuiInputError, "不能同时"):
-            _parse_step_parameters("RS_CFG_EN")
+            _parse_step_parameters("RS_CRG_EN")
+        self.assertEqual(_parse_step_parameters("RS_CFG_EN"), ("RS_CFG_EN",))
 
     def test_position_mapping_form_trims_and_requires_both_values(self) -> None:
         alias, rtl_path = _position_mapping_from_form(

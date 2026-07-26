@@ -172,7 +172,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 - `Excel / CSV`、`配置 JSON` 和配置“加载”按钮；
 - `工作表`、`表头行`、`数据起始行`、默认未勾选的 `严格校验表头（可选）`；
-- “内部属性 -> Excel 列号”区域中的九个独立 1-based 映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；这些名称是工具内部属性键，实际 Excel 表头可以任意命名；
+- “内部属性 -> Excel 列号”区域中的九个独立 1-based 映射：`Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`；这些名称是工具内部属性键，实际 Excel 表头可以任意命名；兼容字段 `RS_CFG_EN` 保存“假门控”标签，实际 RTL parameter 名为 `RS_CRG_EN`；
 - 数据源单选项 `在线 NPI（elaborated KDB）` 和 `离线 Inventory`；
 - 在线字段 `Collector`、`Elab KDB`、`NPI 库目录`、`保存 Inventory`、`超时（秒）`；
 - 离线字段 `Inventory JSON`；
@@ -181,15 +181,15 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 加载示例配置后必须确认严格表头诊断保持未勾选。当前 `examples/specs.csv` 使用“接口分类”“模块类型”等业务表头，与九个内部属性名均不同；GUI 的“验证 Excel”和后续检查仍应按配置中的 1-based 列号正常通过。手工勾选严格诊断后再次验证该文件，应按预期报告 `header validation failed`，证明精确表头比较只是 opt-in 诊断。
 
-“模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求假门控且每个匹配实例贡献 1。
+“模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`，并把该兼容规则键说明为“有 `RS_CRG_EN` parameter”。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求 RTL `RS_CRG_EN=0`、Excel/internal `RS_CFG_EN=假门控`，且每个匹配实例贡献 1。
 
 “Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；映射未保存时不能运行，保存应原子写回当前配置 JSON 并重新加载。Excel 简写命中后检查、分组、clk/rst 相对解析和 NPI positions 均使用全路径；未命中值按完整路径直通。
 
-当前 `0.8.0` 的“配置 JSON”行应同时显示“导入”“加载”“导出”。完整配置文件只有五个根对象：`excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。手工验收导出时，先修改当前 GUI 的 sheet/行号/严格表头和九列列号，再在两个数据库中各“应用”一项但不单独保存，并保持搜索过滤生效；导出的副本必须包含当前 Excel/列号、已加载的完整 `rtl` 和两个未受过滤的完整内存数据库，包括这两项未保存修改。导出后当前配置路径和两个 dirty 状态必须保持不变，原配置文件不得改变；选择当前配置自身作为导出目标必须被拒绝。只改路径输入框但尚未加载另一配置时也必须拒绝导出，避免混用旧 `rtl`。
+当前 `0.8.1` 的“配置 JSON”行应同时显示“导入”“加载”“导出”。完整配置文件只有五个根对象：`excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。手工验收导出时，先修改当前 GUI 的 sheet/行号/严格表头和九列列号，再在两个数据库中各“应用”一项但不单独保存，并保持搜索过滤生效；导出的副本必须包含当前 Excel/列号、已加载配置的完整 `rtl` 和两个未受过滤的完整内存数据库，包括这两项未保存修改。导出后当前配置路径和两个 dirty 状态必须保持不变，原配置文件不得改变；选择当前配置自身作为导出目标必须被拒绝。只改路径输入框但尚未加载另一配置时也必须拒绝导出，避免混用旧 `rtl`。
 
 导入验收必须确认候选 JSON 在任何丢弃提示之前先完成五根完整校验，缺少任一根对象都应拒绝；候选有效后，先确认与已加载配置不同的 Excel/列号表单，再逐一确认两个 dirty 数据库。全部接受后还应重新读取候选，复核仍有效才整体替换配置、切换 active path 并清除 dirty。兼容性“加载”允许历史可选根字段，但也必须经过相同的确认和二次读取。取消文件选择、首次/复核无效候选或拒绝任一确认时，当前 GUI 字段、active path、两个内存数据库和 dirty 状态都不得发生部分变化。配置若以字符串保存纯数字工作表名（例如 `"123"`），该字段未编辑时导出和运行必须继续使用字符串名称；不能误转成 1-based 数字序号。Excel/CSV、collector、Elab KDB、NPI 库、inventory、report 和超时等运行输入/输出路径不属于配置，导入后按目标设备重新选择。
 
-`has_rs_cfg_en=true` 时每个 RTL 实例都必须存在该 effective parameter、值为 0，且 Excel 精确填写 `假门控`；`false` 时 Excel 必须留空且 RTL 不得实际存在该 parameter。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。
+`has_rs_cfg_en=true` 时每个 RTL 实例都必须存在 effective `RS_CRG_EN`、值为 0，且 Excel/internal `RS_CFG_EN` 精确填写 `假门控`；`false` 时 Excel 字段必须留空且 RTL 不得实际存在 `RS_CRG_EN`。工具不会回退匹配 RTL `RS_CFG_EN`。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。`RS_CRG_EN` 不能加入 `step_parameters`；RTL 中另一个确实存在的 `RS_CFG_EN` 可作为普通动态拍 parameter。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。
 
 “检查结果”页应分别显示“匹配实例”和“实际/期望拍”，Position 应显示 `tile_core -> top.u_tile`。示例首组必须显示 6 个物理实例、`5/5` 拍；证据面板应包含 `spec.position=top.u_tile`、`spec.position_alias=tile_core`、`module_rule`、`step_check`、逐实例贡献 `[1,1,0,1,1,1]`、全部 effective `parameters`、port、clk 来源和源文件/行号。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
 
@@ -252,7 +252,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、固定 config-io marker、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、固定 config-io marker、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`，所有匹配实例的门控参数证据必须为 `parameters.RS_CRG_EN="0"`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
 
 可见离线反例：
 
@@ -286,7 +286,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x... header-map=column-index strict-header=false config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧时间和 RSS 既不是当前 `0.8.0` 结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 配置往返、后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
+2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧时间和 RSS 既不是当前 `0.8.1` 结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 配置往返、后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -360,7 +360,7 @@ gui_session_resolve
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... header-map=column-index strict-header=false contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning，日志必须包含 `header-map=column-index strict-header=false` 和固定 config-io marker。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
+3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning，日志必须包含 `header-map=column-index strict-header=false` 和固定 config-io marker。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`；每个 RS 实例的 inventory/report 参数证据必须包含 `RS_CRG_EN="0"`，不能用 RTL `RS_CFG_EN` 代替。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
 
 ## 8. 打开 Verdi GUI
 
@@ -535,14 +535,14 @@ offline_gui_10000_rows.log
 - `error[NPI_LOAD]` / collector 退出 11：load 返回 0 且没有任何 top 可查询。确认 KDB 来自 `elabcom -elab`，执行 `ldd "$COLLECTOR" | grep libNPI.so` 核对运行库与 Verdi/KDB 版本，并查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`；`work.lib++` 及其符号链接别名会更早被拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
 - 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
-- 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`。
+- 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`，实际要求 RTL `RS_CRG_EN`。
 - `STEP_PARAMETER_MISSING` / `STEP_PARAMETER_VALUE_UNRESOLVED`：规则要求的拍数 parameter 缺失或未知；查看 report v3 逐实例证据。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个贡献未知，整行 fail-closed。
-- `RS_CFG_EN_PARAMETER_MISSING`：规则声明有该 parameter，但实例证据缺失。
-- `RS_CFG_EN_PARAMETER_UNEXPECTED`：规则声明无该 parameter，但 RTL 实际存在。
-- `RS_CFG_EN_LABEL_MISMATCH`：Excel 未按 `has_rs_cfg_en` 填写精确 `假门控` 或空白。
-- `RS_CFG_EN_VALUE_MISMATCH`：effective 字符串不表示数值 `0`；检查实例 override 和本次 KDB。
-- `RS_CFG_EN_VALUE_UNRESOLVED`：schema v2 `parameters.RS_CFG_EN` 为 `null`；检查 NPI 参数遍历和 KDB，不能把它当作无参数。
+- `RS_CFG_EN_PARAMETER_MISSING`：兼容规则键声明有门控 parameter，但实例证据缺少 `RS_CRG_EN`。
+- `RS_CFG_EN_PARAMETER_UNEXPECTED`：规则声明无门控 parameter，但 RTL 实际存在 `RS_CRG_EN`。
+- `RS_CFG_EN_LABEL_MISMATCH`：Excel/internal `RS_CFG_EN` 未按 `has_rs_cfg_en` 填写精确 `假门控` 或空白。
+- `RS_CFG_EN_VALUE_MISMATCH`：effective `RS_CRG_EN` 字符串不表示数值 `0`；检查实例 override 和本次 KDB。
+- `RS_CFG_EN_VALUE_UNRESOLVED`：schema v2 `parameters.RS_CRG_EN` 为 `null`；检查 NPI 参数遍历和 KDB，不能把它当作无参数。
 - schema v1 inventory：旧格式没有逐实例参数证据，必须用当前 collector 重新生成 schema v2 文件。
 
 ## 12. 验证记录

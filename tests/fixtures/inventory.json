@@ -10,7 +10,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 10,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -25,7 +25,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 20,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -40,7 +40,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 30,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "0"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "0"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -55,7 +55,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 40,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -70,7 +70,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 50,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -85,7 +85,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 60,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_rs", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}
@@ -100,7 +100,7 @@
           "module": "rs_pipe",
           "file": "rs_top.sv",
           "line": 70,
-          "parameters": {"RS_CFG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
+          "parameters": {"RS_CRG_EN": "0", "WIDTH": "1", "rs_mode": "1"},
           "ports": {
             "clk": {"connection": "top.u_tile.clk_aux", "type": "npiNet"},
             "rst": {"connection": "top.u_tile.rst_n", "type": "npiNet"}

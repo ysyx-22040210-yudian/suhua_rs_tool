@@ -61,7 +61,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(report["summary"]["passed"])
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "假门控")
             self.assertEqual(
-                report["rows"][0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
+                report["rows"][0]["matched_instances"][0]["parameters"]["RS_CRG_EN"],
                 "0",
             )
             self.assertEqual(report["rows"][0]["step_check"]["physical_instances"], 6)

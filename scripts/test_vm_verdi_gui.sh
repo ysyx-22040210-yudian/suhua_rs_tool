@@ -758,9 +758,9 @@ expected_rs_modes = {
 expected_rs_modes["CTRL_RS_D0"] = "1"
 for name, expected_rs_mode in expected_rs_modes.items():
     parameters = instances[name].get("parameters")
-    if not isinstance(parameters, dict) or parameters.get("RS_CFG_EN") != "0":
+    if not isinstance(parameters, dict) or parameters.get("RS_CRG_EN") != "0":
         raise SystemExit(
-            "instance {} does not expose final RS_CFG_EN=0: {!r}".format(
+            "instance {} does not expose final RS_CRG_EN=0: {!r}".format(
                 name, parameters
             )
         )
@@ -813,9 +813,9 @@ for row in report["rows"]:
     if row.get("module_rule") != expected_rule:
         raise SystemExit("unexpected module rule evidence: {!r}".format(row.get("module_rule")))
     for instance in row["matched_instances"]:
-        if instance.get("parameters", {}).get("RS_CFG_EN") != "0":
+        if instance.get("parameters", {}).get("RS_CRG_EN") != "0":
             raise SystemExit(
-                "report lost RS_CFG_EN parameter evidence: {!r}".format(instance)
+                "report lost RS_CRG_EN parameter evidence: {!r}".format(instance)
             )
 
 group_row = rows_by_group["AAAA_BBB"]

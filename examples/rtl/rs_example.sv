@@ -13,7 +13,7 @@ module crg_aux (
 endmodule
 
 module rs_pipe #(
-    parameter logic RS_CFG_EN = 1'b1,
+    parameter logic RS_CRG_EN = 1'b1,
     parameter logic WIDTH = 1'b1,
     parameter logic rs_mode = 1'b1
 ) (
@@ -25,7 +25,7 @@ module rs_pipe #(
     always_ff @(posedge clk or negedge rst) begin
         if (!rst) begin
             q <= 1'b0;
-        end else if (!RS_CFG_EN && WIDTH && rs_mode) begin
+        end else if (!RS_CRG_EN && WIDTH && rs_mode) begin
             q <= d;
         end
     end
@@ -57,7 +57,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) AAAA_BBB_C0 (
         .clk (clk_rs),
@@ -67,7 +67,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) AAAA_BBB_C1 (
         .clk (clk_rs),
@@ -77,7 +77,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b0)
     ) AAAA_BBB_C2 (
         .clk (clk_rs),
@@ -87,7 +87,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) AAAA_BBB_C3 (
         .clk (clk_rs),
@@ -97,7 +97,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) AAAA_BBB_C4 (
         .clk (clk_rs),
@@ -107,7 +107,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) AAAA_BBB_C5 (
         .clk (clk_rs),
@@ -117,7 +117,7 @@ module tile (
     );
 
     rs_pipe #(
-        .RS_CFG_EN (1'b0),
+        .RS_CRG_EN (1'b0),
         .rs_mode   (1'b1)
     ) CTRL_RS_D0 (
         .clk (clk_aux),

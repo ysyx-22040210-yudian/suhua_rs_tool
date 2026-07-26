@@ -116,7 +116,7 @@ def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
             (
                 "module rule requires Excel RS_CFG_EN to be marked as fake gating"
                 if rule.has_rs_cfg_en
-                else "module rule declares no RS_CFG_EN parameter, so Excel must be blank"
+                else "module rule declares no RS_CRG_EN parameter, so Excel must be blank"
             ),
             expected=expected,
             actual=spec.rs_cfg_en,
@@ -128,7 +128,7 @@ def _check_rs_cfg_en_instance(
     spec: SpecRow, instance: ActualInstance, rule: ModuleRule
 ) -> list[Finding]:
     findings: list[Finding] = []
-    parameter_name = "RS_CFG_EN"
+    parameter_name = "RS_CRG_EN"
     parameter_exists = parameter_name in instance.parameters
     if not rule.has_rs_cfg_en:
         if parameter_exists:
@@ -136,7 +136,7 @@ def _check_rs_cfg_en_instance(
                 _row_finding(
                     spec,
                     "RS_CFG_EN_PARAMETER_UNEXPECTED",
-                    f"{instance.full_name}: RTL has RS_CFG_EN but the module rule declares none",
+                    f"{instance.full_name}: RTL has RS_CRG_EN but the module rule declares none",
                     instance=instance.full_name,
                     expected={"has_rs_cfg_en": False},
                     actual={
@@ -152,7 +152,7 @@ def _check_rs_cfg_en_instance(
             _row_finding(
                 spec,
                 "RS_CFG_EN_PARAMETER_MISSING",
-                f"{instance.full_name}: module rule requires RS_CFG_EN but RTL parameter is missing",
+                f"{instance.full_name}: module rule requires RS_CRG_EN but RTL parameter is missing",
                 instance=instance.full_name,
                 expected={"has_rs_cfg_en": True},
                 actual={"has_rs_cfg_en": False},
@@ -167,7 +167,7 @@ def _check_rs_cfg_en_instance(
             _row_finding(
                 spec,
                 "RS_CFG_EN_VALUE_UNRESOLVED",
-                f"{instance.full_name}: RS_CFG_EN parameter value could not be resolved",
+                f"{instance.full_name}: RS_CRG_EN parameter value could not be resolved",
                 instance=instance.full_name,
                 expected="0",
                 actual=value,
@@ -178,7 +178,7 @@ def _check_rs_cfg_en_instance(
             _row_finding(
                 spec,
                 "RS_CFG_EN_VALUE_MISMATCH",
-                f"{instance.full_name}: RS_CFG_EN parameter is not zero",
+                f"{instance.full_name}: RS_CRG_EN parameter is not zero",
                 instance=instance.full_name,
                 expected="0",
                 actual=value,

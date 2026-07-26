@@ -190,11 +190,11 @@ class ConfigTests(unittest.TestCase):
                 "must not contain whitespace",
             ),
             (
-                "rs_cfg_en_as_step",
+                "rs_crg_en_as_step",
                 lambda raw: raw["module_rules"]["rs_pipe"].__setitem__(
-                    "step_parameters", ["RS_CFG_EN"]
+                    "step_parameters", ["RS_CRG_EN"]
                 ),
-                "must not include RS_CFG_EN",
+                "must not include RS_CRG_EN",
             ),
             (
                 "unknown_rule_key",
@@ -212,6 +212,19 @@ class ConfigTests(unittest.TestCase):
                 path.write_text(json.dumps(raw), encoding="utf-8")
                 with self.assertRaisesRegex(ConfigError, message):
                     load_config(path)
+
+    def test_rs_cfg_en_remains_valid_as_an_ordinary_step_parameter(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        raw["module_rules"]["rs_pipe"]["step_parameters"] = ["RS_CFG_EN"]
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "legacy-parameter-name.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            config = load_config(path)
+
+        self.assertEqual(
+            config.module_rules["rs_pipe"].step_parameters,
+            ("RS_CFG_EN",),
+        )
 
     def test_config_save_round_trip_preserves_module_rules(self) -> None:
         config = load_config(ROOT / "config" / "rscheck.example.json")

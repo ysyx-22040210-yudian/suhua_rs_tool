@@ -174,7 +174,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                         "file": "generated_rs_top.sv",
                         "line": index + 1,
                         "parameters": {
-                            "RS_CFG_EN": "0",
+                            "RS_CRG_EN": "0",
                             "WIDTH": "1",
                             "rs_mode": "1",
                         },
@@ -239,7 +239,7 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                 "file": "default_rule_top.sv",
                 "line": index + 10,
                 "parameters": {
-                    "RS_CFG_EN": "0",
+                    "RS_CRG_EN": "0",
                     "WIDTH": "8",
                     "ignored_mode": "0",
                 },
@@ -874,11 +874,11 @@ def main() -> int:
                     parameters = instance.get("parameters")
                     if (
                         not isinstance(parameters, dict)
-                        or parameters.get("RS_CFG_EN") != "0"
+                        or parameters.get("RS_CRG_EN") != "0"
                     ):
                         failed = True
                         print(
-                            "GUI_SMOKE_FAIL: RS_CFG_EN parameter evidence mismatch",
+                            "GUI_SMOKE_FAIL: RS_CRG_EN parameter evidence mismatch",
                             file=sys.stderr,
                         )
                         root.destroy()

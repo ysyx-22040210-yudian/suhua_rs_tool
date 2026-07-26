@@ -314,7 +314,7 @@ class GuiBackendTests(unittest.TestCase):
                             "module": "pipe",
                             "file": "pipe.sv",
                             "line": 1,
-                            "parameters": {"RS_CFG_EN": "0", "UNRESOLVED": None},
+                            "parameters": {"RS_CRG_EN": "0", "UNRESOLVED": None},
                             "ports": {},
                             "clk_sources": [],
                         }
@@ -329,7 +329,7 @@ class GuiBackendTests(unittest.TestCase):
             loaded = load_report(path)
             self.assertTrue(loaded.summary["passed"])
             self.assertEqual(
-                loaded.rows[0]["matched_instances"][0]["parameters"]["RS_CFG_EN"],
+                loaded.rows[0]["matched_instances"][0]["parameters"]["RS_CRG_EN"],
                 "0",
             )
             self.assertEqual(loaded.rows[0]["spec"]["position_alias"], "core_pipe")
@@ -349,11 +349,11 @@ class GuiBackendTests(unittest.TestCase):
                 load_report(path)
             report["rows"][0]["matched_instances"][0]["parameters"] = parameters
 
-            parameters["RS_CFG_EN"] = 0
+            parameters["RS_CRG_EN"] = 0
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(GuiReportError, "string or null"):
                 load_report(path)
-            parameters["RS_CFG_EN"] = "0"
+            parameters["RS_CRG_EN"] = "0"
 
             parameters[""] = "0"
             path.write_text(json.dumps(report), encoding="utf-8")
@@ -450,7 +450,7 @@ class GuiBackendTests(unittest.TestCase):
                             "module": spec["RS_module"],
                             "file": "pipe.sv",
                             "line": 1,
-                            "parameters": {"RS_CFG_EN": "0", "rs_mode": "1"},
+                            "parameters": {"RS_CRG_EN": "0", "rs_mode": "1"},
                             "ports": {},
                             "clk_sources": [],
                             "step_evaluation": evaluation,
@@ -465,6 +465,38 @@ class GuiBackendTests(unittest.TestCase):
             path.write_text(json.dumps(report), encoding="utf-8")
             loaded = load_report(path)
             self.assertEqual(loaded.rows[0]["step_check"]["effective_step"], 1)
+
+            for parameter_name in ("RS_CFG_EN", "RS_CRG_EN"):
+                with self.subTest(compatible_step_parameter=parameter_name):
+                    compatible_report = copy.deepcopy(report)
+                    compatible_row = compatible_report["rows"][0]
+                    compatible_row["module_rule"]["step_parameters"] = [
+                        parameter_name
+                    ]
+                    instance_parameters = compatible_row["matched_instances"][0][
+                        "parameters"
+                    ]
+                    instance_parameters.update(
+                        {"RS_CFG_EN": "0", "RS_CRG_EN": "0"}
+                    )
+                    instance_parameters[parameter_name] = "1"
+                    for compatible_evaluation in (
+                        compatible_row["step_check"]["contributions"][0],
+                        compatible_row["matched_instances"][0]["step_evaluation"],
+                    ):
+                        compatible_evaluation["parameters"] = {
+                            parameter_name: {
+                                "present": True,
+                                "raw_value": "1",
+                                "state": "nonzero",
+                            }
+                        }
+                    path.write_text(json.dumps(compatible_report), encoding="utf-8")
+                    compatible_loaded = load_report(path)
+                    self.assertEqual(
+                        compatible_loaded.rows[0]["module_rule"]["step_parameters"],
+                        [parameter_name],
+                    )
 
             report["rows"][0]["step_check"]["effective_step"] = 0
             path.write_text(json.dumps(report), encoding="utf-8")
