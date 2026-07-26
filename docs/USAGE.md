@@ -223,11 +223,11 @@ python -m rscheck validate \
 
 ### 3.3 clk/rst 连线
 
-formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 `rst_port` 指定。GUI 新建或修改规则时，这两个输入框留空会分别规范化为 `clk`、`rst_n`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。
+formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 `rst_port` 指定。GUI 新建或修改规则时，这两个输入框留空会分别规范化为 `clk`、`rst_n`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。checker 分别查找、连接检查并比较这两个端口；某一个 formal port 缺失不会清空另一个端口已经采集到的证据。
 
 没有精确显式规则的未知模块使用隐式默认端口 `clk`、`rst_n`。为兼容旧 JSON，已有显式模块规则若缺少 `clk_port/rst_port`，加载时继承历史全局 `rtl.clk_port/rst_port`；规则在内存中始终具有明确端口名，下一次通过 GUI 保存规则库或导出配置时会把两项显式写回。`rtl.clk_port/rst_port` 因此只承担旧配置迁移和 collector 命令兼容，不再覆盖一个已经带端口名的模块规则。
 
-端口名可自定义，但两个检查都不会被空字符串关闭。当前没有“该模块无 rst”或“跳过 rst 检查”的规则；若 RTL 模块确实没有规则指定的 rst formal port，该实例会报告 `RST_PORT_MISSING`。
+端口名可自定义，但两个检查都不会被空字符串关闭。当前没有“该模块无 rst”或“跳过 rst 检查”的规则；若 RTL 模块确实没有规则指定的 rst formal port，该实例会报告 `RST_PORT_MISSING`。若同一实例的规则所指 clk formal port 确实存在且连接正确，则该行 FAIL，但 finding 只能是 `RST_PORT_MISSING`，不得连带产生 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 
 比较时会忽略信号字符串中的空白，并接受：
 
@@ -265,7 +265,7 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
 
 显式规则名、parameter 名和端口名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CRG_EN`。`RS_CFG_EN` 不再是保留的 RTL parameter 名；若 RTL 确实另有同名 parameter，可把它作为普通 `step_parameters` 项。显式规则优先于默认规则，其键必须与 Excel/RTL `RS_module` 大小写完全一致。RTL 中未列入 `step_parameters` 的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
 
-仓库的 `examples/rtl/rs_example.sv` 提供 `rs_custom` / `CUSTOM_RS` 夹具，formal ports 为 `clock_i`、`reset_ni`。VM 真实 NPI 测试会临时加入对应模块规则，证明它不依赖全局 `clk/rst` 名称。
+仓库的 `examples/rtl/rs_example.sv` 提供 `rs_custom` / `CUSTOM_RS` 夹具，formal ports 为 `clock_i`、`reset_ni`。VM 真实 NPI 测试会临时加入对应模块规则，证明它不依赖全局 `clk/rst` 名称。同一文件还提供 `rs_clk_only` / `CLK_ONLY_RS`，其 formal ports 精确为 `clk/d/q`、`clk` 连接 `top.u_tile.clk_rs`，且不存在任何 rst formal port；该夹具专门验证 clk/rst 独立判定。
 
 ### 3.6 RTL `RS_CRG_EN` effective 参数与 Excel `RS_CFG_EN` 标签
 
@@ -540,7 +540,7 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 “检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。`spec.CRG_source` 仍可查看，但不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`。端到端脚本会对八份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log` 和 `online_gui_clk_present_rst_missing.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
@@ -725,7 +725,7 @@ npi/build/rs_npi_collector \
   --elab-db /absolute/path/to/kdb.elab++
 ```
 
-`--clk-port/--rst-port` 目前仍是 collector 命令行的必填兼容参数，但不再限制采集范围；collector 会枚举每个实例的全部 formal ports，并用 NPI L1 `npi_mod_inst_get_port` 按实例全路径补采 Language Model 未返回的端口。最终由 Python checker 按逐模块 `clk_port/rst_port` 选择要检查的两个端口。
+`--clk-port/--rst-port` 目前仍是 collector 命令行的必填兼容参数，但不再限制采集范围；collector 会枚举每个实例的全部 formal ports，并用 NPI L1 `npi_mod_inst_get_port` 按实例全路径补采 Language Model 未返回的端口。最终由 Python checker 按逐模块 `clk_port/rst_port` 选择两个端口并分别判定，rst 缺失不会使已经存在的 clk 被重新解释为缺失或未连接。
 
 ## 9. 生产 elaborated KDB 输入
 
@@ -951,7 +951,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `SUFFIX_TAG_MISMATCH` | 同组实例的 tag 不同 | 核对命名；默认是 warning，连续 index 模式下还会导致硬错误 |
 | `STAGE_INDEX_MISMATCH` | index 不连续、不从 `index_base` 开始或 tag 不唯一 | 修正实例命名或关闭不需要的连续检查 |
 | `RS_MODULE_MISMATCH` | 实例 definition 与 `RS_module` 不同 | 核对模块替换、wrapper 和规格模块名 |
-| `CLK_PORT_MISSING` / `RST_PORT_MISSING` | 当前模块规则指定的 formal port 不存在，或复用了只采旧全局端口的历史 offline inventory | 核对 report 的 `module_rule.clk_port/rst_port` 与 RTL；旧 inventory 用当前 collector 重采。没有 rst formal port 的模块仍会报 `RST_PORT_MISSING`，当前没有“跳过 rst”开关 |
+| `CLK_PORT_MISSING` / `RST_PORT_MISSING` | 当前模块规则指定的对应 formal port 不存在，或复用了只采旧全局端口的历史 offline inventory | 核对 report 的 `module_rule.clk_port/rst_port` 与 RTL；旧 inventory 用当前 collector 重采。两个端口独立判定：clk 存在且已连接、rst 不存在时只允许 `RST_PORT_MISSING`，不得再有 `CLK_PORT_MISSING`/`CLK_UNCONNECTED`；当前没有“跳过 rst”开关 |
 | `CLK_UNCONNECTED` / `RST_UNCONNECTED` | formal port 没有 high connection | 修正例化连线 |
 | `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对 `position` 的简单名或完整层次名，并核对连接 |
 | `UNSUPPORTED_CONNECTION` | clk/rst 经 concat、运算、mux 等复杂表达式连接 | 改为可追踪的直接信号，或扩展采集/规则模型 |

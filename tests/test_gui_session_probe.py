@@ -99,6 +99,12 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("NPI_L1_INC_DIR", source)
         self.assertIn("libnpiL1.so", source)
         self.assertIn("partial-load formal-port inventory mismatch", source)
+        self.assertIn('{"CTRL_RS_D0", "AAAA_BBB_C0", "CLK_ONLY_RS"}', source)
+        self.assertIn("partial clk-only module mismatch", source)
+        self.assertIn("partial clk-only formal ports mismatch", source)
+        self.assertIn("partial clk-only high connection mismatch", source)
+        self.assertIn("partial clk-only unexpectedly has an rst formal port", source)
+        self.assertIn("partial clk-present/rst-absent evidence OK", source)
         self.assertIn("clock-source tracing must be disabled", source)
         self.assertIn("partial NPI formal-port L0/L1 inventory evidence OK", source)
         self.assertIn("custom module clk/rst formal-port rule evidence OK", source)
@@ -106,6 +112,57 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("online_gui_custom_port.log", source)
         self.assertIn("mode=online case=custom-port", source)
         self.assertIn("rule-ports=clock_i/reset_ni", source)
+        self.assertIn('"rs_clk_only": {"clk", "d", "q"}', source)
+        self.assertIn("online_gui_clk_present_rst_missing.log", source)
+        self.assertIn("mode=online case=clk-present-rst-missing", source)
+        self.assertIn("finding isolation OK: RST_PORT_MISSING only", source)
+        self.assertIn("clk-port-evidence=present", source)
+        self.assertIn("finding-codes=RST_PORT_MISSING", source)
+        self.assertIn("GUI_CLK_WITHOUT_RST_ITERATIONS", source)
+
+    def test_expected_clk_only_cli_failure_is_guarded_from_err_trap(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        block = source.split('CLK_ONLY_LOG="$TEST_ROOT/', 1)[1].split(
+            'ONLINE_GUI_LOG="$TEST_ROOT/', 1
+        )[0]
+
+        self.assertNotIn("set +e", block)
+        self.assertIn('if "$PYTHON_BIN" -m rscheck check \\', block)
+        self.assertIn(
+            '2>&1 | tee "$CLK_ONLY_LOG"; then\n'
+            "  CLK_ONLY_CHECK_RC=0\n"
+            "else\n"
+            "  CLK_ONLY_CHECK_RC=$?\n"
+            "fi",
+            block,
+        )
+
+    @unittest.skipUnless(BASH, "Bash is required for ERR trap control-flow test")
+    def test_guarded_expected_failure_preserves_pipeline_status(self) -> None:
+        script = """\
+set -Ee -o pipefail
+trap 'printf "ERR_TRAP\\n" >&2; exit 97' ERR
+if bash -c 'exit 1' 2>&1 | tee /dev/null; then
+  rc=0
+else
+  rc=$?
+fi
+printf 'RC=%s\\n' "$rc"
+[ "$rc" -eq 1 ]
+"""
+
+        result = subprocess.run(
+            [BASH, "-c", script],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("RC=1", result.stdout)
+        self.assertNotIn("ERR_TRAP", result.stderr)
 
     def test_license_environment_import_contract_is_safe(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

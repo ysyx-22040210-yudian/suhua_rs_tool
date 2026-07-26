@@ -5,7 +5,7 @@
 - Excel `position` 简写是否能通过可选映射库解析到实际 RTL 全路径，以及解析后的路径是否存在；
 - 同一 `RS_inst` 组（可填写前缀或完整本地例化名）的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
 - 每个实例的模块定义名是否等于 `RS_module`；
-- 每个实例按其 `RS_module` 规则选择的 clk/rst formal port 是否存在、已连接且符合 Excel；
+- 每个实例按其 `RS_module` 规则分别选择并独立检查 clk/rst formal port 是否存在、已连接且符合 Excel；一个端口缺失不会抹掉另一个端口的有效证据；
 - `CRG_source` 继续从 Excel 解析并写入报告，但当前暂不参与 PASS/FAIL；
 - 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CRG_EN` 和有效拍贡献条件；Excel/internal 字段仍使用兼容键 `RS_CFG_EN` 保存“假门控”标签；
 - 重叠的 `RS_inst` 导致同一实例匹配多个 Excel 组时，明确报错。
@@ -140,7 +140,7 @@ python -m rscheck position-db delete \
 
 例如 `AAAA_BBB_C0` 至 `AAAA_BBB_C5` 有 6 个物理实例，`rs_mode` 依次为 `1,1,0,1,1,1`，则逐实例贡献为 `1,1,0,1,1,1`，有效拍数是 `5`，Excel `step` 必须填 `5`。`step` 允许为 `0`；但没有任何物理实例匹配时仍报 `GROUP_NOT_FOUND`，不能用 `step=0` 掩盖错误路径或 `RS_inst`。
 
-仓库示例 RTL 还包含 `rs_custom` / `CUSTOM_RS`，其 formal ports 为 `clock_i`、`reset_ni`，用于真实 NPI 回归逐模块端口名和全部 formal port 采集。
+仓库示例 RTL 还包含 `rs_custom` / `CUSTOM_RS`，其 formal ports 为 `clock_i`、`reset_ni`，用于真实 NPI 回归逐模块端口名和全部 formal port 采集。另有 `rs_clk_only` / `CLK_ONLY_RS`，其 formal ports 精确为 `clk/d/q`，`clk` 连接 `top.u_tile.clk_rs`，且模块完全没有 rst formal port；它用于证明该行应 FAIL 且 finding 只能是 `RST_PORT_MISSING`，不得误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 
 ## 分组规则
 
@@ -332,7 +332,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 
 - 当前版本仅把 `Intf_type` 作为报告标签。若要检查 interface 数据链，需要补充 input/output formal port 映射、首尾预期信号和 stage 顺序定义。
 - clk/rst 的复合表达式（concat、运算、mux 等）不会做字符串猜测，而是报 `UNSUPPORTED_CONNECTION`。
-- 模块规则必须同时指定可用的 clk 与 rst formal port；端口名可自定义，但当前没有“无 rst/跳过 rst”模式。实际模块没有规则所指 rst 时会报告 `RST_PORT_MISSING`。
+- 模块规则必须同时指定非空的 clk 与 rst formal port 名；端口名可自定义，但当前没有“无 rst/跳过 rst”模式。checker 对两个端口独立取证和判定：实际模块存在且已连接规则所指 clk、但没有规则所指 rst 时，该行 FAIL 且只报告 `RST_PORT_MISSING`，不得同时误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 - `CRG_source` 当前只作为必填 Excel 字段和报告证据保留，完全不参与 PASS/FAIL。新 collector 不追踪 clock source，在线新采 inventory 的 `clk_sources` 为 `[]`；旧 inventory 中已有的 `clk_sources` 也仅作为证据加载。
 - `RS_CRG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - inventory `warnings` 中的 NPI traversal 问题仍按 `NPI_UNRESOLVED` 硬错误处理；partial load 本身写入可选 `notices` 并显示为非致命 warning，只有 position、实例、端口和 parameter 证据仍完整时检查才可能 PASS。
@@ -345,7 +345,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -363,7 +363,7 @@ VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --com
 
 每次运行的唯一目录、`full_vm_test.log` 和 `artifacts` 路径会在退出时打印；三次 clone 尝试都受 timeout 和强制结束上限约束，所有测试现场均保留且不自动删除。已有 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE` 优先于自动导入；`VERDI_AUTO_LICENSE_IMPORT=0` 可关闭自动导入。只有当前 checkout 已经可信且位于 VM 本机文件系统时，才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
 
-工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在七份 GUI 日志中逐一硬断言该标记，其中 `online_gui_custom_port.log` 直接检查 `clock_i/reset_ni`。
+工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。有 clk/无 rst 的专项在线 GUI 回归默认连续运行 20 轮，每轮都重新通过 collector 加载同一 elaborated KDB。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在八份 GUI 日志中逐一硬断言该标记，其中包括 partial KDB 的 `partial_load_gui.log`、逐模块自定义端口的 `online_gui_custom_port.log`，以及端口隔离回归的 `online_gui_clk_present_rst_missing.log`。
 
 GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。fresh 驱动最终调用的完整脚本会运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++` 并启动 `verdi -elab`；只有新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 `top` 才进入 NPI/GUI 检查，其他启动页或无关 Verdi 窗口不能作为就绪证据。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
 

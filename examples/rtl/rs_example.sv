@@ -48,6 +48,20 @@ module rs_custom #(
     end
 endmodule
 
+module rs_clk_only #(
+    parameter logic RS_CRG_EN = 1'b1
+) (
+    input  logic clk,
+    input  logic d,
+    output logic q
+);
+    always_ff @(posedge clk) begin
+        if (!RS_CRG_EN) begin
+            q <= d;
+        end
+    end
+endmodule
+
 module tile (
     input  logic ref_clk,
     input  logic rst_n,
@@ -63,6 +77,7 @@ module tile (
     logic stage_3;
     logic stage_4;
     logic custom_stage;
+    logic clk_only_stage;
 
     crg_core u_crg (
         .ref_clk (ref_clk),
@@ -152,6 +167,15 @@ module tile (
         .reset_ni (rst_n),
         .d        (data_in),
         .q        (custom_stage)
+    );
+
+    // This instance proves that a missing rst cannot hide an existing clk.
+    rs_clk_only #(
+        .RS_CRG_EN (1'b0)
+    ) CLK_ONLY_RS (
+        .clk (clk_rs),
+        .d   (data_in),
+        .q   (clk_only_stage)
     );
 endmodule
 

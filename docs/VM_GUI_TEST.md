@@ -189,7 +189,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 导入验收必须确认候选 JSON 在任何丢弃提示之前先完成五根完整校验，缺少任一根对象都应拒绝；候选有效后，先确认与已加载配置不同的 Excel/列号表单，再逐一确认两个 dirty 数据库。全部接受后还应重新读取候选，复核仍有效才整体替换配置、切换 active path 并清除 dirty。兼容性“加载”允许历史可选根字段，但也必须经过相同的确认和二次读取。取消文件选择、首次/复核无效候选或拒绝任一确认时，当前 GUI 字段、active path、两个内存数据库和 dirty 状态都不得发生部分变化。配置若以字符串保存纯数字工作表名（例如 `"123"`），该字段未编辑时导出和运行必须继续使用字符串名称；不能误转成 1-based 数字序号。Excel/CSV、collector、Elab KDB、NPI 库、inventory、report 和超时等运行输入/输出路径不属于配置，导入后按目标设备重新选择。
 
-`has_rs_cfg_en=true` 时每个 RTL 实例都必须存在 effective `RS_CRG_EN`、值为 0，且 Excel/internal `RS_CFG_EN` 精确填写 `假门控`；`false` 时 Excel 字段必须留空且 RTL 不得实际存在 `RS_CRG_EN`。工具不会回退匹配 RTL `RS_CFG_EN`。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。`RS_CRG_EN` 不能加入 `step_parameters`；RTL 中另一个确实存在的 `RS_CFG_EN` 可作为普通动态拍 parameter。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。每条规则还必须有非空 `clk_port/rst_port`；当前没有“无 rst/跳过 rst”模式，模块缺少所指 rst formal port 时仍报 `RST_PORT_MISSING`。
+`has_rs_cfg_en=true` 时每个 RTL 实例都必须存在 effective `RS_CRG_EN`、值为 0，且 Excel/internal `RS_CFG_EN` 精确填写 `假门控`；`false` 时 Excel 字段必须留空且 RTL 不得实际存在 `RS_CRG_EN`。工具不会回退匹配 RTL `RS_CFG_EN`。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。`RS_CRG_EN` 不能加入 `step_parameters`；RTL 中另一个确实存在的 `RS_CFG_EN` 可作为普通动态拍 parameter。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。每条规则还必须有非空 `clk_port/rst_port`；两个端口分别取证和判定。当前没有“无 rst/跳过 rst”模式：模块存在且连接了所指 clk、但缺少所指 rst formal port 时，该行应 FAIL 且只报 `RST_PORT_MISSING`，不得误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 
 “检查结果”页应分别显示“匹配实例”和“实际/期望拍”，Position 应显示 `tile_core -> top.u_tile`。示例首组必须显示 6 个物理实例、`5/5` 拍；证据面板应包含 `spec.position=top.u_tile`、`spec.position_alias=tile_core`、含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例贡献 `[1,1,0,1,1,1]`、全部 effective `parameters`、全部 formal ports、`clk_sources` 和源文件/行号。`spec.CRG_source` 仍可见，但不产生 finding；新在线 inventory 的 `clk_sources` 应为 `[]`。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
 
@@ -385,6 +385,32 @@ custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
 CRG_source evidence retained without PASS/FAIL validation
 ```
 
+同一个 clean KDB 还包含 `rs_clk_only.CLK_ONLY_RS`：formal ports 精确为 `clk/d/q`，`clk` 连接 `top.u_tile.clk_rs`，没有任何 rst formal port。直接复制下面命令，可用工具自带的可见 GUI 连续执行 20 轮端口隔离回归：
+
+```bash
+cd "$PROJECT_ROOT"
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout 180 \
+  --clk-without-rst \
+  --iterations 20 \
+  --visible-tab results \
+  --visible-seconds 15
+```
+
+GUI 中被测行应显示 FAIL、1 error、0 warning，但 smoke 进程应返回 `0`，表示预期失败被精确识别。末行必须包含：
+
+```text
+case=clk-present-rst-missing iterations=20
+rule-ports=clk/rst_n
+clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING
+```
+
+每一轮都会重新启动 collector 并加载该 `$ELAB_DB`。report finding 集合必须精确为 `{RST_PORT_MISSING}`，不得出现 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
+
 ## 8. 打开 Verdi GUI
 
 本节启动 Verdi 本身，不是 rscheck 自带 GUI。Verdi 可执行文件按 `VERDI_BIN`、`VERDI_HOME/bin/verdi`、`NOVAS_INST_DIR/bin/verdi`、`PATH` 的顺序定位。
@@ -463,7 +489,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、链接 NPI Language/L1 的 collector，先生成故意带 elaboration error 但 top 可查询的 partial KDB，要求 NPI L1 fallback 补齐全部 formal ports，CLI 和工具 GUI 都以 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning 完成；随后用 clean 示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 clean KDB 做在线 NPI 检查。每次 GUI smoke 都执行含逐模块端口名的五根配置往返；任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
+Verdi 端到端脚本会运行全量测试、链接 NPI Language/L1 的 collector，先生成故意带 elaboration error 但 top 可查询的 partial KDB，要求 NPI L1 fallback 补齐全部 formal ports，CLI 和工具 GUI 都以 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning 完成；随后用 clean 示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 clean KDB 做在线 NPI 检查。clean KDB 还会执行有 clk/无 rst 的 CLI 精确 finding 检查和默认 20 轮可见 GUI 压测。每次 GUI smoke 都执行含逐模块端口名的五根配置往返；任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
 
 正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
@@ -505,7 +531,7 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。fresh 驱动另支持 `VM_RUN_BASE` 和 `CLONE_TIMEOUT`；直接运行正式脚本时还可设置 `OUTPUT_BASE`，fresh 驱动会固定覆盖为本轮 `artifacts`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。默认分别运行在线 3 轮、离线 100 轮和 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`，`NPI_L1_INC_DIR` 必须含 `npi_L1.h`，`NPI_L1_LIB_DIR` 必须直接包含 `libnpiL1.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。fresh 驱动另支持 `VM_RUN_BASE` 和 `CLONE_TIMEOUT`；直接运行正式脚本时还可设置 `OUTPUT_BASE`，fresh 驱动会固定覆盖为本轮 `artifacts`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。普通在线正例默认 3 轮，有 clk/无 rst 的专项在线 GUI 默认 20 轮；离线稳定性默认 100 轮，负载默认 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`，`NPI_L1_INC_DIR` 必须含 `npi_L1.h`，`NPI_L1_LIB_DIR` 必须直接包含 `libnpiL1.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 成功输出应包含：
 
@@ -521,18 +547,22 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
 [PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS_D0 physical=1 effective=1 expected=1 RS_CFG_EN=假门控
 custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
+clk-present/rst-missing CLI evidence OK: ports=clk,d,q
+finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent
 CRG_source evidence retained without PASS/FAIL validation
 GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port ... rule-ports=clock_i/reset_ni ...
+GUI_SMOKE_PASS: state=FAIL rows=行数 1 errors=错误 1 warnings=警告 0 mode=online case=clk-present-rst-missing iterations=20 ... clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING ...
 config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 module-rule-ports=preserved
 PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed.
 ```
 
-正式脚本不会只检查一次 marker。它对以下七份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
+正式脚本不会只检查一次 marker。它对以下八份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
 
 ```text
 online_gui_positive.log
 online_gui_custom_port.log
+online_gui_clk_present_rst_missing.log
 partial_load_gui.log
 online_gui_negative.log
 offline_gui_default_rule.log
@@ -540,7 +570,7 @@ offline_gui_100_rounds.log
 offline_gui_10000_rows.log
 ```
 
-七份日志都必须包含完全相同的 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules` 和 `module-rule-ports=preserved`。其中 `online_gui_custom_port.log` 还必须包含 `mode=online case=custom-port` 和 `rule-ports=clock_i/reset_ni`。这证明 clean/partial、普通正例、自定义端口、反例、默认规则、稳定性和负载入口都实际经过同一套完整配置导入/导出合同，且逐模块端口名没有在往返中丢失。
+八份日志都必须包含完全相同的 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules` 和 `module-rule-ports=preserved`。其中 `partial_load_gui.log` 明确门禁 partial KDB 路径；`online_gui_custom_port.log` 还必须包含 `mode=online case=custom-port` 和 `rule-ports=clock_i/reset_ni`；`online_gui_clk_present_rst_missing.log` 必须包含 `case=clk-present-rst-missing`、`clk-port-evidence=present`、`rst-port-evidence=missing` 和 `finding-codes=RST_PORT_MISSING`，并且不得出现 `CLK_PORT_MISSING`。这证明 clean/partial、普通正例、自定义端口、端口隔离反例、普通反例、默认规则、稳定性和负载入口都实际经过同一套完整配置导入/导出合同，且逐模块端口名没有在往返中丢失。
 
 正例第 3 行故意把完整本地例化名 `CTRL_RS_D0` 填入 `RS_inst`。该行通过证明空 remainder 合法，而且实例仍完成 module、parameters、step 和逐模块 clk/rst 检查；`CRG_source` 仅作为报告证据。这里不能改填 `top.u_tile.CTRL_RS_D0`。空后缀实例不参与 tag/index/连续编号检查。若同一 scope 另有符合 suffix 规则的 `CTRL_RS_D0_*数字`，较短的 `RS_inst=CTRL_RS_D0` 仍会按前缀语义一并匹配，当前没有 exact-only 模式。
 
@@ -565,7 +595,7 @@ offline_gui_10000_rows.log
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
 - 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
 - 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，实际要求 RTL `RS_CRG_EN` 并检查默认端口。
-- `CLK_PORT_MISSING` / `RST_PORT_MISSING`：查看 report 中最终 `module_rule.clk_port/rst_port` 和 inventory 的全部 `ports`。旧 offline inventory 若只采了全局端口，必须用当前 collector 重采。partial KDB 中端口仍为空时检查 NPI L1 库与 fallback 日志。模块本身没有 rst 时仍会报 `RST_PORT_MISSING`，当前不能关闭 rst 检查。
+- `CLK_PORT_MISSING` / `RST_PORT_MISSING`：查看 report 中最终 `module_rule.clk_port/rst_port` 和 inventory 的全部 `ports`。旧 offline inventory 若只采了全局端口，必须用当前 collector 重采。partial KDB 中端口仍为空时检查 NPI L1 库与 fallback 日志。clk/rst 独立判定：模块存在且连接了规则指定的 clk、但没有 rst 时，行 FAIL 且只能报 `RST_PORT_MISSING`；同时出现 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED` 应按回归缺陷处理。当前不能关闭 rst 检查。
 - `CRG_source` 不一致但仍 PASS：这是当前行为；字段仍解析/报告，新 inventory 的 `clk_sources=[]`，不做来源正确性判断。
 - `STEP_PARAMETER_MISSING` / `STEP_PARAMETER_VALUE_UNRESOLVED`：规则要求的拍数 parameter 缺失或未知；查看 report v3 逐实例证据。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个贡献未知，整行 fail-closed。

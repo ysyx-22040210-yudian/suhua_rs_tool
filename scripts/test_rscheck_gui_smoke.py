@@ -141,6 +141,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run an online passing case whose module uses clock_i/reset_ni",
     )
+    parser.add_argument(
+        "--clk-without-rst",
+        action="store_true",
+        help="prove an existing clk is found when the configured rst is absent",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -305,6 +310,27 @@ def _write_custom_port_spec(output: Path) -> Path:
     return specs_path
 
 
+def _write_clk_without_rst_spec(output: Path) -> Path:
+    specs_path = output / "clk_without_rst_specs.csv"
+    with specs_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(_BUSINESS_HEADERS)
+        writer.writerow(
+            (
+                "CLK_ONLY_IF",
+                "rs_clk_only",
+                "CLK_ONLY_RS",
+                "tile_core",
+                1,
+                "clk_rs",
+                "rst_n",
+                "not_checked",
+                "假门控",
+            )
+        )
+    return specs_path
+
+
 def _read_json_object(path: Path, label: str) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -335,22 +361,31 @@ def main() -> int:
         args.negative
         or args.default_rule
         or args.custom_port
+        or args.clk_without_rst
         or args.generated_rows
         or args.validate_only
     ):
         raise SystemExit(
             "--expect-partial-load requires a positive online full check"
         )
-    if args.negative and (args.generated_rows or args.custom_port):
+    if args.negative and (
+        args.generated_rows or args.custom_port or args.clk_without_rst
+    ):
         raise SystemExit(
-            "--negative is mutually exclusive with --generated-rows and --custom-port"
+            "--negative is mutually exclusive with --generated-rows, --custom-port, "
+            "and --clk-without-rst"
         )
     if args.default_rule and online:
         raise SystemExit("--default-rule is available only in offline inventory mode")
-    if args.default_rule and (args.negative or args.generated_rows or args.custom_port):
+    if args.default_rule and (
+        args.negative
+        or args.generated_rows
+        or args.custom_port
+        or args.clk_without_rst
+    ):
         raise SystemExit(
             "--default-rule is mutually exclusive with --negative, --generated-rows, "
-            "and --custom-port"
+            "--custom-port, and --clk-without-rst"
         )
     if args.default_rule and args.validate_only:
         raise SystemExit("--default-rule requires a full check, not --validate-only")
@@ -358,6 +393,12 @@ def main() -> int:
         raise SystemExit("--custom-port requires online NPI mode")
     if args.custom_port and args.validate_only:
         raise SystemExit("--custom-port requires a full check, not --validate-only")
+    if args.custom_port and args.clk_without_rst:
+        raise SystemExit("--custom-port and --clk-without-rst are mutually exclusive")
+    if args.clk_without_rst and not online:
+        raise SystemExit("--clk-without-rst requires online NPI mode")
+    if args.clk_without_rst and args.validate_only:
+        raise SystemExit("--clk-without-rst requires a full check, not --validate-only")
 
     root = tk.Tk()
     app = RsCheckApp(root)
@@ -420,6 +461,16 @@ def main() -> int:
             "step_parameters": [],
             "clk_port": "clock_i",
             "rst_port": "reset_ni",
+        }
+        source_config_text = (
+            json.dumps(source_config, ensure_ascii=False, indent=2) + "\n"
+        )
+    if args.clk_without_rst:
+        source_config.setdefault("module_rules", {})["rs_clk_only"] = {
+            "has_rs_cfg_en": True,
+            "step_parameters": [],
+            "clk_port": "clk",
+            "rst_port": "rst_n",
         }
         source_config_text = (
             json.dumps(source_config, ensure_ascii=False, indent=2) + "\n"
@@ -677,7 +728,10 @@ def main() -> int:
     config_io_verified = True
     expected_rows = (
         1
-        if args.negative or args.default_rule or args.custom_port
+        if args.negative
+        or args.default_rule
+        or args.custom_port
+        or args.clk_without_rst
         else args.generated_rows or 2
     )
     expected_tree_rows = expected_rows + (1 if args.expect_partial_load else 0)
@@ -688,6 +742,9 @@ def main() -> int:
         excel_path, inventory_path = _write_default_rule_inputs(output)
     elif args.custom_port:
         excel_path = _write_custom_port_spec(output)
+        inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
+    elif args.clk_without_rst:
+        excel_path = _write_clk_without_rst_spec(output)
         inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
     elif args.generated_rows:
         excel_path, inventory_path = _write_generated_inputs(
@@ -775,7 +832,11 @@ def main() -> int:
             root.after(100, poll)
             return
         expected_state = (
-            "VALID" if args.validate_only else "FAIL" if args.negative else "PASS"
+            "VALID"
+            if args.validate_only
+            else "FAIL"
+            if args.negative or args.clk_without_rst
+            else "PASS"
         )
         if app.summary_state_var.get() != expected_state:
             failed = True
@@ -848,16 +909,22 @@ def main() -> int:
                 if args.default_rule
                 else "CUSTOM_RS"
                 if args.custom_port
+                else "CLK_ONLY_RS"
+                if args.clk_without_rst
                 else "AAAA_BBB"
             )
             expected_instances = (
-                "2" if args.default_rule else "1" if args.custom_port else "6"
+                "2"
+                if args.default_rule
+                else "1"
+                if args.custom_port or args.clk_without_rst
+                else "6"
             )
             expected_step_cell = (
                 "2/2"
                 if args.default_rule
                 else "1/1"
-                if args.custom_port
+                if args.custom_port or args.clk_without_rst
                 else "5/6"
                 if args.negative
                 else "5/5"
@@ -1143,6 +1210,39 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                if args.clk_without_rst:
+                    finding_codes = {
+                        finding.get("code")
+                        for finding in record.get("findings", [])
+                        if isinstance(finding, dict)
+                    }
+                    clk_port = (
+                        instances[0].get("ports", {}).get("clk", {})
+                        if len(instances) == 1 and isinstance(instances[0], dict)
+                        else {}
+                    )
+                    if (
+                        spec.get("RS_module") != "rs_clk_only"
+                        or spec.get("RS_inst") != "CLK_ONLY_RS"
+                        or step_check.get("expected") != 1
+                        or step_check.get("physical_instances") != 1
+                        or step_check.get("effective_step") != 1
+                        or contribution_values != [1]
+                        or len(instances) != 1
+                        or set(instances[0].get("ports", {})) != {"clk", "d", "q"}
+                        or not isinstance(clk_port, dict)
+                        or clk_port.get("connection") != "top.u_tile.clk_rs"
+                        or finding_codes != {"RST_PORT_MISSING"}
+                    ):
+                        failed = True
+                        print(
+                            "GUI_SMOKE_FAIL: clk-present/rst-missing evidence mismatch "
+                            f"ports={instances[0].get('ports', {}) if instances else {}} "
+                            f"findings={sorted(finding_codes)!r}",
+                            file=sys.stderr,
+                        )
+                        root.destroy()
+                        return
                 if args.negative:
                     finding_codes = {
                         finding.get("code")
@@ -1165,7 +1265,7 @@ def main() -> int:
             if args.expect_partial_load:
                 app.result_tree.selection_set("row-0")
             app._on_result_selected()
-            if args.negative:
+            if args.negative or args.clk_without_rst:
                 finding_children = app.finding_tree.get_children()
                 if finding_children:
                     app.finding_tree.selection_set(finding_children[0])
@@ -1206,7 +1306,9 @@ def main() -> int:
                 )
                 root.destroy()
                 return
-            if args.negative and not isinstance(evidence.get("finding"), dict):
+            if (
+                args.negative or args.clk_without_rst
+            ) and not isinstance(evidence.get("finding"), dict):
                 failed = True
                 print(
                     "GUI_SMOKE_FAIL: finding evidence lost row context",
@@ -1219,8 +1321,9 @@ def main() -> int:
             print(f"GUI_SMOKE_FAIL: {app.summary_rows_var.get()}", file=sys.stderr)
             root.destroy()
             return
+        expected_failure = args.negative or args.clk_without_rst
         if (
-            args.validate_only or not args.negative
+            args.validate_only or not expected_failure
         ) and app.summary_errors_var.get() != "错误 0":
             failed = True
             print(f"GUI_SMOKE_FAIL: {app.summary_errors_var.get()}", file=sys.stderr)
@@ -1228,11 +1331,19 @@ def main() -> int:
             return
         if (
             not args.validate_only
-            and args.negative
+            and expected_failure
             and app.summary_errors_var.get() == "错误 0"
         ):
             failed = True
-            print("GUI_SMOKE_FAIL: negative case has no errors", file=sys.stderr)
+            print("GUI_SMOKE_FAIL: expected failure has no errors", file=sys.stderr)
+            root.destroy()
+            return
+        if args.clk_without_rst and app.summary_errors_var.get() != "错误 1":
+            failed = True
+            print(
+                "GUI_SMOKE_FAIL: clk-without-rst must have exactly one error",
+                file=sys.stderr,
+            )
             root.destroy()
             return
         expected_warning_text = "警告 1" if args.expect_partial_load else "警告 0"
@@ -1292,7 +1403,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'partial-load' if args.expect_partial_load else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -1300,7 +1411,8 @@ def main() -> int:
             f"{' position-map=tile_core->top.u_tile' if sample_position_mapping else ''}"
             f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
             f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
-            f" rule-ports={'clk/rst_n' if args.default_rule else 'clock_i/reset_ni' if args.custom_port else 'clk/rst'}"
+            f" rule-ports={'clk/rst_n' if args.default_rule or args.clk_without_rst else 'clock_i/reset_ni' if args.custom_port else 'clk/rst'}"
+            f"{' clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' if args.clk_without_rst else ''}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
             f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules module-rule-ports=preserved' if config_io_verified else ''}"
             " rules-layout=980x680-fit"

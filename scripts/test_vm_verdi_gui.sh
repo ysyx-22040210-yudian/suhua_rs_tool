@@ -81,6 +81,7 @@ OUTPUT_BASE="$RSCHECK_FIXED_OUTPUT_BASE"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
+GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
 GUI_STRESS_ITERATIONS="${GUI_STRESS_ITERATIONS:-100}"
 GUI_LOAD_ROWS="${GUI_LOAD_ROWS:-10000}"
 GUI_VISIBLE_SECONDS="${GUI_VISIBLE_SECONDS:-2}"
@@ -308,6 +309,7 @@ for numeric_setting in \
   "$GUI_START_TIMEOUT" \
   "$NPI_TIMEOUT" \
   "$GUI_ONLINE_ITERATIONS" \
+  "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
   "$GUI_STRESS_ITERATIONS" \
   "$GUI_LOAD_ROWS" \
   "$GUI_VISIBLE_SECONDS"; do
@@ -318,6 +320,8 @@ done
 [ "$GUI_START_TIMEOUT" -gt 0 ] || fail "GUI_START_TIMEOUT must be greater than zero"
 [ "$NPI_TIMEOUT" -gt 0 ] || fail "NPI_TIMEOUT must be greater than zero"
 [ "$GUI_ONLINE_ITERATIONS" -gt 0 ] || fail "GUI_ONLINE_ITERATIONS must be greater than zero"
+[ "$GUI_CLK_WITHOUT_RST_ITERATIONS" -gt 0 ] ||
+  fail "GUI_CLK_WITHOUT_RST_ITERATIONS must be greater than zero"
 [ "$GUI_STRESS_ITERATIONS" -gt 0 ] || fail "GUI_STRESS_ITERATIONS must be greater than zero"
 [ "$GUI_LOAD_ROWS" -gt 0 ] || fail "GUI_LOAD_ROWS must be greater than zero"
 
@@ -523,12 +527,24 @@ if inventory.get("warnings") != []:
 position = inventory.get("positions", {}).get("top.u_tile", {})
 if position.get("found") is not True:
     raise SystemExit("top.u_tile was not queryable after partial load")
-names = {item.get("name") for item in position.get("instances", [])}
-if "CTRL_RS_D0" not in names or "AAAA_BBB_C0" not in names:
+instances = position.get("instances", [])
+names = {item.get("name") for item in instances}
+if not {"CTRL_RS_D0", "AAAA_BBB_C0", "CLK_ONLY_RS"}.issubset(names):
     raise SystemExit("partial-load inventory is missing expected RS instances: {!r}".format(names))
+clk_only = next(item for item in instances if item.get("name") == "CLK_ONLY_RS")
+clk_only_ports = clk_only.get("ports")
+if clk_only.get("module") != "rs_clk_only":
+    raise SystemExit("partial clk-only module mismatch: {!r}".format(clk_only))
+if not isinstance(clk_only_ports, dict) or set(clk_only_ports) != {"clk", "d", "q"}:
+    raise SystemExit("partial clk-only formal ports mismatch: {!r}".format(clk_only_ports))
+if clk_only_ports.get("clk", {}).get("connection") != "top.u_tile.clk_rs":
+    raise SystemExit("partial clk-only high connection mismatch: {!r}".format(clk_only_ports))
+if "rst" in clk_only_ports or "rst_n" in clk_only_ports:
+    raise SystemExit("partial clk-only unexpectedly has an rst formal port: {!r}".format(clk_only_ports))
 expected_ports_by_module = {
     "rs_pipe": {"clk", "rst", "d", "q"},
     "rs_custom": {"clock_i", "reset_ni", "d", "q"},
+    "rs_clk_only": {"clk", "d", "q"},
     "crg_core": {"ref_clk", "clk_out"},
     "crg_aux": {"ref_clk", "clk_out"},
 }
@@ -551,6 +567,7 @@ for instance in position.get("instances", []):
         )
 print("partial NPI load evidence OK: load reported errors but requested RTL remained queryable")
 print("partial NPI formal-port L0/L1 inventory evidence OK; clock-source tracing disabled")
+print("partial clk-present/rst-absent evidence OK: CLK_ONLY_RS ports=clk,d,q")
 PY
 
 cd "$PROJECT_ROOT"
@@ -800,6 +817,7 @@ instances = {
 expected_ports_by_module = {
     "rs_pipe": {"clk", "rst", "d", "q"},
     "rs_custom": {"clock_i", "reset_ni", "d", "q"},
+    "rs_clk_only": {"clk", "d", "q"},
     "crg_core": {"ref_clk", "clk_out"},
     "crg_aux": {"ref_clk", "clk_out"},
 }
@@ -1052,6 +1070,122 @@ print("custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni")
 print("CRG_source evidence retained without PASS/FAIL validation")
 PY
 
+CLK_ONLY_SPEC="$TEST_ROOT/clk_present_rst_missing_specs.csv"
+CLK_ONLY_CONFIG="$TEST_ROOT/clk_present_rst_missing_config.json"
+CLK_ONLY_REPORT="$TEST_ROOT/clk_present_rst_missing_report.json"
+CLK_ONLY_LOG="$TEST_ROOT/clk_present_rst_missing_check.log"
+
+"$PYTHON_BIN" - \
+  "$PROJECT_ROOT/examples/specs.csv" \
+  "$PROJECT_ROOT/config/rscheck.example.json" \
+  "$CLK_ONLY_SPEC" \
+  "$CLK_ONLY_CONFIG" <<'PY'
+import csv
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8-sig", newline="") as stream:
+    header = next(csv.reader(stream))
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    config = json.load(stream)
+
+config["module_rules"]["rs_clk_only"] = {
+    "has_rs_cfg_en": True,
+    "step_parameters": [],
+    "clk_port": "clk",
+    "rst_port": "rst_n",
+}
+with open(sys.argv[3], "w", encoding="utf-8", newline="") as stream:
+    writer = csv.writer(stream)
+    writer.writerow(header)
+    writer.writerow(
+        [
+            "CLK_ONLY_IF",
+            "rs_clk_only",
+            "CLK_ONLY_RS",
+            "tile_core",
+            1,
+            "clk_rs",
+            "rst_n",
+            "not_checked",
+            "假门控",
+        ]
+    )
+with open(sys.argv[4], "w", encoding="utf-8") as stream:
+    json.dump(config, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+PY
+
+if "$PYTHON_BIN" -m rscheck check \
+  --excel "$CLK_ONLY_SPEC" \
+  --config "$CLK_ONLY_CONFIG" \
+  --inventory "$POS_INVENTORY" \
+  --json-report "$CLK_ONLY_REPORT" \
+  2>&1 | tee "$CLK_ONLY_LOG"; then
+  CLK_ONLY_CHECK_RC=0
+else
+  CLK_ONLY_CHECK_RC=$?
+fi
+[ "$CLK_ONLY_CHECK_RC" -eq 1 ] ||
+  fail "clk-present/rst-missing CLI must exit 1, got $CLK_ONLY_CHECK_RC"
+grep -Fq 'RESULT: FAIL | rows=1 errors=1 warnings=0' "$CLK_ONLY_LOG"
+grep -Fq 'RST_PORT_MISSING' "$CLK_ONLY_LOG"
+if grep -Fq 'CLK_PORT_MISSING' "$CLK_ONLY_LOG"; then
+  fail "existing clk was incorrectly reported as missing"
+fi
+
+"$PYTHON_BIN" - "$CLK_ONLY_REPORT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    report = json.load(stream)
+expected_summary = {
+    "passed": False,
+    "rows": 1,
+    "passed_rows": 0,
+    "failed_rows": 1,
+    "errors": 1,
+    "warnings": 0,
+}
+if report.get("summary") != expected_summary:
+    raise SystemExit("unexpected clk-present summary: {!r}".format(report.get("summary")))
+row = report.get("rows", [None])[0]
+if not isinstance(row, dict) or row.get("passed") is not False:
+    raise SystemExit("clk-present/rst-missing row did not fail: {!r}".format(row))
+if row.get("module_rule") != {
+    "name": "rs_clk_only",
+    "has_rs_cfg_en": True,
+    "step_parameters": [],
+    "clk_port": "clk",
+    "rst_port": "rst_n",
+}:
+    raise SystemExit("clk-only module rule mismatch: {!r}".format(row.get("module_rule")))
+findings = row.get("findings", [])
+codes = [item.get("code") for item in findings if isinstance(item, dict)]
+if codes != ["RST_PORT_MISSING"]:
+    raise SystemExit("expected only RST_PORT_MISSING, got {!r}".format(codes))
+instances = row.get("matched_instances", [])
+if len(instances) != 1 or instances[0].get("name") != "CLK_ONLY_RS":
+    raise SystemExit("clk-only instance match failed: {!r}".format(instances))
+ports = instances[0].get("ports", {})
+if set(ports) != {"clk", "d", "q"}:
+    raise SystemExit("clk-only formal ports mismatch: {!r}".format(ports))
+if ports.get("clk", {}).get("connection") != "top.u_tile.clk_rs":
+    raise SystemExit("clk high connection is missing or wrong: {!r}".format(ports.get("clk")))
+if instances[0].get("parameters", {}).get("RS_CRG_EN") != "0":
+    raise SystemExit("clk-only RS_CRG_EN evidence is missing: {!r}".format(instances[0]))
+step_check = row.get("step_check", {})
+if (
+    step_check.get("expected"),
+    step_check.get("physical_instances"),
+    step_check.get("effective_step"),
+) != (1, 1, 1):
+    raise SystemExit("clk-only step evidence mismatch: {!r}".format(step_check))
+print("clk-present/rst-missing CLI evidence OK: ports=clk,d,q")
+print("finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent")
+PY
+
 ONLINE_GUI_LOG="$TEST_ROOT/online_gui_positive.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
@@ -1092,6 +1226,32 @@ grep -Fq 'contract=elab-only' "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'rule-ports=clock_i/reset_ni' "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'schemas=report-v3/inventory-v2' "$CUSTOM_PORT_GUI_LOG"
 assert_no_collector_errors "$CUSTOM_PORT_GUI_LOG"
+
+CLK_WITHOUT_RST_GUI_LOG="$TEST_ROOT/online_gui_clk_present_rst_missing.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout "$NPI_TIMEOUT" \
+  --clk-without-rst \
+  --iterations "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq \
+  "state=FAIL rows=行数 1 errors=错误 1 warnings=警告 0 mode=online case=clk-present-rst-missing iterations=$GUI_CLK_WITHOUT_RST_ITERATIONS" \
+  "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq 'contract=elab-only' "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq 'rule-ports=clk/rst_n' "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq \
+  'clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' \
+  "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$CLK_WITHOUT_RST_GUI_LOG"
+if grep -Fq 'CLK_PORT_MISSING' "$CLK_WITHOUT_RST_GUI_LOG"; then
+  fail "online GUI incorrectly reported the existing clk as missing"
+fi
+assert_no_collector_errors "$CLK_WITHOUT_RST_GUI_LOG"
 
 ONLINE_NEGATIVE_LOG="$TEST_ROOT/online_gui_negative.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1160,6 +1320,7 @@ grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_LOAD_LOG"
 for gui_log in \
   "$ONLINE_GUI_LOG" \
   "$CUSTOM_PORT_GUI_LOG" \
+  "$CLK_WITHOUT_RST_GUI_LOG" \
   "$PARTIAL_GUI_LOG" \
   "$ONLINE_NEGATIVE_LOG" \
   "$DEFAULT_RULE_LOG" \
@@ -1181,7 +1342,7 @@ echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then

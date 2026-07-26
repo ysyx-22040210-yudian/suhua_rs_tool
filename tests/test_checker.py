@@ -783,6 +783,26 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(len(missing), 6)
         self.assertTrue(all("'pipe_clock'" in finding.message for finding in missing))
 
+    def test_present_clk_and_missing_rst_reports_only_rst_missing(self) -> None:
+        def mutate(raw) -> None:
+            instance = next(
+                item
+                for item in raw["positions"]["top.u_tile"]["instances"]
+                if item["name"] == "CTRL_RS_D0"
+            )
+            instance["ports"].pop("rst")
+
+        report = check_specs(
+            [self.specs[1]], self._mutated_inventory(mutate), self.rtl, self.rules
+        )
+
+        findings = report.rows[0].findings
+        self.assertFalse(report.passed)
+        self.assertEqual([finding.code for finding in findings], ["RST_PORT_MISSING"])
+        self.assertEqual(findings[0].instance, "top.u_tile.CTRL_RS_D0")
+        self.assertNotIn("CLK_PORT_MISSING", {finding.code for finding in findings})
+        self.assertNotIn("CLK_UNCONNECTED", {finding.code for finding in findings})
+
     def test_crg_source_mismatch_is_not_judged(self) -> None:
         wrong = replace(self.specs[0], crg_source="wrong_crg")
         report = check_specs([wrong], self.inventory, self.rtl, self.rules)
