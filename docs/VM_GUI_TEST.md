@@ -547,7 +547,7 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前功能版本为 `0.8.0`，验收必须包含五根配置 round-trip marker 和上述六日志硬断言。`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md` 是 `0.7.1` 历史基线，固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows `Ran 196 tests`、`OK (skipped=44)`，即 152 项执行通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，但不包含 0.8.0 配置导入/导出证据。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
+当前 `0.8.0` 验收见 [GUI 完整配置导入导出与 VM 压测验证记录](TEST_RESULTS_CONFIG_IO_2026-07-26.md)，固定到 GitHub 提交 `d416493648aaffd446ca46bad2f994e5a131d06d`：Windows `Ran 220 tests`、`OK (skipped=44)`，即 176 项执行通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 220 项全部通过且无 skip；partial/clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部命中五根配置 round-trip marker。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md` 是 `0.7.1` 历史基线。
 
 `TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 

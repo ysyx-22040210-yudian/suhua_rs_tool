@@ -356,7 +356,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前功能版本为 `0.8.0`。以下环境和数字是 `0.7.1` 于 2026-07-25 完成的历史验证基线；`0.8.0` 的完整配置导入/导出必须按本节上述 marker 和两份测试指南重新验收，不能直接沿用旧结果：
+当前功能版本 `0.8.0` 已于 2026-07-26 按上述 marker 和六日志门禁完成 fresh-checkout 验收：
 
 ```text
 CentOS 7.9
@@ -366,7 +366,9 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md) 固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows 196 项回归中 152 项通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB 的 collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、100 轮和 10,000 行负载均通过。
+[GUI 完整配置导入导出与 VM 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CONFIG_IO_2026-07-26.md) 固定到 GitHub 提交 `d416493648aaffd446ca46bad2f994e5a131d06d`：Windows 220 项回归中 176 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 220 项全部通过且无 skip；partial/clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部包含完整配置往返 marker。
+
+[NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md) 是完整配置导入/导出之前的 `0.7.1` 历史基线。
 
 [任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md) 是本次 partial-load 修复之前的 0.7.0 历史基线。
 
