@@ -246,6 +246,66 @@ class ExcelReaderTests(unittest.TestCase):
             )
         )
 
+    def test_repository_excel_template_rs_cfg_en_guidance_and_validation(self) -> None:
+        template = ROOT / "examples" / "RS_Check_Excel_Template.xlsx"
+        with zipfile.ZipFile(template) as archive:
+            spec_sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+            guide_sheet = ET.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+
+        validations = []
+        for element in spec_sheet.iter():
+            if element.tag.rsplit("}", 1)[-1] != "dataValidation":
+                continue
+            formulas = {
+                child.tag.rsplit("}", 1)[-1]: child.text
+                for child in element
+                if child.tag.rsplit("}", 1)[-1] in {"formula1", "formula2"}
+            }
+            validations.append(
+                (
+                    tuple(
+                        reference.replace("$", "")
+                        for reference in element.attrib.get("sqref", "").split()
+                    ),
+                    element.attrib.get("type"),
+                    element.attrib.get("operator"),
+                    formulas.get("formula1"),
+                    formulas.get("formula2"),
+                )
+            )
+
+        self.assertIn(
+            (("E2:E3",), "whole", "between", "0", "2147483647"), validations
+        )
+        self.assertFalse(
+            any(
+                "I2:I3" in references
+                for references, _type, _operator, _formula1, _formula2 in validations
+            )
+        )
+
+        guide_values = {}
+        for cell in guide_sheet.iter():
+            if cell.tag.rsplit("}", 1)[-1] != "c":
+                continue
+            reference = cell.attrib.get("r", "")
+            if reference not in {"F13", "G13", "C14", "D14", "F14", "G14"}:
+                continue
+            guide_values[reference] = "".join(
+                (descendant.text or "")
+                for descendant in cell.iter()
+                if descendant.tag.rsplit("}", 1)[-1] in {"t", "v"}
+            )
+
+        self.assertIn("当前不参与 PASS/FAIL 判定", guide_values["F13"])
+        self.assertIn("不产生 CRG finding", guide_values["G13"])
+        self.assertEqual(guide_values["C14"], "可选 / 文本")
+        self.assertEqual(
+            guide_values["D14"], "RS_CRG_EN 门控参数的兼容标签字段"
+        )
+        self.assertIn("规则为 false 时本列不参与判定", guide_values["F14"])
+        self.assertIn("规则为 false 时任意字面内容均可", guide_values["G14"])
+
     def test_repository_excel_table_metadata_matches_visible_headers(self) -> None:
         expected = {
             "xl/tables/table1.xml": [

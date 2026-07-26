@@ -284,8 +284,8 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 | `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 为 0，Excel/internal `RS_CFG_EN` 为 `假门控` | PASS |
 | `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 缺失/非零/未知 | 对应兼容 code `MISSING`/`VALUE_MISMATCH`/`VALUE_UNRESOLVED` |
 | `has_rs_cfg_en=true`，实例只有同名 RTL `RS_CFG_EN=0`、没有 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_MISSING`；不得回退匹配旧 parameter 名 |
-| `has_rs_cfg_en=false`，RTL `RS_CRG_EN` 不存在且 Excel `RS_CFG_EN` 留空 | PASS |
-| `has_rs_cfg_en=false`，RTL 实际存在 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
+| `has_rs_cfg_en=false`，RTL `RS_CRG_EN` 不存在，Excel `RS_CFG_EN` 为空、`假门控`、数字或任意其他字面内容 | PASS；字段仍解析并进入报告，不得出现 `RS_CFG_EN_LABEL_MISMATCH` |
+| `has_rs_cfg_en=false`，RTL 实际存在 `RS_CRG_EN`，Excel `RS_CFG_EN` 为任意字面内容 | `RS_CFG_EN_PARAMETER_UNEXPECTED`；不得另报标签 mismatch |
 | `step_parameters` 包含 `RS_CRG_EN` | 配置错误；该 parameter 由专门逻辑处理 |
 | `step_parameters` 包含另一个真实 RTL parameter `RS_CFG_EN` | 作为普通动态拍参数接受，不与 Excel/internal 标签字段混淆 |
 | `CRG_source` 错误、`clk_sources=[]` 或旧 inventory 有多个来源 | 均不产生 CRG finding，不改变 PASS/FAIL；字段和旧证据仍保留在 report |
@@ -399,7 +399,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.9.0` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.9.1` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -456,7 +456,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.9.0` 必须重新运行并出现 config-io marker。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.9.1` 必须重新运行并出现 config-io marker。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -506,7 +506,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.9.0` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
+2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.9.1` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -1243,8 +1243,8 @@ work_lib_as_elab.log
 ### 14.10 RTL `RS_CRG_EN` 检查失败（兼容 code 为 `RS_CFG_EN_*`）
 
 - `RS_CFG_EN_PARAMETER_MISSING`：兼容规则键 `has_rs_cfg_en=true`，但实例证据没有 `RS_CRG_EN`；修正规则或 RTL/KDB。
-- `RS_CFG_EN_PARAMETER_UNEXPECTED`：`has_rs_cfg_en=false`，但 RTL 实际仍有 `RS_CRG_EN`；不能仅靠 Excel `RS_CFG_EN` 留空规避。
-- `RS_CFG_EN_LABEL_MISMATCH`：Excel/internal `RS_CFG_EN` 没有按模块规则填写精确 `假门控` 或空白。
+- `RS_CFG_EN_PARAMETER_UNEXPECTED`：`has_rs_cfg_en=false`，但 RTL 实际仍有 `RS_CRG_EN`；Excel/internal `RS_CFG_EN` 填任何内容都不能规避该错误。
+- `RS_CFG_EN_LABEL_MISMATCH`：仅适用于 `has_rs_cfg_en=true`，表示 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控`；`false` 时任意字面内容均不产生该 finding。
 - `RS_CFG_EN_VALUE_MISMATCH`：实例 `RS_CRG_EN` 字符串不表示数值 `0`；检查实例 override 和本次 elaborated KDB，不能只改 Excel 标签。
 - `RS_CFG_EN_VALUE_UNRESOLVED`：inventory 中 `parameters.RS_CRG_EN` 为 `null`；检查 collector/NPI 参数遍历和 KDB，不能把 `null` 当作参数不存在。
 - schema v1 或实例缺少整个 `parameters` 对象属于输入契约错误，应重新使用当前 collector 生成 schema v2 inventory。
@@ -1391,6 +1391,6 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。`GUI_ONLINE_ITERATIONS` 的普通在线正例默认值为 3；`GUI_CLK_WITHOUT_RST_ITERATIONS` 的有 clk/无 rst 专项在线回归默认值为 20。端到端脚本构建时将四个 NPI/NPI L1 目录传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前代码版本为 `0.9.0`。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与 20 轮在线 GUI 只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和八份 GUI 日志门禁也全部通过。
+当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与 20 轮在线 GUI 只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和八份 GUI 日志门禁也全部通过。
 
 下述 [逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 是本轮 finding 隔离修复之前的 `0.9.0` 历史基线，固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`。[RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。

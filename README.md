@@ -38,7 +38,7 @@ tests/                   无 NPI license 也能运行的离线测试
 scripts/                 rscheck/Verdi GUI 启动器和端到端测试脚本
 ```
 
-Python 端要求 3.8 或更高版本，CLI 没有第三方运行时依赖；桌面 GUI 使用 Python 标准库 Tkinter，最小化 Linux 安装需另装对应 Python 版本的 Tk 包。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式会被拒绝，以免读取过期缓存值。
+Python 端要求 3.8 或更高版本，CLI 没有第三方运行时依赖；桌面 GUI 使用 Python 标准库 Tkinter，最小化 Linux 安装需另装对应 Python 版本的 Tk 包。支持 `.xlsx`、`.xlsm`、`.csv`、`.tsv`；旧二进制 `.xls` 需先另存为 `.xlsx`。宏不会执行，映射列中的公式和 Excel 错误值会被拒绝，以免读取过期缓存值或无效内容。
 
 ## 列映射
 
@@ -129,7 +129,7 @@ python -m rscheck position-db delete \
 ```
 
 - `has_rs_cfg_en=true`：该模块每个匹配 RTL 实例都必须具有 effective `RS_CRG_EN`，值必须为数值 `0`，且 Excel 本行的兼容字段 `RS_CFG_EN` 必须精确填写 `假门控`。
-- `has_rs_cfg_en=false`：Excel 本行 `RS_CFG_EN` 必须留空；RTL 实例若实际仍存在 `RS_CRG_EN`，报兼容 finding code `RS_CFG_EN_PARAMETER_UNEXPECTED`。
+- `has_rs_cfg_en=false`：Excel/internal `RS_CFG_EN` 的任意字面单元格内容都不参与 PASS/FAIL，但解析后的文本仍会写入报告；RTL 实例若实际仍存在 `RS_CRG_EN`，仍报兼容 finding code `RS_CFG_EN_PARAMETER_UNEXPECTED`。
 - `step_parameters=[]`：每个匹配物理实例贡献 `1` 拍。
 - `step_parameters` 非空：所有参数值均可确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。多个参数采用“全部非零”语义。
 - `clk_port`、`rst_port`：该 `RS_module` 实际使用的 formal port 名。GUI 新建或修改规则时留空分别规范化为 `clk`、`rst_n`。
@@ -155,13 +155,13 @@ python -m rscheck position-db delete \
 
 Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名由匹配到的模块规则 `clk_port`、`rst_port` 指定；未知模块使用 `clk`、`rst_n`。旧 JSON 中显式模块规则若缺少这两个键，会先继承历史全局 `rtl.clk_port/rst_port`，下一次由 GUI 保存或导出时再显式写入规则，避免升级时改变既有配置含义。
 
-`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；这个兼容字段只保存“假门控”标签，RTL 中实际匹配的 parameter 名为 `RS_CRG_EN`。数据单元格由匹配到的模块规则决定。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
+`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；这个兼容字段保存解析后的用户输入并进入报告，RTL 中实际匹配的 parameter 名为 `RS_CRG_EN`。`has_rs_cfg_en=true` 时数据必须精确为 `假门控`；`false` 时任意字面单元格内容都不参与判定。映射字段中的公式和 Excel 错误值仍受通用解析限制。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
 
 ## 工具自带桌面 GUI
 
 这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so`、`libnpiL1.so` 和 elaborated KDB 在线采集只支持 Linux：
 
-当前 `0.9.0` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
+当前 `0.9.1` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
 
 ```bash
 python -m rscheck gui
@@ -346,7 +346,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN`、`has_rs_cfg_en=true` 的 Excel/internal 标签要求及 `false` 时任意字面值 don't-care、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -370,7 +370,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前代码版本为 `0.9.0`。本版本已在以下环境完成固定 SHA fresh-checkout 验收：
+当前代码版本为 `0.9.1`。本版本需在以下环境完成新的固定 SHA fresh-checkout 验收；下列既有记录对应各自固定的历史提交：
 
 ```text
 CentOS 7.9

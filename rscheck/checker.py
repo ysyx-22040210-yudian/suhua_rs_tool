@@ -111,18 +111,17 @@ def parameter_value_state(value: str | None) -> str:
 
 
 def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
-    expected = _FAKE_GATING_LABEL if rule.has_rs_cfg_en else ""
+    if not rule.has_rs_cfg_en:
+        return []
+
+    expected = _FAKE_GATING_LABEL
     if spec.rs_cfg_en == expected:
         return []
     return [
         _row_finding(
             spec,
             "RS_CFG_EN_LABEL_MISMATCH",
-            (
-                "module rule requires Excel RS_CFG_EN to be marked as fake gating"
-                if rule.has_rs_cfg_en
-                else "module rule declares no RS_CRG_EN parameter, so Excel must be blank"
-            ),
+            "module rule requires Excel RS_CFG_EN to be marked as fake gating",
             expected=expected,
             actual=spec.rs_cfg_en,
         )

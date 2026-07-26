@@ -80,6 +80,71 @@ class CliTests(unittest.TestCase):
             self.assertEqual(csv_rows[0]["physical_instances"], "6")
             self.assertEqual(csv_rows[0]["effective_step"], "5")
 
+    def test_module_without_rs_crg_en_ignores_excel_value_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            specs = directory / "specs.csv"
+            config = directory / "config.json"
+            inventory = directory / "inventory.json"
+            json_report = directory / "report.json"
+            csv_report = directory / "report.csv"
+
+            specs.write_text(
+                (
+                    "Intf_type,RS_module,RS_inst,position,step,clk,rst,"
+                    "CRG_source,RS_CFG_EN\n"
+                    "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,5,clk_rs,rst_n,"
+                    "not_checked,用户任意填写\n"
+                ),
+                encoding="utf-8",
+            )
+            raw_config = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw_config["module_rules"]["rs_pipe"]["has_rs_cfg_en"] = False
+            config.write_text(
+                json.dumps(raw_config, ensure_ascii=False), encoding="utf-8"
+            )
+
+            raw_inventory = json.loads(
+                (ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8")
+            )
+            for instance in raw_inventory["positions"]["top.u_tile"]["instances"]:
+                if instance["name"].startswith("AAAA_BBB"):
+                    instance["parameters"].pop("RS_CRG_EN")
+            inventory.write_text(
+                json.dumps(raw_inventory, ensure_ascii=False), encoding="utf-8"
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "check",
+                        "--excel",
+                        str(specs),
+                        "--config",
+                        str(config),
+                        "--inventory",
+                        str(inventory),
+                        "--json-report",
+                        str(json_report),
+                        "--csv-report",
+                        str(csv_report),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertIn("RESULT: PASS", output.getvalue())
+            report = json.loads(json_report.read_text("utf-8"))
+            self.assertTrue(report["summary"]["passed"])
+            self.assertEqual(report["rows"][0]["findings"], [])
+            self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "用户任意填写")
+            with csv_report.open(encoding="utf-8-sig", newline="") as stream:
+                csv_rows = list(csv.DictReader(stream))
+            self.assertEqual(csv_rows[0]["status"], "PASS")
+            self.assertEqual(csv_rows[0]["RS_CFG_EN"], "用户任意填写")
+
     def test_offline_mismatch_reports_effective_step_and_label(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             json_report = Path(name) / "negative.json"

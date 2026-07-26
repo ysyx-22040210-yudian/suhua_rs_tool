@@ -11,6 +11,7 @@ from rscheck.config import load_config
 from rscheck.excel_reader import read_spec_rows
 from rscheck.inventory import inventory_to_dict, load_inventory
 from rscheck.model import ConfigError, InventoryError, ModuleRule, RtlConfig
+from rscheck.reporting import report_to_dict
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -486,8 +487,35 @@ class CheckerTests(unittest.TestCase):
         )
         self.assertTrue(report.passed)
 
+    def test_module_without_rs_crg_en_ignores_excel_rs_cfg_en_value(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if instance["name"].startswith("AAAA_BBB"):
+                    instance["parameters"].pop("RS_CRG_EN")
+
+        inventory = self._mutated_inventory(mutate)
+        rule = ModuleRule(
+            name="rs_pipe",
+            has_rs_cfg_en=False,
+            step_parameters=("rs_mode",),
+            rst_port="rst",
+        )
+        for excel_value in ("", "假门控", "真门控", "任意文本", "0"):
+            with self.subTest(excel_value=excel_value):
+                spec = replace(self.specs[0], rs_cfg_en=excel_value)
+                report = check_specs(
+                    [spec], inventory, self.rtl, {"rs_pipe": rule}
+                )
+
+                self.assertTrue(report.passed)
+                self.assertEqual(report.rows[0].findings, ())
+                self.assertEqual(
+                    report_to_dict(report)["rows"][0]["spec"]["RS_CFG_EN"],
+                    excel_value,
+                )
+
     def test_rs_crg_en_database_presence_mismatch_fails(self) -> None:
-        spec = replace(self.specs[0], rs_cfg_en="")
+        spec = replace(self.specs[0], rs_cfg_en="任意非空值")
         rule = ModuleRule(
             name="rs_pipe",
             has_rs_cfg_en=False,
@@ -497,11 +525,19 @@ class CheckerTests(unittest.TestCase):
         report = check_specs([spec], self.inventory, self.rtl, {"rs_pipe": rule})
         self.assertFalse(report.passed)
         self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"RS_CFG_EN_PARAMETER_UNEXPECTED"},
+        )
+        self.assertEqual(
             sum(
                 item.code == "RS_CFG_EN_PARAMETER_UNEXPECTED"
                 for item in report.rows[0].findings
             ),
             6,
+        )
+        self.assertEqual(
+            report_to_dict(report)["rows"][0]["spec"]["RS_CFG_EN"],
+            "任意非空值",
         )
 
     def test_inventory_parameters_round_trip(self) -> None:
