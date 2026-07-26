@@ -65,6 +65,19 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
             source,
         )
 
+    def test_vm_flow_requires_complete_config_io_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
+        marker = (
+            "config-io=roundtrip-complete "
+            "roots=excel,columns,rtl,position_mappings,module_rules"
+        )
+
+        self.assertIn(marker, gui_smoke)
+        self.assertIn(marker, source)
+        self.assertIn("app._export_config()", gui_smoke)
+        self.assertIn("app._import_config()", gui_smoke)
+
     def test_vm_flow_requires_partial_npi_load_evidence(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")

@@ -153,7 +153,11 @@ def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig
 
     sheet = config.excel.sheet
     if args.sheet is not None:
-        sheet = int(args.sheet) if args.sheet.isdigit() else args.sheet
+        sheet = (
+            int(args.sheet)
+            if args.sheet.isascii() and args.sheet.isdecimal()
+            else args.sheet
+        )
     header_row = args.header_row if args.header_row is not None else config.excel.header_row
     data_start_row = (
         args.data_start_row

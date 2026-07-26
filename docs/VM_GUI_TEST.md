@@ -4,7 +4,7 @@
 
 | 界面 | 用途 | 启动器 | 设计输入 |
 |---|---|---|---|
-| **rscheck 自带 GUI** | 设置九列、position 简写和模块规则数据库，运行检查并查看证据/日志 | `scripts/launch_rscheck_gui.sh` | schema v2 离线 inventory，或 collector + elaborated KDB；输出 report v3 |
+| **rscheck 自带 GUI** | 设置九列、维护两个数据库、导入/导出五根完整配置，运行检查并查看证据/日志 | `scripts/launch_rscheck_gui.sh` | schema v2 离线 inventory，或 collector + elaborated KDB；输出 report v3 |
 | **Verdi GUI** | 人工浏览 hierarchy、实例和连线 | `scripts/launch_verdi_gui.sh` | `verdi -elab <elaborated KDB>` |
 
 `rscheck` 同时提供 CLI 和自带 Tkinter GUI；GUI 不是 Verdi 的包装窗口。两个 GUI 可以查看同一份检查对象，但职责不同。
@@ -16,7 +16,7 @@
 - `rscheck/gui.py`：工具自带 Tkinter 窗口、结果表、证据和日志。
 - `rscheck/gui_backend.py`：严格构造 CLI 命令、读取报告和管理可取消的进程组。
 - `scripts/launch_rscheck_gui.sh`：发现 X11/Xwayland 会话并启动工具自带 GUI。
-- `scripts/test_rscheck_gui_smoke.py`：可见离线正例、反例、批量压力和在线 KDB smoke。
+- `scripts/test_rscheck_gui_smoke.py`：可见完整配置往返、离线正例、反例、批量压力和在线 KDB smoke。
 - `scripts/lib/gui_session.sh`：两个 launcher 共用的 DISPLAY/Xauthority 发现与 `xdpyinfo` 探测。
 - `scripts/lib/run_with_env_file.sh`：隔离加载可信站点环境并移除 xtrace/启动钩子。
 - `scripts/launch_verdi_gui.sh`：只用 `verdi -elab <KDB>` 打开 Verdi GUI。
@@ -185,13 +185,17 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 “Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；映射未保存时不能运行，保存应原子写回当前配置 JSON 并重新加载。Excel 简写命中后检查、分组、clk/rst 相对解析和 NPI positions 均使用全路径；未命中值按完整路径直通。
 
+当前 `0.8.0` 的“配置 JSON”行应同时显示“导入”“加载”“导出”。完整配置文件只有五个根对象：`excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。手工验收导出时，先修改当前 GUI 的 sheet/行号/严格表头和九列列号，再在两个数据库中各“应用”一项但不单独保存，并保持搜索过滤生效；导出的副本必须包含当前 Excel/列号、已加载的完整 `rtl` 和两个未受过滤的完整内存数据库，包括这两项未保存修改。导出后当前配置路径和两个 dirty 状态必须保持不变，原配置文件不得改变；选择当前配置自身作为导出目标必须被拒绝。只改路径输入框但尚未加载另一配置时也必须拒绝导出，避免混用旧 `rtl`。
+
+导入验收必须确认候选 JSON 在任何丢弃提示之前先完成五根完整校验，缺少任一根对象都应拒绝；候选有效后，先确认与已加载配置不同的 Excel/列号表单，再逐一确认两个 dirty 数据库。全部接受后还应重新读取候选，复核仍有效才整体替换配置、切换 active path 并清除 dirty。兼容性“加载”允许历史可选根字段，但也必须经过相同的确认和二次读取。取消文件选择、首次/复核无效候选或拒绝任一确认时，当前 GUI 字段、active path、两个内存数据库和 dirty 状态都不得发生部分变化。配置若以字符串保存纯数字工作表名（例如 `"123"`），该字段未编辑时导出和运行必须继续使用字符串名称；不能误转成 1-based 数字序号。Excel/CSV、collector、Elab KDB、NPI 库、inventory、report 和超时等运行输入/输出路径不属于配置，导入后按目标设备重新选择。
+
 `has_rs_cfg_en=true` 时每个 RTL 实例都必须存在该 effective parameter、值为 0，且 Excel 精确填写 `假门控`；`false` 时 Excel 必须留空且 RTL 不得实际存在该 parameter。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但没有物理匹配实例仍是 `GROUP_NOT_FOUND`。
 
 “检查结果”页应分别显示“匹配实例”和“实际/期望拍”，Position 应显示 `tile_core -> top.u_tile`。示例首组必须显示 6 个物理实例、`5/5` 拍；证据面板应包含 `spec.position=top.u_tile`、`spec.position_alias=tile_core`、`module_rule`、`step_check`、逐实例贡献 `[1,1,0,1,1,1]`、全部 effective `parameters`、port、clk 来源和源文件/行号。“运行日志”页应包含实际 CLI 命令、stdout、stderr 和退出码。
 
 运行期间输入控件和两个启动按钮应禁用，“取消”应启用。取消后状态应显示 `CANCELLED`，CLI 和 collector 进程组都应退出；关闭正在运行的窗口时应先出现取消确认。
 
-Windows/Linux 布局仍以最小尺寸 `980x680` 验收五个页签“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”无重叠或截断。历史截图不含当前数据库页和动态拍数列，不能作为当前版本证据；必须重新验收，截图仍只用于本地检查、不提交仓库。
+Windows/Linux 布局仍以最小尺寸 `980x680` 验收五个页签“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”以及“导入/加载/导出”三个配置按钮无重叠或截断。历史截图不含 `0.8.0` 完整配置按钮和往返证据，不能作为当前版本证据；必须重新验收，截图仍只用于本地检查、不提交仓库。
 
 ## 6. VM 可见验证、离线 smoke、负载与取消测试
 
@@ -212,7 +216,7 @@ gui_session_resolve
 xdpyinfo >/dev/null
 ```
 
-先直接复制运行 Position 映射库页 smoke；它只保存临时配置，不改仓库文件，并同时完成映射库和模块规则库 CRUD：
+先直接复制运行 Position 映射库页 smoke；它只保存临时配置，不改仓库文件，并同时完成映射库和模块规则库 CRUD、五根完整配置导出和原子导入：
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -223,7 +227,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-窗口保留期间检查 980×680 下映射表、搜索框和编辑控件无重叠，确认 `tile_core -> top.u_tile`，终端末行应为 `GUI_SMOKE_PASS`，并包含 `header-map=column-index strict-header=false`。
+窗口保留期间检查 980×680 下映射表、搜索框和编辑控件无重叠，确认 `tile_core -> top.u_tile`，终端末行应为 `GUI_SMOKE_PASS`，并包含 `header-map=column-index strict-header=false` 和 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。后一个 marker 证明副本保留五根、当前 Excel/列号、已加载 `rtl` 及包含未单独保存修改的两个完整数据库，且导入后成功切换路径并清除 dirty。
 
 GUI “验证 Excel”路径连续 20 轮：
 
@@ -236,7 +240,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 5
 ```
 
-预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...`、`header-map=column-index strict-header=false` 和 `position-map=tile_core->top.u_tile`。
+预期为 2 行 VALID、0 error、0 warning；输出包含 `GUI_SMOKE_WINDOW: window=mapped window_id=0x...`，末行包含 `mode=validate case=positive iterations=20 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、`position-map=tile_core->top.u_tile` 和固定 config-io marker。
 
 可见离线正例连续 100 轮：
 
@@ -248,7 +252,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、固定 config-io marker、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
 
 可见离线反例：
 
@@ -279,10 +283,10 @@ cd "$PROJECT_ROOT"
 预期末行：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x... header-map=column-index strict-header=false
+GUI_SMOKE_PASS: rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped window_id=0x... header-map=column-index strict-header=false config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB 仅是历史性能数据。0.7.1 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`；旧时间和 RSS 既不是当前结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
+2026-07-24 九列版本的 2.12 秒、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧时间和 RSS 既不是当前 `0.8.0` 结果，也不是不同设备的硬门槛。脚本生成临时 CSV/inventory，走真实 GUI 配置往返、后台 CLI、报告读取和 10,000 行结果表渲染，退出时自动清理。
 
 取消发生在后台进程启动阶段的竞态连续 100 轮：
 
@@ -353,10 +357,10 @@ gui_session_resolve
 成功判据：脚本返回 `0` 并打印：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... header-map=column-index strict-header=false contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... header-map=column-index strict-header=false contract=elab-only position-map=tile_core->top.u_tile npi-positions=full-path-only config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning，日志必须包含 `header-map=column-index strict-header=false`。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
+3 轮中的每一轮都必须通过真实 collector 加载该 KDB；最终 GUI 为 2 行 PASS、0 error、0 warning，日志必须包含 `header-map=column-index strict-header=false` 和固定 config-io marker。示例 Excel 使用 `tile_core`，report 必须记录 `position_alias=tile_core` 和 `position=top.u_tile`，本次 inventory 的 positions key 只能是 `top.u_tile`。首组必须有 6 个物理实例，`rs_mode` 为五个 1、一个 0，有效/期望拍为 `5/5`，贡献为 `[1,1,0,1,1,1]`。inventory 必须是 schema v2，report 必须是 schema v3 并包含 `module_rule`/`step_check`。运行日志中的实际命令必须包含 `--collector`、`--elab-db`，不得出现 inventory、RTL、filelist、`-top` 或 `--` passthrough。
 
 ## 8. 打开 Verdi GUI
 
@@ -436,7 +440,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 collector，先生成故意带 elaboration error 但 top 可查询的 partial KDB，要求 CLI 和工具 GUI 都以 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning 完成；随后用 clean 示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 clean KDB 做在线 NPI 检查。任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
+Verdi 端到端脚本会运行全量测试、构建 collector，先生成故意带 elaboration error 但 top 可查询的 partial KDB，要求 CLI 和工具 GUI 都以 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning 完成；随后用 clean 示例 RTL 生成 fresh `kdb.elab++`、执行 `verdi -elab`，并等待新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 top `top`，之后才用同一 clean KDB 做在线 NPI 检查。每次 GUI smoke 都执行五根配置往返；任意新 Verdi 窗口或固定等待时间都不能代替该标题证据。
 
 正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
@@ -492,8 +496,22 @@ Verdi GUI loaded elaborated top 'top' after ...
 RESULT: PASS | rows=2 errors=0 warnings=0
 [PASS] row 2 OUT_IF | tile_core -> top.u_tile / AAAA_BBB physical=6 effective=5 expected=5 RS_CFG_EN=假门控
 [PASS] row 3 CTRL_IF | tile_core -> top.u_tile / CTRL_RS_D0 physical=1 effective=1 expected=1 RS_CFG_EN=假门控
+config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed.
 ```
+
+正式脚本不会只检查一次 marker。它对以下六份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
+
+```text
+online_gui_positive.log
+partial_load_gui.log
+online_gui_negative.log
+offline_gui_default_rule.log
+offline_gui_100_rounds.log
+offline_gui_10000_rows.log
+```
+
+六份日志都必须包含完全相同的 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。这证明 clean/partial、正/反例、默认规则、稳定性和负载入口都实际经过同一套完整配置导入/导出合同，而不是只在一个专用用例中旁路验证。
 
 正例第 3 行故意把完整本地例化名 `CTRL_RS_D0` 填入 `RS_inst`。该行通过证明空 remainder 合法，而且实例仍完成 module、parameters、step、clk/rst 和 CRG 检查；这里不能改填 `top.u_tile.CTRL_RS_D0`。空后缀实例不参与 tag/index/连续编号检查。若同一 scope 另有符合 suffix 规则的 `CTRL_RS_D0_*数字`，较短的 `RS_inst=CTRL_RS_D0` 仍会按前缀语义一并匹配，当前没有 exact-only 模式。
 
@@ -529,7 +547,7 @@ PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fres
 
 ## 12. 验证记录
 
-当前 0.7.1 状态见 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`。该记录固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows `Ran 196 tests`、`OK (skipped=44)`，即 152 项执行通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
+当前功能版本为 `0.8.0`，验收必须包含五根配置 round-trip marker 和上述六日志硬断言。`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md` 是 `0.7.1` 历史基线，固定到 GitHub 提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows `Ran 196 tests`、`OK (skipped=44)`，即 152 项执行通过、44 项平台限定用例按预期跳过；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/工具 GUI 为 2 行 PASS、0 error、1 warning；clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，但不包含 0.8.0 配置导入/导出证据。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
 
 `TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 

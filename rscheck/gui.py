@@ -28,7 +28,13 @@ except ImportError as exc:  # pragma: no cover - exercised on minimal Linux inst
 else:
     _TK_IMPORT_ERROR = None
 
-from .config import load_config, save_config
+from .config import (
+    config_from_dict,
+    config_to_dict,
+    load_complete_config,
+    load_config,
+    save_config,
+)
 from .gui_backend import (
     INVENTORY_SOURCE,
     LIVE_SOURCE,
@@ -127,6 +133,33 @@ def _position_display(spec: Mapping[str, Any]) -> str:
     if isinstance(alias, str) and alias:
         return f"{alias} -> {position}"
     return position
+
+
+def _resolved_config_path(value: str | Path) -> str:
+    try:
+        return str(Path(value).expanduser().resolve())
+    except (OSError, RuntimeError) as exc:
+        raise GuiInputError(f"无法解析配置路径 {value!s}: {exc}") from exc
+
+
+def _config_path_identity(value: str | Path) -> str:
+    return os.path.normcase(_resolved_config_path(value))
+
+
+def _same_config_path(
+    left: str | Path,
+    right: str | Path,
+    *,
+    include_hardlinks: bool = False,
+) -> bool:
+    if _config_path_identity(left) == _config_path_identity(right):
+        return True
+    if not include_hardlinks:
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
 
 
 class RsCheckApp:
@@ -297,13 +330,21 @@ class RsCheckApp:
                 (("规格文件", "*.xlsx *.xlsm *.csv *.tsv"), ("所有文件", "*.*")),
             ),
         )
-        self._path_row(
+        (
+            self.config_import_button,
+            self.config_reload_button,
+            self.config_export_button,
+        ) = self._path_row(
             input_group,
             1,
             "配置 JSON",
             self.config_var,
-            self._choose_config,
-            extra_button=("加载", self._load_config_from_form),
+            self._import_config,
+            button_text="导入",
+            extra_buttons=(
+                ("加载", self._load_config_from_form),
+                ("导出", self._export_config),
+            ),
         )
 
         excel_options = ttk.Frame(input_group)
@@ -811,17 +852,20 @@ class RsCheckApp:
         variable: Any,
         command: Any,
         *,
-        extra_button: tuple[str, Any] | None = None,
-    ) -> None:
+        button_text: str = "浏览",
+        extra_buttons: tuple[tuple[str, Any], ...] = (),
+    ) -> tuple[Any, ...]:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=4)
         ttk.Entry(parent, textvariable=variable).grid(
             row=row, column=1, sticky="ew", padx=(10, 4), pady=4
         )
-        ttk.Button(parent, text="浏览", command=command).grid(row=row, column=2, pady=4)
-        if extra_button:
-            ttk.Button(parent, text=extra_button[0], command=extra_button[1]).grid(
-                row=row, column=3, padx=(4, 0), pady=4
-            )
+        buttons = [ttk.Button(parent, text=button_text, command=command)]
+        buttons[0].grid(row=row, column=2, pady=4)
+        for index, (text, extra_command) in enumerate(extra_buttons, start=3):
+            button = ttk.Button(parent, text=text, command=extra_command)
+            button.grid(row=row, column=index, padx=(4, 0), pady=4)
+            buttons.append(button)
+        return tuple(buttons)
 
     def _compact_path_row(
         self, parent: Any, row: int, label: str, variable: Any, command: Any
@@ -843,22 +887,101 @@ class RsCheckApp:
         if selected:
             variable.set(selected)
 
-    def _choose_config(self) -> None:
+    def _import_config(self) -> None:
         selected = filedialog.askopenfilename(
             parent=self.root,
             initialdir=self._initial_directory(self.config_var.get()),
             filetypes=(("JSON", "*.json"), ("所有文件", "*.*")),
         )
-        if selected:
-            if self._module_rules_dirty and not self._confirm_discard_rule_changes():
-                return
-            if (
-                self._position_mappings_dirty
-                and not self._confirm_discard_position_changes()
+        if not selected:
+            return
+        try:
+            config = load_complete_config(selected)
+        except RsCheckError as exc:
+            self.status_var.set("配置导入失败")
+            messagebox.showerror("导入失败", str(exc), parent=self.root)
+            return
+        if self._excel_form_differs_from_loaded_config() and not (
+            self._confirm_discard_excel_changes()
+        ):
+            return
+        if self._module_rules_dirty and not self._confirm_discard_rule_changes():
+            return
+        if (
+            self._position_mappings_dirty
+            and not self._confirm_discard_position_changes()
+        ):
+            return
+        try:
+            config = load_complete_config(selected)
+            self._apply_config(config, selected, "完整配置已导入")
+        except (RsCheckError, GuiInputError) as exc:
+            self.status_var.set("配置导入失败")
+            messagebox.showerror("导入失败", str(exc), parent=self.root)
+            return
+
+    def _export_config(self) -> None:
+        if self._loaded_config is None:
+            messagebox.showerror(
+                "导出失败",
+                "请先导入或加载配置 JSON",
+                parent=self.root,
+            )
+            return
+        try:
+            if not _same_config_path(
+                self.config_var.get().strip(), self._loaded_config_path
             ):
+                messagebox.showerror(
+                    "导出失败",
+                    "配置路径已变化，请先加载当前配置",
+                    parent=self.root,
+                )
                 return
-            self.config_var.set(selected)
-            self._load_config_from_form(confirm_discard=False)
+        except GuiInputError as exc:
+            messagebox.showerror("导出失败", str(exc), parent=self.root)
+            return
+        current_name = Path(self.config_var.get().strip()).name
+        stem = Path(current_name).stem if current_name else "rscheck"
+        selected = filedialog.asksaveasfilename(
+            parent=self.root,
+            initialdir=self._initial_directory(self.config_var.get()),
+            initialfile=f"{stem}.export.json",
+            defaultextension=".json",
+            filetypes=(("JSON", "*.json"), ("所有文件", "*.*")),
+            confirmoverwrite=True,
+        )
+        if not selected:
+            return
+        try:
+            targets_current_config = _same_config_path(
+                selected,
+                self._loaded_config_path,
+                include_hardlinks=True,
+            )
+        except GuiInputError as exc:
+            messagebox.showerror("导出失败", str(exc), parent=self.root)
+            return
+        if targets_current_config:
+            messagebox.showerror(
+                "导出失败",
+                "导出目标不能覆盖当前配置，请选择其他文件名",
+                parent=self.root,
+            )
+            return
+        try:
+            snapshot = self._config_snapshot_from_form()
+            output = save_config(snapshot, selected)
+        except (RsCheckError, GuiInputError) as exc:
+            self.status_var.set("配置导出失败")
+            messagebox.showerror("导出失败", str(exc), parent=self.root)
+            return
+        self.status_var.set("完整配置已导出")
+        messagebox.showinfo(
+            "导出成功",
+            f"完整配置已导出到：\n{output}",
+            parent=self.root,
+        )
 
     def _choose_directory(self, variable: Any) -> None:
         selected = filedialog.askdirectory(
@@ -893,7 +1016,19 @@ class RsCheckApp:
     def _load_config_from_form(
         self, show_error: bool = True, confirm_discard: bool = True
     ) -> None:
+        config_path = self.config_var.get().strip()
+        try:
+            config = load_config(config_path)
+        except RsCheckError as exc:
+            self.status_var.set("配置加载失败")
+            if show_error:
+                messagebox.showerror("配置错误", str(exc), parent=self.root)
+            return
         if confirm_discard:
+            if self._excel_form_differs_from_loaded_config() and not (
+                self._confirm_discard_excel_changes()
+            ):
+                return
             if (
                 self._module_rules_dirty
                 and not self._confirm_discard_rule_changes()
@@ -905,12 +1040,18 @@ class RsCheckApp:
             ):
                 return
         try:
-            config = load_config(self.config_var.get().strip())
-        except RsCheckError as exc:
+            config = load_config(config_path)
+            self._apply_config(config, config_path, "配置已加载")
+        except (RsCheckError, GuiInputError) as exc:
             self.status_var.set("配置加载失败")
             if show_error:
                 messagebox.showerror("配置错误", str(exc), parent=self.root)
             return
+
+    def _apply_config(self, config: ToolConfig, path: str | Path, status: str) -> None:
+        config_path = str(path)
+        resolved_path = _resolved_config_path(path)
+        self.config_var.set(config_path)
         self.sheet_var.set(str(config.excel.sheet))
         self.header_row_var.set(str(config.excel.header_row))
         self.data_start_row_var.set(str(config.excel.data_start_row))
@@ -918,7 +1059,7 @@ class RsCheckApp:
         for name in FIELD_NAMES:
             self.column_vars[name].set(str(config.excel.columns[name]))
         self._loaded_config = config
-        self._loaded_config_path = str(Path(self.config_var.get().strip()).resolve())
+        self._loaded_config_path = resolved_path
         self._module_rules = dict(config.module_rules)
         self._module_rules_dirty = False
         self._position_mappings = dict(config.position_mappings)
@@ -927,7 +1068,65 @@ class RsCheckApp:
         self._new_position_mapping()
         self._render_rule_tree()
         self._render_position_tree()
-        self.status_var.set("配置已加载")
+        self.status_var.set(status)
+
+    def _config_snapshot_from_form(self) -> ToolConfig:
+        if self._loaded_config is None:
+            raise GuiInputError("请先导入或加载配置 JSON")
+        candidate = replace(
+            self._loaded_config,
+            module_rules=dict(self._module_rules),
+            position_mappings=dict(self._position_mappings),
+        )
+        raw = config_to_dict(candidate)
+        excel = raw["excel"]
+        sheet = self.sheet_var.get()
+        if sheet and sheet != str(self._loaded_config.excel.sheet):
+            excel["sheet"] = (
+                int(sheet)
+                if sheet.isascii() and sheet.isdecimal()
+                else sheet
+            )
+        header_row = self.header_row_var.get().strip()
+        if header_row:
+            excel["header_row"] = header_row
+        data_start_row = self.data_start_row_var.get().strip()
+        if data_start_row:
+            excel["data_start_row"] = data_start_row
+        excel["validate_headers"] = bool(self.header_check_var.get())
+        raw["columns"] = {
+            name: self.column_vars[name].get().strip() for name in FIELD_NAMES
+        }
+        return config_from_dict(raw)
+
+    def _excel_form_differs_from_loaded_config(self) -> bool:
+        if self._loaded_config is None:
+            return False
+        loaded = self._loaded_config.excel
+        sheet = self.sheet_var.get()
+        if sheet and sheet != str(loaded.sheet):
+            return True
+        header_row = self.header_row_var.get().strip()
+        if header_row and header_row != str(loaded.header_row):
+            return True
+        data_start_row = self.data_start_row_var.get().strip()
+        if data_start_row and data_start_row != str(loaded.data_start_row):
+            return True
+        if bool(self.header_check_var.get()) != loaded.validate_headers:
+            return True
+        return any(
+            self.column_vars[name].get().strip() != str(loaded.columns[name])
+            for name in FIELD_NAMES
+        )
+
+    def _confirm_discard_excel_changes(self) -> bool:
+        return bool(
+            messagebox.askyesno(
+                "未保存配置",
+                "Excel 设置或列号映射有未保存修改，确定放弃吗？",
+                parent=self.root,
+            )
+        )
 
     def _confirm_discard_rule_changes(self) -> bool:
         if not self._module_rules_dirty:
@@ -1052,7 +1251,12 @@ class RsCheckApp:
         if self._loaded_config is None or not config_path:
             messagebox.showerror("保存失败", "请先加载配置 JSON", parent=self.root)
             return
-        if str(Path(config_path).resolve()) != self._loaded_config_path:
+        try:
+            path_matches = _same_config_path(config_path, self._loaded_config_path)
+        except GuiInputError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        if not path_matches:
             messagebox.showerror(
                 "保存失败",
                 "配置路径已变化，请先加载当前配置",
@@ -1186,7 +1390,12 @@ class RsCheckApp:
         if self._loaded_config is None or not config_path:
             messagebox.showerror("保存失败", "请先加载配置 JSON", parent=self.root)
             return
-        if str(Path(config_path).resolve()) != self._loaded_config_path:
+        try:
+            path_matches = _same_config_path(config_path, self._loaded_config_path)
+        except GuiInputError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        if not path_matches:
             messagebox.showerror(
                 "保存失败",
                 "配置路径已变化，请先加载当前配置",
@@ -1235,12 +1444,21 @@ class RsCheckApp:
             self.live_frame.grid_remove()
             self.inventory_frame.grid(row=1, column=0, sticky="nsew")
 
+    def _sheet_override_from_form(self) -> str:
+        value = self.sheet_var.get()
+        if (
+            self._loaded_config is not None
+            and value == str(self._loaded_config.excel.sheet)
+        ):
+            return ""
+        return value
+
     def _request(self) -> GuiRunRequest:
         return GuiRunRequest(
             excel_path=self.excel_var.get(),
             config_path=self.config_var.get(),
             columns={name: variable.get() for name, variable in self.column_vars.items()},
-            sheet=self.sheet_var.get(),
+            sheet=self._sheet_override_from_form(),
             header_row=self.header_row_var.get(),
             data_start_row=self.data_start_row_var.get(),
             validate_headers=self.header_check_var.get(),
@@ -1273,11 +1491,16 @@ class RsCheckApp:
             )
             return
         config_path = self.config_var.get().strip()
-        if (
-            self._loaded_config is None
-            or not config_path
-            or str(Path(config_path).resolve()) != self._loaded_config_path
-        ):
+        try:
+            path_matches = bool(
+                self._loaded_config is not None
+                and config_path
+                and _same_config_path(config_path, self._loaded_config_path)
+            )
+        except GuiInputError as exc:
+            messagebox.showerror("配置未加载", str(exc), parent=self.root)
+            return
+        if not path_matches:
             messagebox.showerror(
                 "配置未加载",
                 "配置路径已变化，请先点击“加载”同步模块规则库和 Position 映射库",

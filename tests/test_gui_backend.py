@@ -108,6 +108,19 @@ class GuiBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(GuiInputError, "positive integer"):
             build_validate_command(self._request(columns=invalid))
 
+        invalid["step"] = "²"
+        with self.assertRaisesRegex(GuiInputError, "positive integer"):
+            build_validate_command(self._request(columns=invalid))
+
+    def test_sheet_names_preserve_non_ascii_digits_and_surrounding_spaces(self) -> None:
+        for sheet_name in ("²", " 123 "):
+            with self.subTest(sheet_name=sheet_name):
+                command = build_validate_command(self._request(sheet=sheet_name))
+                self.assertEqual(command[command.index("--sheet") + 1], sheet_name)
+
+        with self.assertRaisesRegex(GuiInputError, "must not be blank"):
+            build_validate_command(self._request(sheet="   "))
+
     def test_invalid_row_relationship_is_rejected(self) -> None:
         with self.assertRaisesRegex(GuiInputError, "after the header"):
             build_validate_command(self._request(header_row="4", data_start_row="4"))

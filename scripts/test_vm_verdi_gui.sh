@@ -973,6 +973,9 @@ for gui_log in \
   "$OFFLINE_STRESS_LOG" \
   "$OFFLINE_LOAD_LOG"; do
   grep -Fq 'header-map=column-index strict-header=false' "$gui_log"
+  grep -Fq \
+    'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' \
+    "$gui_log"
 done
 
 assert_no_unexpected_collector_logs

@@ -3,9 +3,17 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
-from rscheck.config import config_to_dict, load_config, save_config
+from rscheck.config import (
+    config_from_dict,
+    config_to_dict,
+    load_complete_config,
+    load_config,
+    save_config,
+)
 from rscheck.model import ConfigError
 
 
@@ -56,6 +64,8 @@ class ConfigTests(unittest.TestCase):
             path = Path(name) / "legacy.json"
             path.write_text(json.dumps(raw), encoding="utf-8")
             config = load_config(path)
+            with self.assertRaisesRegex(ConfigError, "missing root sections"):
+                load_complete_config(path)
         self.assertEqual(config.position_mappings, {})
 
     def test_position_mappings_load_and_save_round_trip(self) -> None:
@@ -212,6 +222,48 @@ class ConfigTests(unittest.TestCase):
             raw = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(reloaded, config)
         self.assertEqual(raw, config_to_dict(config))
+
+    def test_in_memory_config_round_trip_preserves_all_root_sections(self) -> None:
+        config = load_config(ROOT / "config" / "rscheck.example.json")
+
+        normalized = config_from_dict(config_to_dict(config))
+
+        self.assertEqual(normalized, config)
+        self.assertEqual(
+            set(config_to_dict(normalized)),
+            {"excel", "columns", "rtl", "position_mappings", "module_rules"},
+        )
+
+    def test_save_rejects_invalid_snapshot_before_replacing_target(self) -> None:
+        config = load_config(ROOT / "config" / "rscheck.example.json")
+        columns = dict(config.excel.columns)
+        columns["RS_module"] = columns["Intf_type"]
+        invalid = replace(config, excel=replace(config.excel, columns=columns))
+
+        with tempfile.TemporaryDirectory() as name:
+            target = Path(name) / "existing.json"
+            target.write_text("keep this content", encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "must be unique"):
+                save_config(invalid, target)
+            content = target.read_text(encoding="utf-8")
+
+        self.assertEqual(content, "keep this content")
+
+    def test_unicode_digit_is_not_accepted_as_an_integer(self) -> None:
+        raw = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        raw["columns"]["Intf_type"] = "²"
+
+        with self.assertRaisesRegex(ConfigError, "positive integer"):
+            config_from_dict(raw)
+
+    def test_save_path_resolution_error_is_controlled(self) -> None:
+        config = load_config(ROOT / "config" / "rscheck.example.json")
+
+        with patch("rscheck.config.Path.resolve", side_effect=OSError("bad path")):
+            with self.assertRaisesRegex(ConfigError, "cannot save config file"):
+                save_config(config, "output.json")
 
 
 if __name__ == "__main__":

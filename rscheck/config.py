@@ -30,9 +30,10 @@ def _reject_unknown(value: Mapping[str, Any], allowed: set[str], name: str) -> N
 
 
 def _positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not (
-        isinstance(value, int) or (isinstance(value, str) and value.isdigit())
-    ):
+    string_integer = (
+        isinstance(value, str) and value.isascii() and value.isdecimal()
+    )
+    if isinstance(value, bool) or not (isinstance(value, int) or string_integer):
         raise ConfigError(f"'{name}' must be a positive integer")
     result = int(value)
     if result < 1:
@@ -145,10 +146,15 @@ def make_position_mappings(mappings: Mapping[str, str]) -> dict[str, str]:
     return _position_mappings(dict(mappings))
 
 
-def load_config(path: str | Path) -> ToolConfig:
+COMPLETE_CONFIG_ROOTS = frozenset(
+    {"excel", "columns", "rtl", "position_mappings", "module_rules"}
+)
+
+
+def _read_config_document(path: str | Path) -> Any:
     config_path = Path(path)
     try:
-        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        return json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"config file not found: {config_path}") from exc
     except (OSError, UnicodeDecodeError) as exc:
@@ -158,6 +164,24 @@ def load_config(path: str | Path) -> ToolConfig:
             f"invalid JSON in {config_path}: line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from exc
 
+
+def load_config(path: str | Path) -> ToolConfig:
+    return config_from_dict(_read_config_document(path))
+
+
+def load_complete_config(path: str | Path) -> ToolConfig:
+    raw = _read_config_document(path)
+    root = _require_mapping(raw, "root")
+    missing = sorted(COMPLETE_CONFIG_ROOTS - set(root))
+    if missing:
+        raise ConfigError(
+            "complete config is missing root sections: " + ", ".join(missing)
+        )
+    return config_from_dict(raw)
+
+
+def config_from_dict(raw: Any) -> ToolConfig:
+    """Validate and normalize an in-memory configuration document."""
     root = _require_mapping(raw, "root")
     excel_raw = _require_mapping(root.get("excel", {}), "excel")
     columns_raw = _require_mapping(root.get("columns", {}), "columns")
@@ -166,7 +190,7 @@ def load_config(path: str | Path) -> ToolConfig:
     position_mappings = _position_mappings(root.get("position_mappings", {}))
     _reject_unknown(
         root,
-        {"excel", "columns", "rtl", "module_rules", "position_mappings"},
+        set(COMPLETE_CONFIG_ROOTS),
         "root",
     )
     _reject_unknown(
@@ -302,11 +326,16 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
 
 
 def save_config(config: ToolConfig, path: str | Path) -> Path:
-    output = Path(path).resolve()
+    normalized = config_from_dict(config_to_dict(config))
+    payload = (
+        json.dumps(config_to_dict(normalized), ensure_ascii=False, indent=2) + "\n"
+    )
+    requested_output = Path(path)
+    output = requested_output
     temporary_path: Path | None = None
     try:
+        output = requested_output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(config_to_dict(config), ensure_ascii=False, indent=2) + "\n"
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -319,11 +348,11 @@ def save_config(config: ToolConfig, path: str | Path) -> Path:
             temporary_path = Path(stream.name)
             stream.write(payload)
         os.replace(temporary_path, output)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         if temporary_path is not None:
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
-        raise ConfigError(f"cannot save config file {output}: {exc}") from exc
+        raise ConfigError(f"cannot save config file {requested_output}: {exc}") from exc
     return output

@@ -152,6 +152,8 @@ Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析�
 
 这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so` 和 elaborated KDB 在线采集只支持 Linux：
 
+当前 `0.8.0` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
+
 ```bash
 python -m rscheck gui
 ```
@@ -170,7 +172,13 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。RTL 数据源可选：
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护 `has_rs_cfg_en` 与逗号分隔的 `step_parameters`。任一数据库存在未保存修改时不能运行检查。
+
+“配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。导出以当前界面的 Excel 选项和九列列号、已加载配置的完整 `rtl`、两个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
+
+“导入”严格要求候选文件包含上述五个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置可省略的根字段。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库和 Position 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后两个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
+
+RTL 数据源可选：
 
 - **在线 NPI**：填写 collector、Verdi elaborated KDB、可选 NPI 库目录、超时和 inventory 保存路径；
 - **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。
@@ -324,7 +332,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、partial-load notice、报告导出、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、partial KDB、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 `RS_CFG_EN`、schema v2 inventory、schema v3 report、partial-load notice、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI 编译、partial KDB、effective 参数采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -342,13 +350,13 @@ VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --com
 
 每次运行的唯一目录、`full_vm_test.log` 和 `artifacts` 路径会在退出时打印；三次 clone 尝试都受 timeout 和强制结束上限约束，所有测试现场均保留且不自动删除。已有 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE` 优先于自动导入；`VERDI_AUTO_LICENSE_IMPORT=0` 可关闭自动导入。只有当前 checkout 已经可信且位于 VM 本机文件系统时，才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
 
-工具自带 GUI 的可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。
+工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在六份 GUI 日志中逐一硬断言该标记。
 
 GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。fresh 驱动最终调用的完整脚本会运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++` 并启动 `verdi -elab`；只有新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 `top` 才进入 NPI/GUI 检查，其他启动页或无关 Verdi 窗口不能作为就绪证据。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
 
 ## 已验证环境
 
-2026-07-25 已在以下环境完成 `0.7.1` 的真实构建、partial/clean fresh KDB、在线正负例和 GUI 压测：
+当前功能版本为 `0.8.0`。以下环境和数字是 `0.7.1` 于 2026-07-25 完成的历史验证基线；`0.8.0` 的完整配置导入/导出必须按本节上述 marker 和两份测试指南重新验收，不能直接沿用旧结果：
 
 ```text
 CentOS 7.9

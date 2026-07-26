@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 import queue
+import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from rscheck.config import load_config as read_config
 from rscheck.gui import (
     RsCheckApp,
     WorkerOutcome,
@@ -15,9 +19,17 @@ from rscheck.gui import (
     _parse_step_parameters,
     _position_display,
     _position_mapping_from_form,
+    _same_config_path,
 )
 from rscheck.gui_backend import GuiInputError, GuiRunRequest
-from rscheck.model import ExcelConfig, ModuleRule, RtlConfig, ToolConfig
+from rscheck.model import (
+    ConfigError,
+    ExcelConfig,
+    FIELD_NAMES,
+    ModuleRule,
+    RtlConfig,
+    ToolConfig,
+)
 
 
 class _FakeRoot:
@@ -32,7 +44,24 @@ class _FakeRoot:
         self.after_calls.append((delay, callback))
 
 
+class _FakeVar:
+    def __init__(self, value=None) -> None:
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value) -> None:
+        self.value = value
+
+
 class GuiLifecycleTests(unittest.TestCase):
+    def _make_hardlink(self, source: Path, link: Path) -> None:
+        try:
+            os.link(source, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"hard links are unavailable: {exc}")
+
     @staticmethod
     def _config(
         *,
@@ -45,6 +74,553 @@ class GuiLifecycleTests(unittest.TestCase):
             module_rules=module_rules or {},
             position_mappings=position_mappings or {},
         )
+
+    @staticmethod
+    def _complete_config(*, offset: int = 0) -> ToolConfig:
+        rules = {
+            f"rs_pipe_{offset}": ModuleRule(
+                f"rs_pipe_{offset}",
+                True,
+                ("rs_mode", "pipe_enable"),
+            ),
+            f"rs_plain_{offset}": ModuleRule(f"rs_plain_{offset}", False),
+        }
+        return ToolConfig(
+            excel=ExcelConfig(
+                sheet=f"Signals_{offset}",
+                header_row=3 + offset,
+                data_start_row=5 + offset,
+                validate_headers=bool(offset % 2),
+                columns={
+                    name: offset * len(FIELD_NAMES) + index + 1
+                    for index, name in enumerate(FIELD_NAMES)
+                },
+            ),
+            rtl=RtlConfig(
+                clk_port=f"clk_{offset}",
+                rst_port=f"rst_{offset}",
+                suffix_regex=rf"_C(?P<index>[0-9]+)_{offset}",
+                index_base=offset,
+                require_contiguous_indices=True,
+                allow_leaf_signal_match=True,
+                crg_match="module_or_instance",
+            ),
+            module_rules=rules,
+            position_mappings={
+                f"core_{offset}": f"tb.dut_{offset}.u_core",
+                f"pipe_{offset}": f"tb.dut_{offset}.u_core.u_pipe",
+            },
+        )
+
+    @staticmethod
+    def _app_with_config(config: ToolConfig, path: str | Path) -> RsCheckApp:
+        app = object.__new__(RsCheckApp)
+        resolved_path = str(Path(path).resolve())
+        app.root = _FakeRoot()
+        app.project_root = Path.cwd()
+        app.config_var = _FakeVar(resolved_path)
+        app.sheet_var = _FakeVar(str(config.excel.sheet))
+        app.header_row_var = _FakeVar(str(config.excel.header_row))
+        app.data_start_row_var = _FakeVar(str(config.excel.data_start_row))
+        app.header_check_var = _FakeVar(config.excel.validate_headers)
+        app.column_vars = {
+            name: _FakeVar(str(config.excel.columns[name])) for name in FIELD_NAMES
+        }
+        app._loaded_config = config
+        app._loaded_config_path = resolved_path
+        app._module_rules = dict(config.module_rules)
+        app._position_mappings = dict(config.position_mappings)
+        app._module_rules_dirty = False
+        app._position_mappings_dirty = False
+        app._new_rule = Mock()
+        app._new_position_mapping = Mock()
+        app._render_rule_tree = Mock()
+        app._render_position_tree = Mock()
+        app.status_var = _FakeVar("ready")
+        return app
+
+    @staticmethod
+    def _config_state(app: RsCheckApp) -> tuple:
+        return (
+            app.config_var.get(),
+            app._loaded_config,
+            app._loaded_config_path,
+            dict(app._module_rules),
+            dict(app._position_mappings),
+            app._module_rules_dirty,
+            app._position_mappings_dirty,
+            app.sheet_var.get(),
+            app.header_row_var.get(),
+            app.data_start_row_var.get(),
+            app.header_check_var.get(),
+            {name: app.column_vars[name].get() for name in FIELD_NAMES},
+        )
+
+    def test_export_then_import_round_trips_complete_config_and_databases(self) -> None:
+        baseline = self._complete_config(offset=1)
+        exported_rules = self._complete_config(offset=7).module_rules
+        exported_positions = self._complete_config(offset=7).position_mappings
+
+        with tempfile.TemporaryDirectory() as temporary:
+            current_path = Path(temporary) / "current.json"
+            export_path = Path(temporary) / "portable.json"
+            export_path.write_text("old data", encoding="utf-8")
+            export_app = self._app_with_config(baseline, current_path)
+            export_app.sheet_var.set("Portable Signals")
+            export_app.header_row_var.set("12")
+            export_app.data_start_row_var.set("14")
+            export_app.header_check_var.set(True)
+            for index, name in enumerate(FIELD_NAMES):
+                export_app.column_vars[name].set(str(20 + index))
+            export_app._module_rules = dict(exported_rules)
+            export_app._position_mappings = dict(exported_positions)
+            export_app._module_rules_dirty = True
+            export_app._position_mappings_dirty = True
+            before_export = self._config_state(export_app)
+
+            with patch(
+                "rscheck.gui.filedialog.asksaveasfilename",
+                return_value=str(export_path),
+            ) as save_dialog:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    with patch("rscheck.gui.messagebox.showinfo"):
+                        export_app._export_config()
+
+            showerror.assert_not_called()
+            self.assertTrue(save_dialog.call_args.kwargs["confirmoverwrite"])
+            self.assertEqual(self._config_state(export_app), before_export)
+
+            expected = ToolConfig(
+                excel=ExcelConfig(
+                    sheet="Portable Signals",
+                    header_row=12,
+                    data_start_row=14,
+                    validate_headers=True,
+                    columns={name: 20 + index for index, name in enumerate(FIELD_NAMES)},
+                ),
+                rtl=baseline.rtl,
+                module_rules=exported_rules,
+                position_mappings=exported_positions,
+            )
+            self.assertEqual(read_config(export_path), expected)
+
+            old_config = self._complete_config(offset=2)
+            import_app = self._app_with_config(
+                old_config, Path(temporary) / "old-current.json"
+            )
+            with patch(
+                "rscheck.gui.filedialog.askopenfilename",
+                return_value=str(export_path),
+            ):
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    import_app._import_config()
+
+            showerror.assert_not_called()
+            self.assertEqual(import_app._loaded_config, expected)
+            self.assertEqual(import_app.config_var.get(), str(export_path))
+            self.assertEqual(
+                import_app._loaded_config_path, str(export_path.resolve())
+            )
+            self.assertEqual(import_app._module_rules, dict(exported_rules))
+            self.assertEqual(import_app._position_mappings, dict(exported_positions))
+            self.assertFalse(import_app._module_rules_dirty)
+            self.assertFalse(import_app._position_mappings_dirty)
+            self.assertEqual(import_app.sheet_var.get(), "Portable Signals")
+            self.assertEqual(import_app.header_row_var.get(), "12")
+            self.assertEqual(import_app.data_start_row_var.get(), "14")
+            self.assertTrue(import_app.header_check_var.get())
+            self.assertEqual(
+                {name: int(import_app.column_vars[name].get()) for name in FIELD_NAMES},
+                dict(expected.excel.columns),
+            )
+            import_app._new_rule.assert_called_once_with()
+            import_app._new_position_mapping.assert_called_once_with()
+            import_app._render_rule_tree.assert_called_once_with()
+            import_app._render_position_tree.assert_called_once_with()
+
+    def test_import_cancel_keeps_complete_current_state(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=3), "current.json")
+        app._module_rules_dirty = True
+        app._position_mappings_dirty = True
+        before = self._config_state(app)
+
+        with patch("rscheck.gui.filedialog.askopenfilename", return_value=""):
+            with patch("rscheck.gui.load_complete_config") as load_candidate:
+                app._import_config()
+
+        load_candidate.assert_not_called()
+        self.assertEqual(self._config_state(app), before)
+
+    def test_invalid_import_is_atomic_and_does_not_prompt_to_discard(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=4), "current.json")
+        app._module_rules_dirty = True
+        app._position_mappings_dirty = True
+        app._confirm_discard_rule_changes = Mock(
+            side_effect=AssertionError("invalid input must be rejected before confirmation")
+        )
+        app._confirm_discard_position_changes = Mock(
+            side_effect=AssertionError("invalid input must be rejected before confirmation")
+        )
+        before = self._config_state(app)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="invalid.json"
+        ):
+            with patch(
+                "rscheck.gui.load_complete_config",
+                side_effect=ConfigError("invalid JSON"),
+            ):
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._import_config()
+
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+        app._render_rule_tree.assert_not_called()
+        app._render_position_tree.assert_not_called()
+
+    def test_import_aborts_atomically_when_dirty_database_is_not_discarded(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=5), "current.json")
+        app._module_rules_dirty = True
+        app._position_mappings_dirty = True
+        app._confirm_discard_rule_changes = Mock(return_value=True)
+        app._confirm_discard_position_changes = Mock(return_value=False)
+        before = self._config_state(app)
+        candidate = self._complete_config(offset=6)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="candidate.json"
+        ):
+            with patch("rscheck.gui.load_complete_config", return_value=candidate):
+                app._import_config()
+
+        app._confirm_discard_rule_changes.assert_called_once_with()
+        app._confirm_discard_position_changes.assert_called_once_with()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+        app._render_rule_tree.assert_not_called()
+        app._render_position_tree.assert_not_called()
+
+    def test_import_aborts_when_candidate_changes_during_confirmation(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=5), "current.json")
+        app._module_rules_dirty = True
+        app._confirm_discard_rule_changes = Mock(return_value=True)
+        before = self._config_state(app)
+        candidate = self._complete_config(offset=6)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="candidate.json"
+        ):
+            with patch(
+                "rscheck.gui.load_complete_config",
+                side_effect=(candidate, ConfigError("candidate changed")),
+            ):
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._import_config()
+
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+
+    def test_import_path_resolution_failure_is_atomic(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=5), "current.json")
+        before = self._config_state(app)
+        candidate = self._complete_config(offset=6)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="candidate.json"
+        ):
+            with patch(
+                "rscheck.gui.load_complete_config", return_value=candidate
+            ):
+                with patch(
+                    "rscheck.gui._resolved_config_path",
+                    side_effect=GuiInputError("cannot resolve candidate"),
+                ):
+                    with patch("rscheck.gui.messagebox.showerror") as showerror:
+                        app._import_config()
+
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+
+    def test_import_confirms_before_discarding_excel_form_changes(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=6), "current.json")
+        app.sheet_var.set("draft sheet")
+        app._confirm_discard_excel_changes = Mock(return_value=False)
+        app._confirm_discard_rule_changes = Mock(
+            side_effect=AssertionError("database confirmation must not run")
+        )
+        before = self._config_state(app)
+        candidate = self._complete_config(offset=7)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="candidate.json"
+        ):
+            with patch("rscheck.gui.load_complete_config", return_value=candidate):
+                app._import_config()
+
+        app._confirm_discard_excel_changes.assert_called_once_with()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+
+    def test_numeric_sheet_name_keeps_string_type_when_exported(self) -> None:
+        baseline = self._complete_config(offset=7)
+        baseline = replace(
+            baseline,
+            excel=replace(baseline.excel, sheet="123"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            current = Path(temporary) / "current.json"
+            exported = Path(temporary) / "exported.json"
+            app = self._app_with_config(baseline, current)
+
+            self.assertEqual(app._sheet_override_from_form(), "")
+            app.sheet_var.set("124")
+            self.assertEqual(app._sheet_override_from_form(), "124")
+            app.sheet_var.set("123")
+
+            with patch(
+                "rscheck.gui.filedialog.asksaveasfilename",
+                return_value=str(exported),
+            ):
+                with patch("rscheck.gui.messagebox.showinfo"):
+                    app._export_config()
+
+            reloaded = read_config(exported)
+
+        self.assertEqual(reloaded.excel.sheet, "123")
+        self.assertIsInstance(reloaded.excel.sheet, str)
+
+    def test_export_cancel_keeps_state_and_does_not_write(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=7), "current.json")
+        app._module_rules_dirty = True
+        before = self._config_state(app)
+
+        with patch("rscheck.gui.filedialog.asksaveasfilename", return_value=""):
+            with patch("rscheck.gui.save_config") as save_output:
+                app._export_config()
+
+        save_output.assert_not_called()
+        self.assertEqual(self._config_state(app), before)
+
+    def test_export_rejects_changed_unloaded_config_path(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=7), "current.json")
+        app.config_var.set("another-config.json")
+        before = self._config_state(app)
+
+        with patch("rscheck.gui.filedialog.asksaveasfilename") as save_dialog:
+            with patch("rscheck.gui.save_config") as save_output:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._export_config()
+
+        save_dialog.assert_not_called()
+        save_output.assert_not_called()
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+
+    def test_export_path_resolution_error_is_controlled(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=7), "current.json")
+        before = self._config_state(app)
+
+        with patch("rscheck.gui.Path.resolve", side_effect=OSError("bad path")):
+            with patch("rscheck.gui.filedialog.asksaveasfilename") as save_dialog:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._export_config()
+
+        save_dialog.assert_not_called()
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+
+    def test_export_rejects_invalid_excel_snapshot_before_writing(self) -> None:
+        for invalid_case in ("duplicate columns", "data before header"):
+            with self.subTest(invalid_case=invalid_case):
+                app = self._app_with_config(
+                    self._complete_config(offset=7), "current.json"
+                )
+                if invalid_case == "duplicate columns":
+                    app.column_vars["RS_module"].set(
+                        app.column_vars["Intf_type"].get()
+                    )
+                else:
+                    app.header_row_var.set("20")
+                    app.data_start_row_var.set("20")
+                before = self._config_state(app)
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    output = Path(temporary) / "existing.json"
+                    output.write_text("do not replace", encoding="utf-8")
+                    with patch(
+                        "rscheck.gui.filedialog.asksaveasfilename",
+                        return_value=str(output),
+                    ):
+                        with patch("rscheck.gui.save_config") as save_output:
+                            with patch(
+                                "rscheck.gui.messagebox.showerror"
+                            ) as showerror:
+                                app._export_config()
+
+                    save_output.assert_not_called()
+                    showerror.assert_called_once()
+                    self.assertEqual(
+                        output.read_text(encoding="utf-8"), "do not replace"
+                    )
+                self.assertEqual(self._config_state(app), before)
+
+    def test_export_rejects_current_config_path_even_via_equivalent_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            current_path = Path(temporary) / "current.json"
+            current_path.write_text("current backing file", encoding="utf-8")
+            equivalent_path = current_path.parent / "unused" / ".." / current_path.name
+            app = self._app_with_config(
+                self._complete_config(offset=8), current_path
+            )
+            app._module_rules_dirty = True
+            before = self._config_state(app)
+
+            with patch(
+                "rscheck.gui.filedialog.asksaveasfilename",
+                return_value=str(equivalent_path),
+            ):
+                with patch("rscheck.gui.save_config") as save_output:
+                    with patch("rscheck.gui.messagebox.showerror") as showerror:
+                        app._export_config()
+
+            save_output.assert_not_called()
+            showerror.assert_called_once()
+            self.assertEqual(
+                current_path.read_text(encoding="utf-8"), "current backing file"
+            )
+            self.assertEqual(self._config_state(app), before)
+
+    def test_active_config_path_does_not_accept_a_hardlink_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            current_path = Path(temporary) / "current.json"
+            alias_path = Path(temporary) / "alias.json"
+            current_path.write_text("current backing file", encoding="utf-8")
+            self._make_hardlink(current_path, alias_path)
+            app = self._app_with_config(
+                self._complete_config(offset=8), current_path
+            )
+            app.config_var.set(str(alias_path))
+            before = self._config_state(app)
+
+            self.assertFalse(_same_config_path(alias_path, current_path))
+            self.assertTrue(
+                _same_config_path(
+                    alias_path, current_path, include_hardlinks=True
+                )
+            )
+            with patch("rscheck.gui.filedialog.asksaveasfilename") as save_dialog:
+                with patch("rscheck.gui.save_config") as save_output:
+                    with patch("rscheck.gui.messagebox.showerror") as showerror:
+                        app._export_config()
+
+            save_dialog.assert_not_called()
+            save_output.assert_not_called()
+            showerror.assert_called_once()
+            self.assertEqual(self._config_state(app), before)
+
+    def test_export_rejects_a_hardlink_to_current_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            current_path = Path(temporary) / "current.json"
+            alias_path = Path(temporary) / "export-alias.json"
+            current_path.write_text("current backing file", encoding="utf-8")
+            self._make_hardlink(current_path, alias_path)
+            app = self._app_with_config(
+                self._complete_config(offset=8), current_path
+            )
+            before = self._config_state(app)
+
+            with patch(
+                "rscheck.gui.filedialog.asksaveasfilename",
+                return_value=str(alias_path),
+            ):
+                with patch("rscheck.gui.save_config") as save_output:
+                    with patch("rscheck.gui.messagebox.showerror") as showerror:
+                        app._export_config()
+
+            save_output.assert_not_called()
+            showerror.assert_called_once()
+            self.assertEqual(
+                current_path.read_text(encoding="utf-8"), "current backing file"
+            )
+            self.assertEqual(self._config_state(app), before)
+
+    def test_database_saves_reject_a_hardlink_config_alias(self) -> None:
+        for save_method, dirty_attribute in (
+            ("_save_module_rules", "_module_rules_dirty"),
+            ("_save_position_mappings", "_position_mappings_dirty"),
+        ):
+            with self.subTest(save_method=save_method):
+                with tempfile.TemporaryDirectory() as temporary:
+                    current_path = Path(temporary) / "current.json"
+                    alias_path = Path(temporary) / "alias.json"
+                    current_path.write_text("current backing file", encoding="utf-8")
+                    self._make_hardlink(current_path, alias_path)
+                    app = self._app_with_config(
+                        self._complete_config(offset=8), current_path
+                    )
+                    app.config_var.set(str(alias_path))
+                    setattr(app, dirty_attribute, True)
+                    before = self._config_state(app)
+
+                    with patch("rscheck.gui.load_config") as load_current:
+                        with patch("rscheck.gui.save_config") as save_current:
+                            with patch(
+                                "rscheck.gui.messagebox.showerror"
+                            ) as showerror:
+                                getattr(app, save_method)()
+
+                    load_current.assert_not_called()
+                    save_current.assert_not_called()
+                    showerror.assert_called_once()
+                    self.assertTrue(current_path.samefile(alias_path))
+                    self.assertEqual(
+                        current_path.read_text(encoding="utf-8"),
+                        "current backing file",
+                    )
+                    self.assertEqual(self._config_state(app), before)
+
+    def test_export_requires_a_loaded_config(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=8), "current.json")
+        app._loaded_config = None
+        app._loaded_config_path = ""
+        before = self._config_state(app)
+
+        with patch("rscheck.gui.filedialog.asksaveasfilename") as save_dialog:
+            with patch("rscheck.gui.save_config") as save_output:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._export_config()
+
+        save_dialog.assert_not_called()
+        save_output.assert_not_called()
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
+
+    def test_export_write_failure_preserves_current_state(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=9), "current.json")
+        app._module_rules_dirty = True
+        app._position_mappings_dirty = True
+        before = self._config_state(app)
+
+        with patch(
+            "rscheck.gui.filedialog.asksaveasfilename", return_value="copy.json"
+        ):
+            with patch(
+                "rscheck.gui.save_config", side_effect=ConfigError("disk is full")
+            ):
+                with patch("rscheck.gui.load_config") as verify_output:
+                    with patch("rscheck.gui.messagebox.showerror") as showerror:
+                        app._export_config()
+
+        verify_output.assert_not_called()
+        showerror.assert_called_once()
+        self.assertEqual(self._config_state(app), before)
 
     def test_finding_evidence_keeps_instance_parameters(self) -> None:
         record = {

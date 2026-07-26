@@ -17,6 +17,7 @@ if str(DEFAULT_PROJECT_ROOT) not in sys.path:
 import rscheck.gui as gui_module
 from rscheck.gui import RsCheckApp, tk
 from rscheck.gui_backend import INVENTORY_SOURCE, LIVE_SOURCE, build_check_command
+from rscheck.model import FIELD_NAMES, ModuleRule
 
 
 _ONLINE_OPTIONS_WITH_VALUE = frozenset(
@@ -325,12 +326,33 @@ def main() -> int:
     app = RsCheckApp(root)
     root.geometry("980x680")
     root.title("RTL RS Check GUI Smoke")
+    root.update()
+    config_buttons = (
+        (app.config_import_button, "导入"),
+        (app.config_reload_button, "加载"),
+        (app.config_export_button, "导出"),
+    )
+    previous_right = 0
+    window_right = root.winfo_rootx() + root.winfo_width()
+    for button, expected_text in config_buttons:
+        if str(button.cget("text")) != expected_text or not button.winfo_ismapped():
+            raise SystemExit(
+                f"GUI config button is missing or clipped: {expected_text}"
+            )
+        left = button.winfo_rootx()
+        right = left + button.winfo_width()
+        if button.winfo_width() <= 1 or left < previous_right or right > window_right:
+            raise SystemExit(
+                f"GUI config button layout overlaps or overflows: {expected_text}"
+            )
+        previous_right = right
     modal_errors: list[str] = []
 
     def capture_error(title: str, message: str, **_kwargs: object) -> None:
         modal_errors.append(f"{title}: {message}")
 
     gui_module.messagebox.showerror = capture_error
+    gui_module.messagebox.showinfo = lambda *_args, **_kwargs: None
     gui_module.messagebox.askyesno = lambda *_args, **_kwargs: True
     temp = tempfile.TemporaryDirectory(prefix="rscheck-gui-smoke-")
     output = Path(temp.name)
@@ -476,6 +498,95 @@ def main() -> int:
     app.module_search_var.set("rs_pipe")
     if len(app.rule_tree.get_children()) != 1:
         raise SystemExit("GUI module rule search did not find rs_pipe after restore")
+
+    active_path_before_export = app.config_var.get()
+    rtl_before_export = app._loaded_config.rtl
+    export_path = output / "rscheck.complete-config.export.json"
+    app.sheet_var.set("PortableSmoke")
+    app.header_row_var.set("4")
+    app.data_start_row_var.set("6")
+    app.header_check_var.set(True)
+    for index, name in enumerate(FIELD_NAMES, start=20):
+        app.column_vars[name].set(str(index))
+    app._module_rules["gui_unsaved_rule"] = ModuleRule(
+        "gui_unsaved_rule", False, ("smoke_enable",)
+    )
+    app._position_mappings["gui_unsaved_position"] = "top.u_gui_unsaved"
+    app._module_rules_dirty = True
+    app._position_mappings_dirty = True
+    gui_module.filedialog.asksaveasfilename = (
+        lambda **_kwargs: str(export_path)
+    )
+    app._export_config()
+    if app.config_var.get() != active_path_before_export:
+        raise SystemExit("GUI config export unexpectedly changed the active config path")
+    if not app._module_rules_dirty or not app._position_mappings_dirty:
+        raise SystemExit("GUI config export unexpectedly cleared database dirty state")
+    exported_config = _read_json_object(export_path, "exported config")
+    expected_roots = {
+        "excel",
+        "columns",
+        "rtl",
+        "position_mappings",
+        "module_rules",
+    }
+    if set(exported_config) != expected_roots:
+        raise SystemExit(
+            "GUI config export root sections mismatch: "
+            f"{sorted(exported_config)!r}"
+        )
+    if exported_config.get("rtl") != source_config.get("rtl"):
+        raise SystemExit("GUI config export did not preserve the complete RTL config")
+    if exported_config.get("excel") != {
+        "sheet": "PortableSmoke",
+        "header_row": 4,
+        "data_start_row": 6,
+        "validate_headers": True,
+    }:
+        raise SystemExit("GUI config export did not preserve current Excel settings")
+    expected_columns = {
+        name: index for index, name in enumerate(FIELD_NAMES, start=20)
+    }
+    if exported_config.get("columns") != expected_columns:
+        raise SystemExit("GUI config export did not preserve all column mappings")
+    if exported_config.get("module_rules", {}).get("gui_unsaved_rule") != {
+        "has_rs_cfg_en": False,
+        "step_parameters": ["smoke_enable"],
+    }:
+        raise SystemExit("GUI config export omitted an unsaved module rule")
+    if exported_config.get("position_mappings", {}).get(
+        "gui_unsaved_position"
+    ) != "top.u_gui_unsaved":
+        raise SystemExit("GUI config export omitted an unsaved position mapping")
+    active_config = _read_json_object(config_path, "active config")
+    if "gui_unsaved_rule" in active_config.get("module_rules", {}) or (
+        "gui_unsaved_position" in active_config.get("position_mappings", {})
+    ):
+        raise SystemExit("GUI config export modified the active config file")
+
+    app.sheet_var.set("not imported")
+    app._module_rules.clear()
+    app._position_mappings.clear()
+    gui_module.filedialog.askopenfilename = lambda **_kwargs: str(export_path)
+    app._import_config()
+    if app.config_var.get() != str(export_path):
+        raise SystemExit("GUI config import did not switch the active config path")
+    if app._module_rules_dirty or app._position_mappings_dirty:
+        raise SystemExit("GUI config import did not clear database dirty state")
+    if app.sheet_var.get() != "PortableSmoke":
+        raise SystemExit("GUI config import did not restore Excel settings")
+    if "gui_unsaved_rule" not in app._module_rules:
+        raise SystemExit("GUI config import did not restore the module rule database")
+    if "gui_unsaved_position" not in app._position_mappings:
+        raise SystemExit("GUI config import did not restore the position database")
+    if app._loaded_config is None or app._loaded_config.rtl != rtl_before_export:
+        raise SystemExit("GUI config import did not restore the RTL configuration")
+
+    app.config_var.set(str(config_path))
+    app._load_config_from_form()
+    if app.config_var.get() != str(config_path):
+        raise SystemExit("GUI smoke failed to restore its active config after I/O test")
+    config_io_verified = True
     expected_rows = (
         1 if args.negative or args.default_rule else args.generated_rows or 2
     )
@@ -1040,6 +1151,7 @@ def main() -> int:
             f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
             f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
+            f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' if config_io_verified else ''}"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )

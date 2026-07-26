@@ -20,6 +20,7 @@
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
 | R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS；report 保留 `tile_core`，collector/inventory 只出现 `top.u_tile`，并保留动态拍数证据 |
 | R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
+| R5 | Windows / Linux / macOS + Tk | GUI 完整配置导出、导入与事务回归 | `0` | 五个根对象完整往返；副本、dirty、搜索过滤、同路径拒绝及无效/取消/拒绝原子性均通过，输出固定 config-io marker |
 | C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
@@ -72,7 +73,7 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 `RS_CFG_EN`、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 五根完整配置导入/导出的事务与副本语义、未编辑纯数字 sheet 名的字符串类型保持、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
 实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/clk/rst/CRG 检查并计入物理实例数及规则计算后的有效 `step`，但不得进入 tag/index/连续编号判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
@@ -97,9 +98,9 @@ python -m pip install -e .
 rtl-rs-check-gui
 ```
 
-窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。截图必须基于当前版本重新验收，且不提交仓库。
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode`。最后修改 GUI Excel 设置和两个内存数据库，导出完整配置副本并重新导入，确认五个根对象完整恢复。截图必须基于当前 `0.8.0` 重新验收，且不提交仓库。
 
-从仓库根目录可直接复制运行可见 GUI smoke。脚本使用临时配置验证 position 映射和模块规则的新建/保存/重载/删除，不会修改仓库配置；成功后把“Position 映射库”页保留 10 秒：
+从仓库根目录可直接复制运行可见 GUI smoke。脚本使用临时配置验证 position 映射和模块规则的新建/保存/重载/删除，并把当前 Excel/列号、完整 `rtl`、包含未单独保存修改的两个数据库导出为副本后重新导入；它不会修改仓库配置，成功后把“Position 映射库”页保留 10 秒：
 
 ```powershell
 $ProjectRoot = (Get-Location).Path
@@ -110,6 +111,14 @@ python scripts/test_rscheck_gui_smoke.py `
   --visible-seconds 10
 if ($LASTEXITCODE -ne 0) { throw "Visible GUI smoke failed" }
 ```
+
+终端末行必须包含：
+
+```text
+config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
+```
+
+该 marker 表示导出副本保留五个根对象、当前 GUI Excel/列号、已加载 `rtl` 及两个完整内存数据库，导出没有切换 active path 或清除 dirty，随后导入整体替换配置、切换路径并清除 dirty。搜索过滤不得影响数据库导出。取消、首次/复核无效配置、拒绝丢弃 Excel 表单或任一数据库、导出到当前配置同一路径、配置路径输入框已变化但未加载，以及未编辑的纯数字 sheet 名在导出和运行时保持字符串类型，由自动测试单独覆盖；任何失败都必须保持原配置状态。“导入”必须拒绝缺少任一根对象的快照；兼容性“加载”仍执行相同的 Excel/数据库确认和二次读取。
 
 ### 3.3 使用 Excel 生成“乱序列 + 自定义表头 + 额外列”XLSX
 
@@ -349,7 +358,7 @@ gui_session_resolve
 xdpyinfo >/dev/null
 ```
 
-先验收“Position 映射库”页以及映射/模块规则保存和重新加载。命令只修改 smoke 自己创建的临时配置：
+先验收“Position 映射库”页、映射/模块规则保存与重新加载，以及五根完整配置的导出和导入。命令只修改 smoke 自己创建的临时配置：
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -360,7 +369,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-窗口保留期间应看到 `tile_core -> top.u_tile`，映射表、搜索框和编辑区无重叠或截断；smoke 同时已在临时配置完成 position 映射和模块规则的新增、修改、搜索、保存、重载、删除，终端末行应为 `GUI_SMOKE_PASS`。
+窗口保留期间应看到 `tile_core -> top.u_tile`，映射表、搜索框和编辑区无重叠或截断；smoke 同时已在临时配置完成 position 映射和模块规则的新增、修改、搜索、保存、重载、删除，以及五根配置副本导出和原子导入。终端末行应为 `GUI_SMOKE_PASS`，并包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。
 
 先单独覆盖 GUI 的“验证 Excel”按钮。该路径不运行 inventory 或 NPI 检查；下面连续验证 20 轮：
 
@@ -376,10 +385,10 @@ cd "$PROJECT_ROOT"
 预期末行包含：
 
 ```text
-GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile
+GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线。当前 0.7.1 fresh 验收结果见 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`；若把本节 20 轮 validate-only 单独作为设备门禁，必须在目标设备重跑，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.8.0` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -431,11 +440,12 @@ grep -F 'Width:' "$GUI_WINDOW_INFO"
 grep -F 'Height:' "$GUI_WINDOW_INFO"
 grep -F 'rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=100 window=mapped' "$POS_GUI_LOG"
 grep -F 'header-map=column-index strict-header=false' "$POS_GUI_LOG"
+grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' "$POS_GUI_LOG"
 grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_GUI_LOG"
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。此前结果仅作历史性能对照；当前 0.7.1 的 100 轮和 10,000 行实际结果见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.8.0` 必须重新运行并出现 config-io marker。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -480,11 +490,12 @@ set -e
 cat "$LOAD_GUI_LOG"
 test "$LOAD_GUI_RC" -eq 0
 grep -F 'rows=行数 10000 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1 window=mapped' "$LOAD_GUI_LOG"
+grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' "$LOAD_GUI_LOG"
 grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB 仅是历史性能数据。0.7.1 fresh run 已完成当前 10,000 行功能负载并记录在 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`；旧数字不是当前性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
+2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.8.0` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -1217,7 +1228,24 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。每次 GUI smoke 还会完成 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五根配置的完整导出/导入往返。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+
+VM 脚本对以下六份 GUI 日志逐一执行硬断言；缺少任意一份日志中的固定 marker 都会使脚本非零退出：
+
+```text
+online_gui_positive.log
+partial_load_gui.log
+online_gui_negative.log
+offline_gui_default_rule.log
+offline_gui_100_rounds.log
+offline_gui_10000_rows.log
+```
+
+固定 marker 为：
+
+```text
+config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
+```
 
 在当前 shell 已能正常启动 Verdi 的图形 shell 中执行。正式 VM 复现推荐使用仓库外层 fresh-checkout 驱动；它默认测试克隆时的 `origin/main`，运行根目录位于当前用户 `$HOME`，也可用 `VM_RUN_BASE` 的绝对路径指向其他可写目录：
 
@@ -1251,4 +1279,4 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前 0.7.1 的 Windows 与 VM 实测结果记录在 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`，固定到提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`。Windows `Ran 196 tests`、`OK (skipped=44)`；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/GUI、clean KDB、Verdi GUI、在线正反例、离线 100 轮和 10,000 行负载均通过。`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是此前功能阶段的历史基线。
+当前功能版本为 `0.8.0`，完整验收必须包含五根配置 round-trip marker 和上述六日志硬断言。`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md` 记录的是 `0.7.1` 历史基线，固定到提交 `54b57ddf102db719b3018b679a8672d7c3c8e021`：Windows `Ran 196 tests`、`OK (skipped=44)`；CentOS 196 项全部通过且无 skip；partial KDB collector/CLI/GUI、clean KDB、Verdi GUI、在线正反例、离线 100 轮和 10,000 行负载均通过，但不包含 0.8.0 配置导入/导出证据。`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 都是更早功能阶段的历史基线。

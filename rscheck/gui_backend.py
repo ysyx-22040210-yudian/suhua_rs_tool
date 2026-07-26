@@ -155,7 +155,7 @@ def _positive_integer(value: str, label: str, *, optional: bool = False) -> str:
     result = value.strip()
     if optional and not result:
         return ""
-    if not result.isdigit() or int(result) < 1:
+    if not result.isascii() or not result.isdecimal() or int(result) < 1:
         raise GuiInputError(f"{label} must be a positive integer")
     return str(int(result))
 
@@ -191,8 +191,10 @@ def _common_arguments(request: GuiRunRequest) -> list[str]:
     if header_row and data_start_row and int(data_start_row) <= int(header_row):
         raise GuiInputError("data start row must be after the header row")
 
-    sheet = request.sheet.strip()
-    if sheet.isdigit() and int(sheet) < 1:
+    sheet = request.sheet
+    if sheet and not sheet.strip():
+        raise GuiInputError("sheet name must not be blank")
+    if sheet.isascii() and sheet.isdecimal() and int(sheet) < 1:
         raise GuiInputError("sheet index must be >= 1")
 
     arguments = ["--excel", excel_path, "--config", config_path]
