@@ -107,7 +107,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
 | `CRG_source` | clk 预期的上游来源标签 | 当前仍必填、解析并写入 report，但暂不参与 PASS/FAIL |
-| `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | `has_rs_cfg_en=true` 时必须精确填写 `假门控`；`false` 时任意字面内容都不参与判定；两种情况均解析并写入报告 |
+| `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | 去除首尾空白后精确为大写 `NA` 时，仅跳过该行全部 `RS_CFG_EN`/RTL `RS_CRG_EN` 检查；否则 `has_rs_cfg_en=true` 时必须精确填写 `假门控`，`false` 时任意字面内容都不参与标签判定；内容均解析并写入报告 |
 
 一行定义一组，唯一组键是 `(解析后的完整 position, RS_inst)`。同一个完整 `position` 下可以有多组，每组占一行；即使两行使用不同文本，只要映射到同一完整路径且 `RS_inst` 相同，也属于重复组并会被拒绝。
 
@@ -164,10 +164,10 @@ python -m rscheck validate \
 - 映射数据单元格会去除首尾空白。
 - 除 `RS_CFG_EN` 外的八个字段均为必填；这些字段和 `RS_CFG_EN` 全部为空时跳过整行，八个必填字段中只有部分为空时报错。
 - `RS_inst` 单元格本身不能留空。可以填写组前缀，也可以填写完整的 NPI 本地例化名，例如 `CTRL_RS_D0`；不要填写 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
-- `RS_CFG_EN` 可以为空或填写字面值，解析后的文本会保留到报告。`RS_module` 对应规则的兼容键 `has_rs_cfg_en=true` 时只接受精确文本 `假门控`；`false` 时该字段不参与 PASS/FAIL，不论为空、`假门控`、数字、布尔值还是其他文本都不产生标签 finding。该规则实际检查的 RTL parameter 是 `RS_CRG_EN`。
+- `RS_CFG_EN` 可以为空或填写字面值，去除首尾空白后的文本会保留到报告。规范化文本精确等于大写 `NA` 时，无论模块规则为何，都跳过该行全部 `RS_CFG_EN` 标签及 RTL `RS_CRG_EN` 参数存在性/值检查；`na`、`N/A`、`Na` 均不等价。`NA` 只豁免门控检查，`position`、实例分组、`RS_module`、动态 `step`、clk 和 rst 仍照常检查。非 `NA` 时，`RS_module` 对应规则的兼容键 `has_rs_cfg_en=true` 只接受精确文本 `假门控`；`false` 时该字段不参与 PASS/FAIL，不论为空、`假门控`、数字、布尔值还是其他文本都不产生标签 finding，但 RTL 若实际存在 `RS_CRG_EN` 仍报 `RS_CFG_EN_PARAMETER_UNEXPECTED`。该规则实际检查的 RTL parameter 是 `RS_CRG_EN`。
 - `step` 接受 `0`、`2` 或 Excel 常见的 `2.0`，但不接受负数、小数或科学计数法。
 - 默认 `excel.validate_headers=false`，不检查或比较九个映射列的表头文字。只有显式开启严格表头诊断时，才会在 `excel.header_row` 要求九个表头精确等于内部属性名。
-- XLSX/XLSM 映射字段中的公式单元格和 Excel 错误值会被拒绝，防止使用未刷新的缓存值或无效内容；此通用解析限制也适用于 don't-care 的 `RS_CFG_EN` 单元格。CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
+- XLSX/XLSM 映射字段中的公式单元格和 Excel 错误值会被拒绝，防止使用未刷新的缓存值或无效内容；此通用解析限制也适用于 don't-care 或填写 `NA` 的 `RS_CFG_EN` 单元格。CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
 - `.xlsm` 中的宏不会执行。
 - CSV 优先按 UTF-8 BOM/UTF-8 读取，失败后尝试 GB18030；CSV 可探测逗号、分号或制表符，`.tsv` 固定使用制表符。
 - 至少要有一行有效规格。
@@ -273,13 +273,14 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
 
 | 模块规则 | RTL 实例的 `RS_CRG_EN` | Excel/internal `RS_CFG_EN` | 结果 |
 |---|---|---|---|
+| 任意 | 任意，包括缺失、未知、`0` 或非零 | 去空白后精确大写 `NA` | 跳过该行全部 `RS_CFG_EN`/`RS_CRG_EN` 检查；其他检查继续 |
 | `has_rs_cfg_en=true` | 参数存在且为数值 `0` | 精确 `假门控` | 通过该实例检查 |
 | `has_rs_cfg_en=true` | 参数缺失 | `假门控` | `RS_CFG_EN_PARAMETER_MISSING` |
 | `has_rs_cfg_en=true` | 参数为已知非零值 | `假门控` | `RS_CFG_EN_VALUE_MISMATCH` |
 | `has_rs_cfg_en=true` | 参数为 `null`、X/Z 或非法值 | `假门控` | `RS_CFG_EN_VALUE_UNRESOLVED` |
-| `has_rs_cfg_en=true` | 任意 | 空白或其他文本 | 另报 `RS_CFG_EN_LABEL_MISMATCH` |
-| `has_rs_cfg_en=false` | 参数不存在 | 任意字面内容 | 通过该实例检查；内容仍进入报告 |
-| `has_rs_cfg_en=false` | 参数实际存在 | 任意字面内容 | `RS_CFG_EN_PARAMETER_UNEXPECTED`；不另报标签 mismatch |
+| `has_rs_cfg_en=true` | 任意 | 空白或除 `NA` 外的其他文本 | 另报 `RS_CFG_EN_LABEL_MISMATCH` |
+| `has_rs_cfg_en=false` | 参数不存在 | 除 `NA` 外的任意字面内容 | 通过该实例检查；内容仍进入报告 |
+| `has_rs_cfg_en=false` | 参数实际存在 | 除 `NA` 外的任意字面内容 | `RS_CFG_EN_PARAMETER_UNEXPECTED`；不另报标签 mismatch |
 
 ### 3.7 `step_parameters` 和有效拍数
 
@@ -416,7 +417,7 @@ python -m rscheck position-db delete \
 
 | 配置项 | 类型 | 说明 |
 |---|---|---|
-| `has_rs_cfg_en` | JSON 布尔值 | 兼容配置键；`true` 要求 RTL `RS_CRG_EN` 存在、值为 0 且 Excel `RS_CFG_EN` 填 `假门控`；`false` 要求 RTL 不存在 `RS_CRG_EN`，Excel 字段任意字面内容均不参与判定但仍进入报告 |
+| `has_rs_cfg_en` | JSON 布尔值 | 兼容配置键；Excel `RS_CFG_EN` 精确为 `NA` 时本行不应用门控检查；其他值下，`true` 要求 RTL `RS_CRG_EN` 存在、值为 0 且 Excel 填 `假门控`，`false` 要求 RTL 不存在 `RS_CRG_EN`，Excel 字段任意字面内容均不参与标签判定但仍进入报告 |
 | `step_parameters` | 唯一字符串数组 | 决定逐实例拍贡献的 effective parameters；空数组表示每个实例贡献 1 |
 | `clk_port` | 非空字符串 | 该模块的 clk formal port 名；GUI 留空时使用 `clk` |
 | `rst_port` | 非空字符串 | 该模块的 rst formal port 名；GUI 留空时使用 `rst_n` |
@@ -488,7 +489,7 @@ bash scripts/launch_rscheck_gui.sh
 
 ### 5.3 完整配置导入和导出
 
-`0.9.1` 的可移植配置 JSON 由且仅由以下五个根对象组成：
+`0.9.2` 的可移植配置 JSON 由且仅由以下五个根对象组成：
 
 | 根对象 | 导出来源 | 内容 |
 |---|---|---|
@@ -539,11 +540,11 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 “检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。`spec.CRG_source` 仍可查看，但不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 为任意非标准文本的离线 GUI 专项也默认执行 20 轮，要求文本进入报告但不产生 finding。端到端脚本会对九份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log`、`online_gui_clk_present_rst_missing.log` 和 `offline_gui_rs_cfg_dontcare.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 为任意非标准文本的离线 GUI 专项也默认执行 20 轮，要求文本进入报告但不产生 finding。精确 `NA` 的离线专项默认 20 轮，由正整数 `GUI_RS_CFG_NA_ITERATIONS` 控制，日志为 `offline_gui_rs_cfg_na.log`；固定 marker `rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none` 证明 RTL 门控参数即使为非零 `1` 也只跳过门控检查。端到端脚本会对十份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log`、`online_gui_clk_present_rst_missing.log`、`offline_gui_rs_cfg_dontcare.log` 和 `offline_gui_rs_cfg_na.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
-`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会确认包括 `RS_CFG_EN` 在内的九个列号映射，解析 `position_mappings` 并在摘要中显示完整路径；默认不判断实际表头文字，只有显式开启严格诊断时才比较表头。它不能判断 RTL 路径是否真实存在，也不会在此阶段应用 `has_rs_cfg_en=true` 的精确 `假门控` 标签要求；该判定只在 `check` 阶段执行，`false` 时标签内容始终 don't-care。
+`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会确认包括 `RS_CFG_EN` 在内的九个列号映射，解析 `position_mappings` 并在摘要中显示完整路径；默认不判断实际表头文字，只有显式开启严格诊断时才比较表头。它不能判断 RTL 路径是否真实存在，也不会在此阶段应用 `has_rs_cfg_en=true` 的精确 `假门控` 标签要求；该判定只在 `check` 阶段执行，`false` 时标签内容始终 don't-care。精确大写 `NA` 的门控豁免也在 `check` 时生效，且不会关闭同一行的其他 RTL 检查。
 
 ```bash
 python -m rscheck validate \
@@ -930,7 +931,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `duplicate group` | 多行解析到同一完整 `(position, RS_inst)`，包括不同简写指向同一路径 | 合并或修改重复组/映射 |
 | `sheet ... not found` | sheet 名/序号不对 | 用实际工作表名或 1-based 序号覆盖 `--sheet` |
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
-| `formula cells are not supported` / `Excel error value ... is not supported` | XLSX/XLSM 的映射字段是公式单元格或 Excel 错误值，包括 don't-care 的 `RS_CFG_EN` | 将值固化为普通文本/数字；额外未映射列不受影响 |
+| `formula cells are not supported` / `Excel error value ... is not supported` | XLSX/XLSM 的映射字段是公式单元格或 Excel 错误值，包括 don't-care 或拟填写 `NA` 的 `RS_CFG_EN` | 将值固化为普通文本/数字；额外未映射列不受影响 |
 | collector executable not found | 未构建或路径不对 | 执行 `make -C npi ...` 并检查 `npi/build/rs_npi_collector` |
 | `npi_L1.h` / `libnpiL1.so` / `libNPI.so` 找不到 | Verdi NPI/L1 安装布局、`VERDI_HOME`、`NPI_PLATFORM` 或目录变量错误 | 设置 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`；用 `ldd` 同时确认 `libNPI.so` 与 `libnpiL1.so` |
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
@@ -955,11 +956,11 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对 `position` 的简单名或完整层次名，并核对连接 |
 | `UNSUPPORTED_CONNECTION` | clk/rst 经 concat、运算、mux 等复杂表达式连接 | 改为可追踪的直接信号，或扩展采集/规则模型 |
 | `CRG_source` 与预期不同但仍 PASS | 当前版本暂停 CRG 正确性判定 | 这是当前设计；字段仍进入 report，但新 inventory 的 `clk_sources=[]`，不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding |
-| `RS_CFG_EN_PARAMETER_MISSING` | 兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
-| `RS_CFG_EN_PARAMETER_UNEXPECTED` | `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
-| `RS_CFG_EN_LABEL_MISMATCH` | `has_rs_cfg_en=true`，但 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；`has_rs_cfg_en=false` 时任意字面内容都不会产生本 finding |
-| `RS_CFG_EN_VALUE_MISMATCH` | 实例有 `RS_CRG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
-| `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到 `RS_CRG_EN` 但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CRG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
+| `RS_CFG_EN_PARAMETER_MISSING` | 非 `NA` 行的兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
+| `RS_CFG_EN_PARAMETER_UNEXPECTED` | 非 `NA` 行为 `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
+| `RS_CFG_EN_LABEL_MISMATCH` | 非 `NA` 行为 `has_rs_cfg_en=true`，但 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；`has_rs_cfg_en=false` 时任意字面内容都不会产生本 finding |
+| `RS_CFG_EN_VALUE_MISMATCH` | 非 `NA` 行的实例有 `RS_CRG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
+| `RS_CFG_EN_VALUE_UNRESOLVED` | 非 `NA` 行中 collector 找到 `RS_CRG_EN` 但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CRG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst`；完整名也可能与较短前缀重叠 | 重新设计互不重叠的组名；当前没有 exact-only 模式 |
 | `NPI_UNRESOLVED` | collector 产生层次/端口遍历 warning | 视为硬错误；检查 KDB、层次和 NPI Language/L1 端口信息，不要忽略 |
 | `NPI_LOAD_PARTIAL` | KDB 有 elaboration error，但 top 可查询 | severity 为 warning；仅表示允许继续，不能覆盖后续任何硬 finding |
@@ -988,7 +989,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
 2. 配置九个内部属性的 1-based 列映射；实际表头可任意命名；按需维护 position 简写到 RTL 全路径的映射库；为端口名不是默认 `clk/rst_n` 或需要改变其他默认行为的 `RS_module` 添加显式规则，并填写其 `clk_port/rst_port`。
-3. 按最终解析规则填写 Excel/internal `RS_CFG_EN` 标签和预期有效 `step`；默认规则要求标签为 `假门控`、实际 RTL `RS_CRG_EN=0`，显式 `has_rs_cfg_en=false` 时该 Excel 字段任意字面内容均不参与判定；每个物理实例默认贡献 1，有效拍可为 0。
+3. 按最终解析规则填写 Excel/internal `RS_CFG_EN` 标签和预期有效 `step`；默认规则要求标签为 `假门控`、实际 RTL `RS_CRG_EN=0`，显式 `has_rs_cfg_en=false` 时该 Excel 字段任意字面内容均不参与标签判定；只有需要逐行跳过全部门控检查时才填写精确大写 `NA`，不要写 `na` 或 `N/A`，且其他检查仍必须满足。每个物理实例默认贡献 1，有效拍可为 0。
 4. 执行 `validate`，确认 sheet、列号映射、position 解析结果和规范化内容；只有主动采用标准表头时才按需开启严格表头诊断。
 5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
 6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。

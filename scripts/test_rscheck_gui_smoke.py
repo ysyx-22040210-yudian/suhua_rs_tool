@@ -50,6 +50,7 @@ _BUSINESS_HEADERS = (
     "假门控标记",
 )
 _RS_CFG_DONTCARE_TEXT = "任意非标准文本"
+_RS_CFG_NA_TEXT = "NA"
 
 
 def _window_identifier(root: object) -> str:
@@ -151,6 +152,11 @@ def _parser() -> argparse.ArgumentParser:
         "--rs-cfg-dontcare",
         action="store_true",
         help="prove Excel RS_CFG_EN is ignored when the module rule declares none",
+    )
+    parser.add_argument(
+        "--rs-cfg-na",
+        action="store_true",
+        help="prove Excel RS_CFG_EN=NA skips gating checks for this row",
     )
     parser.add_argument("--validate-only", action="store_true")
     return parser
@@ -362,6 +368,74 @@ def _write_rs_cfg_dontcare_inputs(output: Path) -> tuple[Path, Path]:
     return specs_path, inventory_path
 
 
+def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
+    specs_path = output / "rs_cfg_na_specs.csv"
+    inventory_path = output / "rs_cfg_na_inventory.json"
+    position = "top.u_rs_cfg_na"
+    instance_name = "NA_RS"
+    with specs_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(_BUSINESS_HEADERS)
+        writer.writerow(
+            (
+                "NA_IF",
+                "rs_pipe",
+                instance_name,
+                position,
+                1,
+                "clk_na",
+                "rst_n",
+                "crg_na",
+                _RS_CFG_NA_TEXT,
+            )
+        )
+    with inventory_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema_version": 2,
+                "positions": {
+                    position: {
+                        "found": True,
+                        "instances": [
+                            {
+                                "name": instance_name,
+                                "full_name": f"{position}.{instance_name}",
+                                "module": "rs_pipe",
+                                "file": "rs_cfg_na_top.sv",
+                                "line": 18,
+                                "parameters": {
+                                    "RS_CRG_EN": "1",
+                                    "WIDTH": "8",
+                                    "rs_mode": "1",
+                                },
+                                "ports": {
+                                    "clk": {
+                                        "connection": f"{position}.clk_na",
+                                        "type": "npiNet",
+                                    },
+                                    "rst": {
+                                        "connection": f"{position}.rst_n",
+                                        "type": "npiNet",
+                                    },
+                                },
+                                "clk_sources": [
+                                    {
+                                        "instance": f"{position}.u_crg",
+                                        "module": "crg_na",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+                "warnings": [],
+            },
+            stream,
+            ensure_ascii=True,
+        )
+    return specs_path, inventory_path
+
+
 def _write_custom_port_spec(output: Path) -> Path:
     specs_path = output / "custom_port_specs.csv"
     with specs_path.open("w", encoding="utf-8", newline="") as stream:
@@ -432,6 +506,7 @@ def main() -> int:
         or args.default_rule
         or args.custom_port
         or args.clk_without_rst
+        or args.rs_cfg_na
         or args.generated_rows
     ):
         raise SystemExit(
@@ -445,6 +520,22 @@ def main() -> int:
         raise SystemExit(
             "--rs-cfg-dontcare requires a full check, not --validate-only"
         )
+    if args.rs_cfg_na and (
+        args.negative
+        or args.expect_partial_load
+        or args.default_rule
+        or args.custom_port
+        or args.clk_without_rst
+        or args.rs_cfg_dontcare
+        or args.generated_rows
+    ):
+        raise SystemExit(
+            "--rs-cfg-na is mutually exclusive with all other special modes"
+        )
+    if args.rs_cfg_na and online:
+        raise SystemExit("--rs-cfg-na is available only in offline inventory mode")
+    if args.rs_cfg_na and args.validate_only:
+        raise SystemExit("--rs-cfg-na requires a full check, not --validate-only")
     if online and args.generated_rows:
         raise SystemExit("--generated-rows is available only in offline inventory mode")
     if args.expect_partial_load and not online:
@@ -454,6 +545,7 @@ def main() -> int:
         or args.default_rule
         or args.custom_port
         or args.clk_without_rst
+        or args.rs_cfg_na
         or args.generated_rows
         or args.validate_only
     ):
@@ -461,7 +553,10 @@ def main() -> int:
             "--expect-partial-load requires a positive online full check"
         )
     if args.negative and (
-        args.generated_rows or args.custom_port or args.clk_without_rst
+        args.generated_rows
+        or args.custom_port
+        or args.clk_without_rst
+        or args.rs_cfg_na
     ):
         raise SystemExit(
             "--negative is mutually exclusive with --generated-rows, --custom-port, "
@@ -474,6 +569,7 @@ def main() -> int:
         or args.generated_rows
         or args.custom_port
         or args.clk_without_rst
+        or args.rs_cfg_na
     ):
         raise SystemExit(
             "--default-rule is mutually exclusive with --negative, --generated-rows, "
@@ -835,6 +931,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_dontcare
+        or args.rs_cfg_na
         else args.generated_rows or 2
     )
     expected_tree_rows = expected_rows + (1 if args.expect_partial_load else 0)
@@ -842,12 +939,15 @@ def main() -> int:
         args.negative
         or args.default_rule
         or args.rs_cfg_dontcare
+        or args.rs_cfg_na
         or args.generated_rows
     )
     if args.default_rule:
         excel_path, inventory_path = _write_default_rule_inputs(output)
     elif args.rs_cfg_dontcare:
         excel_path, inventory_path = _write_rs_cfg_dontcare_inputs(output)
+    elif args.rs_cfg_na:
+        excel_path, inventory_path = _write_rs_cfg_na_inputs(output)
     elif args.custom_port:
         excel_path = _write_custom_port_spec(output)
         inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
@@ -1021,20 +1121,28 @@ def main() -> int:
                 if args.clk_without_rst
                 else "DONTCARE_RS"
                 if args.rs_cfg_dontcare
+                else "NA_RS"
+                if args.rs_cfg_na
                 else "AAAA_BBB"
             )
             expected_instances = (
                 "2"
                 if args.default_rule
                 else "1"
-                if args.custom_port or args.clk_without_rst or args.rs_cfg_dontcare
+                if args.custom_port
+                or args.clk_without_rst
+                or args.rs_cfg_dontcare
+                or args.rs_cfg_na
                 else "6"
             )
             expected_step_cell = (
                 "2/2"
                 if args.default_rule
                 else "1/1"
-                if args.custom_port or args.clk_without_rst or args.rs_cfg_dontcare
+                if args.custom_port
+                or args.clk_without_rst
+                or args.rs_cfg_dontcare
+                or args.rs_cfg_na
                 else "5/6"
                 if args.negative
                 else "5/5"
@@ -1045,11 +1153,16 @@ def main() -> int:
                 or str(first_values[6]) != expected_instances
                 or str(first_values[7]) != expected_step_cell
                 or (
-                    args.rs_cfg_dontcare
+                    (args.rs_cfg_dontcare or args.rs_cfg_na)
                     and (
                         len(first_values) < 9
                         or str(first_values[0]) != "PASS"
-                        or str(first_values[5]) != _RS_CFG_DONTCARE_TEXT
+                        or str(first_values[5])
+                        != (
+                            _RS_CFG_DONTCARE_TEXT
+                            if args.rs_cfg_dontcare
+                            else _RS_CFG_NA_TEXT
+                        )
                         or str(first_values[8]) != "0E/0W"
                     )
                 )
@@ -1150,6 +1263,8 @@ def main() -> int:
             expected_label = (
                 _RS_CFG_DONTCARE_TEXT
                 if args.rs_cfg_dontcare
+                else _RS_CFG_NA_TEXT
+                if args.rs_cfg_na
                 else "真门控"
                 if args.negative
                 else "假门控"
@@ -1192,6 +1307,59 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+            if args.rs_cfg_na:
+                report_rows = raw_report.get("rows")
+                report_row = (
+                    report_rows[0]
+                    if isinstance(report_rows, list)
+                    and len(report_rows) == 1
+                    and isinstance(report_rows[0], dict)
+                    else {}
+                )
+                report_spec = report_row.get("spec", {})
+                report_rule = report_row.get("module_rule", {})
+                report_instances = report_row.get("matched_instances", [])
+                report_parameters = (
+                    report_instances[0].get("parameters", {})
+                    if isinstance(report_instances, list)
+                    and len(report_instances) == 1
+                    and isinstance(report_instances[0], dict)
+                    else {}
+                )
+                try:
+                    with csv_report_path.open(
+                        encoding="utf-8-sig", newline=""
+                    ) as stream:
+                        csv_rows = list(csv.DictReader(stream))
+                except OSError as exc:
+                    failed = True
+                    print(
+                        f"GUI_SMOKE_FAIL: cannot read CSV report: {exc}",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                if (
+                    not isinstance(report_rows, list)
+                    or len(report_rows) != 1
+                    or not isinstance(report_spec, dict)
+                    or report_spec.get("RS_CFG_EN") != _RS_CFG_NA_TEXT
+                    or not isinstance(report_rule, dict)
+                    or report_rule.get("has_rs_cfg_en") is not True
+                    or not isinstance(report_parameters, dict)
+                    or report_parameters.get("RS_CRG_EN") != "1"
+                    or report_row.get("findings") != []
+                    or len(csv_rows) != 1
+                    or csv_rows[0].get("RS_CFG_EN") != _RS_CFG_NA_TEXT
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: serialized RS_CFG_EN=NA skip evidence "
+                        "is incomplete",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
             for iid, record in app._result_records.items():
                 if iid == "global":
                     continue
@@ -1212,7 +1380,8 @@ def main() -> int:
                     parameter_evidence_valid = isinstance(parameters, dict) and (
                         "RS_CRG_EN" not in parameters
                         if args.rs_cfg_dontcare
-                        else parameters.get("RS_CRG_EN") == "0"
+                        else parameters.get("RS_CRG_EN")
+                        == ("1" if args.rs_cfg_na else "0")
                     )
                     if not parameter_evidence_valid:
                         failed = True
@@ -1375,6 +1544,26 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                if args.rs_cfg_na and (
+                    spec.get("RS_module") != "rs_pipe"
+                    or spec.get("RS_inst") != "NA_RS"
+                    or spec.get("RS_CFG_EN") != _RS_CFG_NA_TEXT
+                    or step_check.get("expected") != 1
+                    or step_check.get("physical_instances") != 1
+                    or step_check.get("effective_step") != 1
+                    or contribution_values != [1]
+                    or len(instances) != 1
+                    or not isinstance(instances[0].get("parameters"), dict)
+                    or instances[0]["parameters"].get("RS_CRG_EN") != "1"
+                    or record.get("findings") != []
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: RS_CFG_EN=NA result evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
                 if args.custom_port and (
                     spec.get("RS_module") != "rs_custom"
                     or spec.get("RS_inst") != "CUSTOM_RS"
@@ -1512,6 +1701,28 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+            if args.rs_cfg_na:
+                evidence_parameters = (
+                    evidence_instances[0].get("parameters", {})
+                    if len(evidence_instances) == 1
+                    and isinstance(evidence_instances[0], dict)
+                    else {}
+                )
+                if (
+                    evidence_rule.get("has_rs_cfg_en") is not True
+                    or evidence_spec.get("RS_CFG_EN") != _RS_CFG_NA_TEXT
+                    or not isinstance(evidence_parameters, dict)
+                    or evidence_parameters.get("RS_CRG_EN") != "1"
+                    or "finding" in evidence
+                    or app.finding_tree.get_children()
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: GUI RS_CFG_EN=NA skip evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
             if (
                 args.negative or args.clk_without_rst
             ) and not isinstance(evidence.get("finding"), dict):
@@ -1609,7 +1820,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'partial-load' if args.expect_partial_load else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'rs-cfg-na' if args.rs_cfg_na else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -1620,6 +1831,7 @@ def main() -> int:
             f" rule-ports={'clk/rst_n' if args.default_rule or args.clk_without_rst else 'clock_i/reset_ni' if args.custom_port else 'clk/rst'}"
             f"{' clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' if args.clk_without_rst else ''}"
             f"{' has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none parsed-rs-cfg-en=任意非标准文本' if args.rs_cfg_dontcare else ''}"
+            f"{' rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' if args.rs_cfg_na else ''}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
             f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules module-rule-ports=preserved' if config_io_verified else ''}"
             " rules-layout=980x680-fit"

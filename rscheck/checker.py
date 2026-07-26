@@ -19,6 +19,7 @@ from .model import (
 
 
 _FAKE_GATING_LABEL = "假门控"
+_SKIP_RS_CFG_EN_LABEL = "NA"
 
 
 # Schema v2 inventories produced before CRG validation was disabled can retain
@@ -111,6 +112,8 @@ def parameter_value_state(value: str | None) -> str:
 
 
 def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
+    if spec.rs_cfg_en == _SKIP_RS_CFG_EN_LABEL:
+        return []
     if not rule.has_rs_cfg_en:
         return []
 
@@ -131,6 +134,9 @@ def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
 def _check_rs_cfg_en_instance(
     spec: SpecRow, instance: ActualInstance, rule: ModuleRule
 ) -> list[Finding]:
+    if spec.rs_cfg_en == _SKIP_RS_CFG_EN_LABEL:
+        return []
+
     findings: list[Finding] = []
     parameter_name = "RS_CRG_EN"
     parameter_exists = parameter_name in instance.parameters

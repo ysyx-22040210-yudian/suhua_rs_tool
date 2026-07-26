@@ -129,7 +129,8 @@ python -m rscheck position-db delete \
 ```
 
 - `has_rs_cfg_en=true`：该模块每个匹配 RTL 实例都必须具有 effective `RS_CRG_EN`，值必须为数值 `0`，且 Excel 本行的兼容字段 `RS_CFG_EN` 必须精确填写 `假门控`。
-- `has_rs_cfg_en=false`：Excel/internal `RS_CFG_EN` 的任意字面单元格内容都不参与 PASS/FAIL，但解析后的文本仍会写入报告；RTL 实例若实际仍存在 `RS_CRG_EN`，仍报兼容 finding code `RS_CFG_EN_PARAMETER_UNEXPECTED`。
+- `has_rs_cfg_en=false`：非 `NA` 的 Excel/internal `RS_CFG_EN` 任意字面单元格内容都不参与 PASS/FAIL，但解析后的文本仍会写入报告；RTL 实例若实际仍存在 `RS_CRG_EN`，仍报兼容 finding code `RS_CFG_EN_PARAMETER_UNEXPECTED`。
+- 逐行特殊值 `NA`：Excel/internal `RS_CFG_EN` 去除首尾空白后若精确等于大写 `NA`，无论模块规则的 `has_rs_cfg_en` 为何，都跳过该行全部 `RS_CFG_EN` 标签和 RTL `RS_CRG_EN` 参数存在性/值检查。这里只豁免门控检查；`position`、实例匹配、`RS_module`、动态 `step`、clk 和 rst 仍照常检查。`na`、`N/A` 等其他写法不等价于 `NA`。
 - `step_parameters=[]`：每个匹配物理实例贡献 `1` 拍。
 - `step_parameters` 非空：所有参数值均可确定时，全部非零贡献 `1`，至少一个为零贡献 `0`。多个参数采用“全部非零”语义。
 - `clk_port`、`rst_port`：该 `RS_module` 实际使用的 formal port 名。GUI 新建或修改规则时留空分别规范化为 `clk`、`rst_n`。
@@ -155,13 +156,13 @@ python -m rscheck position-db delete \
 
 Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析，例如 `position=tile_core`、映射为 `top.u_tile`、`clk=clk_rs` 时对应 `top.u_tile.clk_rs`。formal port 名由匹配到的模块规则 `clk_port`、`rst_port` 指定；未知模块使用 `clk`、`rst_n`。旧 JSON 中显式模块规则若缺少这两个键，会先继承历史全局 `rtl.clk_port/rst_port`，下一次由 GUI 保存或导出时再显式写入规则，避免升级时改变既有配置含义。
 
-`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；这个兼容字段保存解析后的用户输入并进入报告，RTL 中实际匹配的 parameter 名为 `RS_CRG_EN`。`has_rs_cfg_en=true` 时数据必须精确为 `假门控`；`false` 时任意字面单元格内容都不参与判定。映射字段中的公式和 Excel 错误值仍受通用解析限制。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
+`RS_CFG_EN` 内部属性的列号映射始终必需，但实际 Excel 表头可以任意命名；这个兼容字段保存去除首尾空白后的用户输入并进入报告，RTL 中实际匹配的 parameter 名为 `RS_CRG_EN`。精确大写 `NA` 是逐行门控检查豁免值：它跳过该行全部 `RS_CFG_EN`/`RS_CRG_EN` 检查，但不跳过 `RS_module`、实例、`step`、clk 或 rst 检查；`na`、`N/A` 不具有该语义。非 `NA` 时，`has_rs_cfg_en=true` 要求数据精确为 `假门控`，`false` 时任意字面单元格内容都不参与标签判定，但 RTL 若意外存在 `RS_CRG_EN` 仍会报错。映射字段中的公式和 Excel 错误值仍受通用解析限制。实例后缀连续性只按具有合法非空数字后缀的物理实例检查，不按空后缀实例或有效拍数检查。
 
 ## 工具自带桌面 GUI
 
 这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so`、`libnpiL1.so` 和 elaborated KDB 在线采集只支持 Linux：
 
-当前 `0.9.1` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
+当前 `0.9.2` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
 
 ```bash
 python -m rscheck gui
@@ -346,7 +347,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN`、`has_rs_cfg_en=true` 的 Excel/internal 标签要求及 `false` 时任意字面值 don't-care、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN`、`has_rs_cfg_en=true` 的 Excel/internal 标签要求、`false` 时任意字面值 don't-care、精确大写 `NA` 的逐行门控检查豁免及其他检查继续执行、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -364,13 +365,13 @@ VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --com
 
 每次运行的唯一目录、`full_vm_test.log` 和 `artifacts` 路径会在退出时打印；三次 clone 尝试都受 timeout 和强制结束上限约束，所有测试现场均保留且不自动删除。已有 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE` 优先于自动导入；`VERDI_AUTO_LICENSE_IMPORT=0` 可关闭自动导入。只有当前 checkout 已经可信且位于 VM 本机文件系统时，才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
 
-工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。有 clk/无 rst 的专项在线 GUI 回归默认连续运行 20 轮，每轮都重新通过 collector 加载同一 elaborated KDB；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 填任意非标准文本的离线 GUI 专项也默认运行 20 轮，可用 `GUI_RS_CFG_DONTCARE_ITERATIONS` 覆盖。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在九份 GUI 日志中逐一硬断言该标记，其中包括 don't-care 专项的 `offline_gui_rs_cfg_dontcare.log`、partial KDB 的 `partial_load_gui.log`、逐模块自定义端口的 `online_gui_custom_port.log`，以及端口隔离回归的 `online_gui_clk_present_rst_missing.log`。
+工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。有 clk/无 rst 的专项在线 GUI 回归默认连续运行 20 轮，每轮都重新通过 collector 加载同一 elaborated KDB；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 填任意非标准文本的离线 GUI 专项也默认运行 20 轮，可用 `GUI_RS_CFG_DONTCARE_ITERATIONS` 覆盖。精确 `NA` 的离线 GUI 专项同样默认运行 20 轮，可用正整数 `GUI_RS_CFG_NA_ITERATIONS` 覆盖，日志为 `offline_gui_rs_cfg_na.log`，固定证据为 `rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none`；该用例故意保留 RTL `RS_CRG_EN=1`，同时继续执行非门控检查。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在十份 GUI 日志中逐一硬断言该标记，其中包括两个门控专项日志、partial KDB 的 `partial_load_gui.log`、逐模块自定义端口的 `online_gui_custom_port.log`，以及端口隔离回归的 `online_gui_clk_present_rst_missing.log`。
 
 GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。fresh 驱动最终调用的完整脚本会运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++` 并启动 `verdi -elab`；只有新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 `top` 才进入 NPI/GUI 检查，其他启动页或无关 Verdi 窗口不能作为就绪证据。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
 
 ## 已验证环境
 
-当前代码版本为 `0.9.1`，已在以下环境完成固定 SHA fresh-checkout 验收：
+当前代码版本为 `0.9.2`。下列环境和固定 SHA 记录先保留上一版 `0.9.1` 的已验证基线；本版结果在完成 VM fresh-checkout 后追加：
 
 ```text
 CentOS 7.9

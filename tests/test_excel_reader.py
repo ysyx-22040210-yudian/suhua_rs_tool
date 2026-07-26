@@ -157,6 +157,21 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertEqual(rows[1].rs_inst, "CTRL_RS_D0")
         self.assertEqual(rows[0].rs_cfg_en, "假门控")
 
+    def test_rs_cfg_en_na_is_trimmed_during_csv_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "specs.csv"
+            path.write_text(
+                (
+                    "Intf_type,RS_module,RS_inst,position,step,clk,rst,"
+                    "CRG_source,RS_CFG_EN\n"
+                    "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,1,clk,rst_n,crg,  NA  \n"
+                ),
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(path, self.config)
+
+        self.assertEqual(rows[0].rs_cfg_en, "NA")
+
     def test_columns_beyond_z_are_supported(self) -> None:
         self.assertEqual(column_letters_to_index("AA"), 27)
         self.assertEqual(column_letters_to_index("XFD"), 16384)
@@ -289,7 +304,15 @@ class ExcelReaderTests(unittest.TestCase):
             if cell.tag.rsplit("}", 1)[-1] != "c":
                 continue
             reference = cell.attrib.get("r", "")
-            if reference not in {"F13", "G13", "C14", "D14", "F14", "G14"}:
+            if reference not in {
+                "F13",
+                "G13",
+                "C14",
+                "D14",
+                "E14",
+                "F14",
+                "G14",
+            }:
                 continue
             guide_values[reference] = "".join(
                 (descendant.text or "")
@@ -303,8 +326,13 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertEqual(
             guide_values["D14"], "RS_CRG_EN 门控参数的兼容标签字段"
         )
+        self.assertEqual(guide_values["E14"], "假门控 / NA")
+        self.assertIn("精确填写 NA 时跳过该行全部", guide_values["F14"])
+        self.assertIn("RS_CFG_EN/RS_CRG_EN 检查", guide_values["F14"])
         self.assertIn("规则为 false 时本列不参与判定", guide_values["F14"])
-        self.assertIn("规则为 false 时任意字面内容均可", guide_values["G14"])
+        self.assertIn("仅精确大写 NA（首尾空白忽略）会跳过", guide_values["G14"])
+        self.assertIn("na、N/A 不会", guide_values["G14"])
+        self.assertIn("step、clk、rst 等其他检查仍执行", guide_values["G14"])
 
     def test_repository_excel_table_metadata_matches_visible_headers(self) -> None:
         expected = {

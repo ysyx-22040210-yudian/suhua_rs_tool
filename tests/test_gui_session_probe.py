@@ -136,6 +136,52 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn(marker, gui_smoke)
         self.assertIn("parsed-rs-cfg-en=任意非标准文本", gui_smoke)
 
+    def test_vm_flow_requires_rs_cfg_na_gui_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("--rs-cfg-na", source)
+        self.assertIn("--rs-cfg-na", gui_smoke)
+        self.assertIn("GUI_RS_CFG_NA_ITERATIONS", source)
+        self.assertIn(
+            'GUI_RS_CFG_NA_ITERATIONS="${GUI_RS_CFG_NA_ITERATIONS:-20}"',
+            source,
+        )
+        self.assertIn("offline_gui_rs_cfg_na.log", source)
+        marker = (
+            "rs-cfg-en=NA check=skipped "
+            "rtl-rs-crg-en=1 findings=none"
+        )
+        self.assertIn(marker, source)
+        self.assertIn(marker, gui_smoke)
+        self.assertIn('"RS_CRG_EN": "1"', gui_smoke)
+        self.assertIn(
+            'report_spec.get("RS_CFG_EN") != _RS_CFG_NA_TEXT', gui_smoke
+        )
+        self.assertIn(
+            'csv_rows[0].get("RS_CFG_EN") != _RS_CFG_NA_TEXT', gui_smoke
+        )
+        self.assertIn(
+            '"--rs-cfg-na is mutually exclusive with all other special modes"',
+            gui_smoke,
+        )
+        unified_log_gate = source.split("for gui_log in \\", 1)[1].split(
+            "done", 1
+        )[0]
+        gui_logs_line = next(
+            line for line in source.splitlines() if line.startswith('echo "GUI_LOGS=')
+        )
+        self.assertIn('"$RS_CFG_NA_LOG"', unified_log_gate)
+        self.assertIn("$RS_CFG_NA_LOG", gui_logs_line)
+        self.assertIn(
+            "grep -Fq 'module-rule-ports=preserved' \"$gui_log\"",
+            unified_log_gate,
+        )
+        self.assertIn(
+            "offline GUI RS_CFG_EN=NA case emitted an RS_CFG_EN_* finding",
+            source,
+        )
+
     def test_expected_clk_only_cli_failure_is_guarded_from_err_trap(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         block = source.split('CLK_ONLY_LOG="$TEST_ROOT/', 1)[1].split(

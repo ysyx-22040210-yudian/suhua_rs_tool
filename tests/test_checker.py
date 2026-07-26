@@ -451,6 +451,99 @@ class CheckerTests(unittest.TestCase):
                 codes = {item.code for item in report.rows[0].findings}
                 self.assertEqual(codes, expected_codes)
 
+    def test_na_skips_all_rs_crg_en_checks_for_module_with_parameter(self) -> None:
+        missing = object()
+        for name, parameter_value in (
+            ("zero", "0"),
+            ("nonzero", "1"),
+            ("unresolved", None),
+            ("missing", missing),
+        ):
+            with self.subTest(name=name):
+                def mutate(raw) -> None:
+                    for instance in raw["positions"]["top.u_tile"]["instances"]:
+                        if not instance["name"].startswith("AAAA_BBB"):
+                            continue
+                        if parameter_value is missing:
+                            instance["parameters"].pop("RS_CRG_EN", None)
+                        else:
+                            instance["parameters"]["RS_CRG_EN"] = parameter_value
+
+                spec = replace(self.specs[0], rs_cfg_en="NA")
+                report = check_specs(
+                    [spec], self._mutated_inventory(mutate), self.rtl, self.rules
+                )
+
+                self.assertTrue(report.passed)
+                self.assertEqual(report.rows[0].findings, ())
+                self.assertEqual(
+                    report_to_dict(report)["rows"][0]["spec"]["RS_CFG_EN"],
+                    "NA",
+                )
+
+    def test_na_skips_rs_crg_en_presence_check_for_module_without_parameter(self) -> None:
+        rule = ModuleRule(
+            name="rs_pipe",
+            has_rs_cfg_en=False,
+            step_parameters=("rs_mode",),
+            rst_port="rst",
+        )
+        for parameter_exists in (True, False):
+            with self.subTest(parameter_exists=parameter_exists):
+                def mutate(raw) -> None:
+                    if parameter_exists:
+                        return
+                    for instance in raw["positions"]["top.u_tile"]["instances"]:
+                        if instance["name"].startswith("AAAA_BBB"):
+                            instance["parameters"].pop("RS_CRG_EN", None)
+
+                spec = replace(self.specs[0], rs_cfg_en="NA")
+                report = check_specs(
+                    [spec],
+                    self._mutated_inventory(mutate),
+                    self.rtl,
+                    {"rs_pipe": rule},
+                )
+
+                self.assertTrue(report.passed)
+                self.assertEqual(report.rows[0].findings, ())
+
+    def test_rs_cfg_en_na_marker_is_case_sensitive(self) -> None:
+        for excel_value in ("na", "N/A"):
+            with self.subTest(excel_value=excel_value):
+                spec = replace(self.specs[0], rs_cfg_en=excel_value)
+                report = check_specs(
+                    [spec], self.inventory, self.rtl, self.rules
+                )
+
+                self.assertFalse(report.passed)
+                self.assertEqual(
+                    {item.code for item in report.rows[0].findings},
+                    {"RS_CFG_EN_LABEL_MISMATCH"},
+                )
+
+    def test_na_only_skips_rs_crg_en_checks(self) -> None:
+        def mutate(raw) -> None:
+            instance = raw["positions"]["top.u_tile"]["instances"][0]
+            instance["parameters"]["RS_CRG_EN"] = "1"
+            instance["ports"]["clk"]["connection"] = "top.u_tile.wrong_clk"
+            instance["ports"]["rst"]["connection"] = "top.u_tile.wrong_rst"
+
+        spec = replace(self.specs[0], rs_cfg_en="NA", step=6)
+        report = check_specs(
+            [spec], self._mutated_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(len(report.rows[0].instances), 6)
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"STEP_MISMATCH", "CLK_CONNECTION_MISMATCH", "RST_CONNECTION_MISMATCH"},
+        )
+        self.assertFalse(
+            any(item.code.startswith("RS_CFG_EN_") for item in report.rows[0].findings)
+        )
+
     def test_rs_crg_en_checks_every_instance_in_group(self) -> None:
         def mutate(raw) -> None:
             instances = raw["positions"]["top.u_tile"]["instances"]
