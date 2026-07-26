@@ -370,7 +370,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前代码版本为 `0.9.1`。本版本需在以下环境完成新的固定 SHA fresh-checkout 验收；下列既有记录对应各自固定的历史提交：
+当前代码版本为 `0.9.1`，已在以下环境完成固定 SHA fresh-checkout 验收：
 
 ```text
 CentOS 7.9
@@ -380,9 +380,11 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到 GitHub 功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：CentOS/Python 3.8 的 236 项测试全部通过且无 skip；GitHub fresh clone、partial/clean elaborated KDB、mapped Verdi/Tk GUI、专项在线 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和八日志门禁全部通过。`CLK_ONLY_RS` 的 formal ports 精确为 `clk/d/q`，`clk` 已连接且 rst 缺失时 finding 只包含 `RST_PORT_MISSING`。
+[RS_CFG_EN don't-care 与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 固定到 GitHub 功能与门禁提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：CentOS/Python 3.8 的 240 项测试全部通过且无 skip；GitHub fresh clone、partial/clean elaborated KDB、mapped Verdi/Tk GUI、don't-care 专项 20 轮、无 rst 专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九日志门禁全部通过。专项确认 Excel/internal `RS_CFG_EN=任意非标准文本` 进入报告，`has_rs_cfg_en=false`、RTL `RS_CRG_EN` 不存在且 findings 为空。
 
 下列记录属于更早功能版本，仅用于历史对照：
+
+[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到 GitHub 功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：CentOS/Python 3.8 的 236 项测试全部通过且无 skip；GitHub fresh clone、partial/clean elaborated KDB、mapped Verdi/Tk GUI、专项在线 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和当时的八日志门禁全部通过。`CLK_ONLY_RS` 的 formal ports 精确为 `clk/d/q`，`clk` 已连接且 rst 缺失时 finding 只包含 `RST_PORT_MISSING`。
 
 [逐模块 clk/rst 端口与 CRG 暂停判定验证记录（2026-07-26）](docs/TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 固定到 GitHub 功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`：Windows 233 项回归中 189 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 233 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、Verdi GUI、在线自定义 `clock_i/reset_ni`、错误 `CRG_source` 仍 PASS、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过。
 

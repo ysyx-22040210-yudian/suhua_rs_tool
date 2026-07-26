@@ -624,7 +624,7 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与专项在线 GUI 连续 20 轮只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和该历史提交当时的 8 个 GUI 日志门禁也全部通过；当前门禁已扩展为上文九份日志，不能用该旧记录代替复测。本轮 Verdi 和 rscheck Tk 窗口均为 mapped；resolver 从实际桌面会话取得 `DISPLAY=:0`，不要求 GNOME 或 `gnome-session-binary`。
+当前代码版本为 `0.9.1`。[RS_CFG_EN don't-care 与 VM GUI 压测验证记录](TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 固定到功能与门禁提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 240 项全部通过且无 skip；partial/clean KDB、mapped Verdi/Tk GUI、`has_rs_cfg_en=false` / Excel 任意文本专项 20 轮、clk 存在/rst 缺失专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九份 GUI 日志门禁全部通过。GUI resolver 从实际桌面进程取得 `DISPLAY=:0`，不要求 GNOME 或 `gnome-session-binary`。更早的 [clk 存在、rst 缺失 finding 隔离记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到历史功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`。
 
 下述 [逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 是本轮 finding 隔离修复之前的 `0.9.0` 历史基线，固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`。[RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线。
 
