@@ -82,6 +82,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
 GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
+GUI_RS_CFG_DONTCARE_ITERATIONS="${GUI_RS_CFG_DONTCARE_ITERATIONS:-20}"
 GUI_STRESS_ITERATIONS="${GUI_STRESS_ITERATIONS:-100}"
 GUI_LOAD_ROWS="${GUI_LOAD_ROWS:-10000}"
 GUI_VISIBLE_SECONDS="${GUI_VISIBLE_SECONDS:-2}"
@@ -310,6 +311,7 @@ for numeric_setting in \
   "$NPI_TIMEOUT" \
   "$GUI_ONLINE_ITERATIONS" \
   "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
+  "$GUI_RS_CFG_DONTCARE_ITERATIONS" \
   "$GUI_STRESS_ITERATIONS" \
   "$GUI_LOAD_ROWS" \
   "$GUI_VISIBLE_SECONDS"; do
@@ -322,6 +324,8 @@ done
 [ "$GUI_ONLINE_ITERATIONS" -gt 0 ] || fail "GUI_ONLINE_ITERATIONS must be greater than zero"
 [ "$GUI_CLK_WITHOUT_RST_ITERATIONS" -gt 0 ] ||
   fail "GUI_CLK_WITHOUT_RST_ITERATIONS must be greater than zero"
+[ "$GUI_RS_CFG_DONTCARE_ITERATIONS" -gt 0 ] ||
+  fail "GUI_RS_CFG_DONTCARE_ITERATIONS must be greater than zero"
 [ "$GUI_STRESS_ITERATIONS" -gt 0 ] || fail "GUI_STRESS_ITERATIONS must be greater than zero"
 [ "$GUI_LOAD_ROWS" -gt 0 ] || fail "GUI_LOAD_ROWS must be greater than zero"
 
@@ -1288,6 +1292,22 @@ grep -Fq \
   "$DEFAULT_RULE_LOG"
 grep -Fq 'schemas=report-v3/inventory-v2' "$DEFAULT_RULE_LOG"
 
+RS_CFG_DONTCARE_LOG="$TEST_ROOT/offline_gui_rs_cfg_dontcare.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --rs-cfg-dontcare \
+  --iterations "$GUI_RS_CFG_DONTCARE_ITERATIONS" \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$RS_CFG_DONTCARE_LOG"
+grep -Fq \
+  "state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=rs-cfg-dontcare iterations=$GUI_RS_CFG_DONTCARE_ITERATIONS" \
+  "$RS_CFG_DONTCARE_LOG"
+grep -Fq \
+  'has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none' \
+  "$RS_CFG_DONTCARE_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$RS_CFG_DONTCARE_LOG"
+
 OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
@@ -1324,12 +1344,14 @@ for gui_log in \
   "$PARTIAL_GUI_LOG" \
   "$ONLINE_NEGATIVE_LOG" \
   "$DEFAULT_RULE_LOG" \
+  "$RS_CFG_DONTCARE_LOG" \
   "$OFFLINE_STRESS_LOG" \
   "$OFFLINE_LOAD_LOG"; do
   grep -Fq 'header-map=column-index strict-header=false' "$gui_log"
   grep -Fq \
     'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' \
     "$gui_log"
+  grep -Fq 'schemas=report-v3/inventory-v2' "$gui_log"
 done
 
 assert_no_unexpected_collector_logs
@@ -1342,7 +1364,7 @@ echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then

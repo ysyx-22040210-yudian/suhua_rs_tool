@@ -120,6 +120,22 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("finding-codes=RST_PORT_MISSING", source)
         self.assertIn("GUI_CLK_WITHOUT_RST_ITERATIONS", source)
 
+    def test_vm_flow_requires_rs_cfg_dontcare_gui_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("--rs-cfg-dontcare", source)
+        self.assertIn("--rs-cfg-dontcare", gui_smoke)
+        self.assertIn("GUI_RS_CFG_DONTCARE_ITERATIONS", source)
+        self.assertIn("offline_gui_rs_cfg_dontcare.log", source)
+        marker = (
+            "has-rs-cfg-en=false label=dont-care "
+            "rs-crg-en=absent findings=none"
+        )
+        self.assertIn(marker, source)
+        self.assertIn(marker, gui_smoke)
+        self.assertIn("parsed-rs-cfg-en=任意非标准文本", gui_smoke)
+
     def test_expected_clk_only_cli_failure_is_guarded_from_err_trap(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         block = source.split('CLK_ONLY_LOG="$TEST_ROOT/', 1)[1].split(

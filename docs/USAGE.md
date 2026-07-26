@@ -539,7 +539,7 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 “检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。`spec.CRG_source` 仍可查看，但不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`。端到端脚本会对八份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log` 和 `online_gui_clk_present_rst_missing.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 为任意非标准文本的离线 GUI 专项也默认执行 20 轮，要求文本进入报告但不产生 finding。端到端脚本会对九份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log`、`online_gui_clk_present_rst_missing.log` 和 `offline_gui_rs_cfg_dontcare.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 

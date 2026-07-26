@@ -254,6 +254,20 @@ cd "$PROJECT_ROOT"
 
 预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100 window=mapped window_id=0x...`、`header-map=column-index strict-header=false`、`module-rule-ports=preserved`、固定 config-io marker、`position-map=tile_core->top.u_tile npi-positions=full-path-only`、结果页 2 行 PASS、0 error、0 warning。每轮 report 必须保留 alias、`CRG_source` 和最终 `clk_port/rst_port`，inventory positions 只能包含 `top.u_tile`；首组应显示 physical=6、effective/expected=5/5，逐实例贡献为 `[1,1,0,1,1,1]`，所有匹配实例的门控参数证据必须为 `parameters.RS_CRG_EN="0"`。旧 fixture 的 `clk_sources` 即使非空也不参与判定。离线 inventory 必须为 schema v2，生成的 report 必须为 schema v3。
 
+`has_rs_cfg_en=false` / Excel 任意文本专项连续 20 轮：
+
+```bash
+cd "$PROJECT_ROOT"
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --rs-cfg-dontcare \
+  --iterations 20 \
+  --visible-tab results \
+  --visible-seconds 10
+```
+
+专项故意把 Excel/internal `RS_CFG_EN` 写成任意非标准文本，同时让实例 parameters 不含 `RS_CRG_EN`。预期为 `GUI_SMOKE_PASS`、1 行 PASS、0 error、0 warning，并包含 `mode=offline case=rs-cfg-dontcare iterations=20`、`has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none` 和文本证据 `parsed-rs-cfg-en=任意非标准文本`。GUI 和 report 必须保留解析后的 Excel 文本，`module_rule.has_rs_cfg_en=false`，findings 为空；不能产生 `RS_CFG_EN_LABEL_MISMATCH`。一键脚本通过 `GUI_RS_CFG_DONTCARE_ITERATIONS` 控制轮数，默认 20，并把日志保存为 `offline_gui_rs_cfg_dontcare.log`。
+
 可见离线反例：
 
 ```bash
@@ -531,7 +545,7 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。fresh 驱动另支持 `VM_RUN_BASE` 和 `CLONE_TIMEOUT`；直接运行正式脚本时还可设置 `OUTPUT_BASE`，fresh 驱动会固定覆盖为本轮 `artifacts`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。普通在线正例默认 3 轮，有 clk/无 rst 的专项在线 GUI 默认 20 轮；离线稳定性默认 100 轮，负载默认 10,000 行。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`，`NPI_L1_INC_DIR` 必须含 `npi_L1.h`，`NPI_L1_LIB_DIR` 必须直接包含 `libnpiL1.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_RS_CFG_DONTCARE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。fresh 驱动另支持 `VM_RUN_BASE` 和 `CLONE_TIMEOUT`；直接运行正式脚本时还可设置 `OUTPUT_BASE`，fresh 驱动会固定覆盖为本轮 `artifacts`。默认 `VERDI_READY_REGEX` 匹配 nTrace 主窗口标题中的 `top`；若 Verdi 版本标题格式不同，可显式覆盖，但表达式仍必须标识已展开目标 top。普通在线正例默认 3 轮，有 clk/无 rst 的专项在线 GUI 默认 20 轮；`has_rs_cfg_en=false` / Excel 任意文本离线 GUI 专项默认 20 轮；离线稳定性默认 100 轮，负载默认 10,000 行。各轮次变量必须是十进制正整数。`NPI_LIB_DIR` 必须直接包含 `libNPI.so`，`NPI_L1_INC_DIR` 必须含 `npi_L1.h`，`NPI_L1_LIB_DIR` 必须直接包含 `libnpiL1.so`；默认退出时关闭本次启动的 Verdi，设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 成功输出应包含：
 
@@ -552,12 +566,13 @@ finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent
 CRG_source evidence retained without PASS/FAIL validation
 GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port ... rule-ports=clock_i/reset_ni ...
 GUI_SMOKE_PASS: state=FAIL rows=行数 1 errors=错误 1 warnings=警告 0 mode=online case=clk-present-rst-missing iterations=20 ... clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING ...
+GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=rs-cfg-dontcare iterations=20 ... has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none parsed-rs-cfg-en=任意非标准文本 ...
 config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 module-rule-ports=preserved
 PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed.
 ```
 
-正式脚本不会只检查一次 marker。它对以下八份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
+正式脚本不会只检查一次 marker。它对以下九份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
 
 ```text
 online_gui_positive.log
@@ -566,11 +581,12 @@ online_gui_clk_present_rst_missing.log
 partial_load_gui.log
 online_gui_negative.log
 offline_gui_default_rule.log
+offline_gui_rs_cfg_dontcare.log
 offline_gui_100_rounds.log
 offline_gui_10000_rows.log
 ```
 
-八份日志都必须包含完全相同的 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules` 和 `module-rule-ports=preserved`。其中 `partial_load_gui.log` 明确门禁 partial KDB 路径；`online_gui_custom_port.log` 还必须包含 `mode=online case=custom-port` 和 `rule-ports=clock_i/reset_ni`；`online_gui_clk_present_rst_missing.log` 必须包含 `case=clk-present-rst-missing`、`clk-port-evidence=present`、`rst-port-evidence=missing` 和 `finding-codes=RST_PORT_MISSING`，并且不得出现 `CLK_PORT_MISSING`。这证明 clean/partial、普通正例、自定义端口、端口隔离反例、普通反例、默认规则、稳定性和负载入口都实际经过同一套完整配置导入/导出合同，且逐模块端口名没有在往返中丢失。
+九份日志都必须包含完全相同的 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules` 和 `module-rule-ports=preserved`。其中 `partial_load_gui.log` 明确门禁 partial KDB 路径；`online_gui_custom_port.log` 还必须包含 `mode=online case=custom-port` 和 `rule-ports=clock_i/reset_ni`；`online_gui_clk_present_rst_missing.log` 必须包含 `case=clk-present-rst-missing`、`clk-port-evidence=present`、`rst-port-evidence=missing` 和 `finding-codes=RST_PORT_MISSING`，并且不得出现 `CLK_PORT_MISSING`；`offline_gui_rs_cfg_dontcare.log` 必须包含 `case=rs-cfg-dontcare` 和 `has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none`。这证明 clean/partial、普通正例、自定义端口、端口隔离反例、普通反例、默认规则、`has_rs_cfg_en=false` 的 Excel 任意文本 don't-care、稳定性和负载入口都实际经过同一套完整配置导入/导出合同，且逐模块端口名没有在往返中丢失。
 
 正例第 3 行故意把完整本地例化名 `CTRL_RS_D0` 填入 `RS_inst`。该行通过证明空 remainder 合法，而且实例仍完成 module、parameters、step 和逐模块 clk/rst 检查；`CRG_source` 仅作为报告证据。这里不能改填 `top.u_tile.CTRL_RS_D0`。空后缀实例不参与 tag/index/连续编号检查。若同一 scope 另有符合 suffix 规则的 `CTRL_RS_D0_*数字`，较短的 `RS_inst=CTRL_RS_D0` 仍会按前缀语义一并匹配，当前没有 exact-only 模式。
 
@@ -608,7 +624,7 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与专项在线 GUI 连续 20 轮只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和八份 GUI 日志门禁也全部通过。本轮 Verdi 和 rscheck Tk 窗口均为 mapped；resolver 从实际桌面会话取得 `DISPLAY=:0`，不要求 GNOME 或 `gnome-session-binary`。
+当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与专项在线 GUI 连续 20 轮只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和该历史提交当时的 8 个 GUI 日志门禁也全部通过；当前门禁已扩展为上文九份日志，不能用该旧记录代替复测。本轮 Verdi 和 rscheck Tk 窗口均为 mapped；resolver 从实际桌面会话取得 `DISPLAY=:0`，不要求 GNOME 或 `gnome-session-binary`。
 
 下述 [逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 是本轮 finding 隔离修复之前的 `0.9.0` 历史基线，固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`。[RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线。
 

@@ -22,6 +22,7 @@
 | R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
 | R5 | Windows / Linux / macOS + Tk | GUI 完整配置导出、导入与事务回归 | `0` | 五个根对象完整往返；副本、dirty、搜索过滤、同路径拒绝及无效/取消/拒绝原子性均通过，输出固定 config-io marker |
 | R6 | Linux + Verdi/NPI + Tk | 有 clk、无 rst 的 GUI 在线隔离回归 | `0` | 默认 20 轮；每轮被测行均为预期 FAIL、1 error，finding 精确为 `RST_PORT_MISSING`，不得出现 `CLK_PORT_MISSING`/`CLK_UNCONNECTED` |
+| R7 | Linux + X11/Xwayland + Tk | `has_rs_cfg_en=false` 的 Excel 任意文本 GUI 专项 | `0` | 默认 20 轮；每轮 1 行 PASS、0 error、0 warning，原始 `RS_CFG_EN` 文本保留，RTL 无 `RS_CRG_EN` 且 findings 为空 |
 | C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
@@ -457,6 +458,30 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 ```
 
 每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.9.1` 必须重新运行并出现 config-io marker。
+
+`has_rs_cfg_en=false` 的 GUI 专项故意在 Excel/internal `RS_CFG_EN` 中写入任意非标准文本，并让离线 inventory 中的实例不含 `RS_CRG_EN`。下面默认连续运行 20 轮并保留“检查结果”页；每轮都必须 PASS，GUI/JSON report 必须保留解析后的 Excel 文本，同时不得产生 `RS_CFG_EN_LABEL_MISMATCH` 或其他 finding：
+
+```bash
+(
+set -e
+set -o pipefail
+cd "$PROJECT_ROOT"
+RS_CFG_DONTCARE_GUI_LOG="$(mktemp /tmp/rscheck_gui_rs_cfg_dontcare.XXXXXX.log)"
+"$PYTHON_BIN" scripts/test_rscheck_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --rs-cfg-dontcare \
+  --iterations 20 \
+  --visible-tab results \
+  --visible-seconds 10 \
+  2>&1 | tee "$RS_CFG_DONTCARE_GUI_LOG"
+grep -F 'mode=offline case=rs-cfg-dontcare iterations=20 window=mapped' "$RS_CFG_DONTCARE_GUI_LOG"
+grep -F 'has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none' "$RS_CFG_DONTCARE_GUI_LOG"
+grep -F 'parsed-rs-cfg-en=任意非标准文本' "$RS_CFG_DONTCARE_GUI_LOG"
+grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' "$RS_CFG_DONTCARE_GUI_LOG"
+)
+```
+
+一键 VM 脚本把相同专项写入 `offline_gui_rs_cfg_dontcare.log`，默认轮次由 `GUI_RS_CFG_DONTCARE_ITERATIONS=20` 控制；该变量必须是十进制正整数。专项仍执行完整配置导入/导出、report v3/inventory v2 和结果页可见性门禁，而不是只调用 checker。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -1324,7 +1349,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、带 NPI L1 的 collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 普通正例、自定义 `clock_i/reset_ni` 正例、有 clk/无 rst 的 20 轮 finding 隔离回归和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、全部 formal ports、`clk_sources=[]`、inventory v2/report v3、逐模块 `clk_port/rst_port`、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。每次 GUI smoke 还会完成 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五根配置的完整导出/导入往返。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。有 clk/无 rst 的 CLI/GUI 行必须 FAIL 且 finding 精确为 `RST_PORT_MISSING`。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、带 NPI L1 的 collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 普通正例、自定义 `clock_i/reset_ni` 正例、有 clk/无 rst 的 20 轮 finding 隔离回归和反例、`has_rs_cfg_en=false` 且 Excel 任意文本的 20 轮离线 GUI 专项、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、全部 formal ports、`clk_sources=[]`、inventory v2/report v3、逐模块 `clk_port/rst_port`、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。每次 GUI smoke 还会完成 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五根配置的完整导出/导入往返。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。有 clk/无 rst 的 CLI/GUI 行必须 FAIL 且 finding 精确为 `RST_PORT_MISSING`；don't-care 专项必须为 1 行 PASS、0 error、0 warning，保留 Excel 原文且 findings 为空。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
 真实 NPI 端口与 CRG 暂停判定成功时还必须出现：
 
@@ -1336,9 +1361,10 @@ finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent
 CRG_source evidence retained without PASS/FAIL validation
 GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port ... rule-ports=clock_i/reset_ni ...
 GUI_SMOKE_PASS: state=FAIL rows=行数 1 errors=错误 1 warnings=警告 0 mode=online case=clk-present-rst-missing iterations=20 ... clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING ...
+GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=rs-cfg-dontcare iterations=20 ... has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none parsed-rs-cfg-en=任意非标准文本 ...
 ```
 
-VM 脚本对以下八份 GUI 日志逐一执行硬断言；缺少任意一份日志中的固定 marker 都会使脚本非零退出：
+VM 脚本对以下九份 GUI 日志逐一执行硬断言；缺少任意一份日志中的固定 marker 都会使脚本非零退出：
 
 ```text
 online_gui_positive.log
@@ -1347,6 +1373,7 @@ online_gui_clk_present_rst_missing.log
 partial_load_gui.log
 online_gui_negative.log
 offline_gui_default_rule.log
+offline_gui_rs_cfg_dontcare.log
 offline_gui_100_rounds.log
 offline_gui_10000_rows.log
 ```
@@ -1357,7 +1384,7 @@ offline_gui_10000_rows.log
 config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-八份日志还必须包含 `module-rule-ports=preserved`。其中 `partial_load_gui.log` 证明 partial KDB GUI 路径也完成同一配置往返；`online_gui_clk_present_rst_missing.log` 还必须包含 `case=clk-present-rst-missing`、`clk-port-evidence=present`、`rst-port-evidence=missing` 和 `finding-codes=RST_PORT_MISSING`，并且全文不得出现 `CLK_PORT_MISSING`。
+九份日志还必须包含 `module-rule-ports=preserved`。其中 `partial_load_gui.log` 证明 partial KDB GUI 路径也完成同一配置往返；`online_gui_clk_present_rst_missing.log` 还必须包含 `case=clk-present-rst-missing`、`clk-port-evidence=present`、`rst-port-evidence=missing` 和 `finding-codes=RST_PORT_MISSING`，并且全文不得出现 `CLK_PORT_MISSING`；`offline_gui_rs_cfg_dontcare.log` 必须包含 `case=rs-cfg-dontcare` 和 `has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none`，证明 Excel 任意文本已进入报告但未参与 PASS/FAIL。
 
 在当前 shell 已能正常启动 Verdi 的图形 shell 中执行。正式 VM 复现推荐使用仓库外层 fresh-checkout 驱动；它默认测试克隆时的 `origin/main`，运行根目录位于当前用户 `$HOME`，也可用 `VM_RUN_BASE` 的绝对路径指向其他可写目录：
 
@@ -1385,12 +1412,12 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 | Verdi 就绪 | `GUI_START_TIMEOUT`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX` |
 | 测试工具链 | `PYTHON_BIN`、`CXX` |
 | 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` |
-| GUI 压测规模 | `GUI_ONLINE_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS` |
+| GUI 压测规模 | `GUI_ONLINE_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_RS_CFG_DONTCARE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS` |
 | fresh 运行目录 | `VM_RUN_BASE`（绝对路径） |
 | 站点环境/license | `VERDI_ENV_FILE`（绝对路径）、`VERDI_AUTO_LICENSE_IMPORT` |
 
-`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。`GUI_ONLINE_ITERATIONS` 的普通在线正例默认值为 3；`GUI_CLK_WITHOUT_RST_ITERATIONS` 的有 clk/无 rst 专项在线回归默认值为 20。端到端脚本构建时将四个 NPI/NPI L1 目录传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
+`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。`GUI_ONLINE_ITERATIONS` 的普通在线正例默认值为 3；`GUI_CLK_WITHOUT_RST_ITERATIONS` 的有 clk/无 rst 专项在线回归默认值为 20；`GUI_RS_CFG_DONTCARE_ITERATIONS` 的 `has_rs_cfg_en=false` / Excel 任意文本离线 GUI 专项默认值也为 20。三个变量都必须是十进制正整数。端到端脚本构建时将四个 NPI/NPI L1 目录传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与 20 轮在线 GUI 只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和八份 GUI 日志门禁也全部通过。
+当前代码版本为 `0.9.1`，需要为本版本生成新的固定 SHA 验证记录。[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 236 项全部通过且无 skip；partial/clean KDB 均采到 `CLK_ONLY_RS={clk,d,q}`，其 `clk` 已连接而 rst 缺失时，CLI 与 20 轮在线 GUI 只产生 `RST_PORT_MISSING`。普通在线 3 轮、离线 100 轮、10,000 行负载和该历史提交当时的 8 个 GUI 日志门禁也全部通过；当前门禁已扩展为上文九份日志，不能用该旧记录代替复测。
 
 下述 [逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 是本轮 finding 隔离修复之前的 `0.9.0` 历史基线，固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`。[RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。
