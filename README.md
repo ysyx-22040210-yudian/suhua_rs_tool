@@ -357,7 +357,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前功能版本 `0.8.0` 已于 2026-07-26 按上述 marker 和六日志门禁完成 fresh-checkout 验收：
+当前功能版本 `0.8.1` 已于 2026-07-26 按上述 marker 和六日志门禁完成 fresh-checkout 验收：
 
 ```text
 CentOS 7.9
@@ -367,7 +367,9 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[GUI 完整配置导入导出与 VM 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CONFIG_IO_2026-07-26.md) 固定到 GitHub 提交 `d416493648aaffd446ca46bad2f994e5a131d06d`：Windows 220 项回归中 176 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 220 项全部通过且无 skip；partial/clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部包含完整配置往返 marker。
+[RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows 223 项回归中 179 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN` 证据、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。
+
+[GUI 完整配置导入导出与 VM 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CONFIG_IO_2026-07-26.md) 是本次 RTL parameter 改名之前的 `0.8.0` 历史基线。
 
 [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md) 是完整配置导入/导出之前的 `0.7.1` 历史基线。
 

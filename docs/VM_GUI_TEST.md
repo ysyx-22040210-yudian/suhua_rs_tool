@@ -547,8 +547,8 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前 `0.8.0` 验收见 [GUI 完整配置导入导出与 VM 压测验证记录](TEST_RESULTS_CONFIG_IO_2026-07-26.md)，固定到 GitHub 提交 `d416493648aaffd446ca46bad2f994e5a131d06d`：Windows `Ran 220 tests`、`OK (skipped=44)`，即 176 项执行通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 220 项全部通过且无 skip；partial/clean KDB、Verdi GUI、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部命中五根配置 round-trip marker。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md` 是 `0.7.1` 历史基线。
+当前 `0.8.1` 验收见 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md)，固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows `Ran 223 tests`、`OK (skipped=44)`，即 179 项执行通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN`、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部命中五根配置 round-trip marker。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线。
 
-`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
+`TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`、`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 
 具体 VM 每次压力和在线 smoke 的终端输出应随提交一起记录在测试说明或提交信息中，但不得包含主机、密码、license 或会话认证路径。
