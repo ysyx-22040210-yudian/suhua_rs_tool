@@ -302,8 +302,14 @@ branched_nodes = {
 direct_aux_nodes = {(aux, "crg_aux", 1, (aux,))}
 
 
-def assert_trace(instance_name, clock_port, expected_nodes, expected_status):
-    instance = instances.get(instance_name)
+def assert_trace(
+    instance_name,
+    clock_port,
+    expected_nodes,
+    expected_status,
+    instance_map=instances,
+):
+    instance = instance_map.get(instance_name)
     if not isinstance(instance, dict):
         raise SystemExit(
             "{} inventory is missing instance {}".format(
@@ -354,11 +360,48 @@ for name in ["AAAA_BBB_C{}".format(index) for index in range(6)]:
 assert_trace("CUSTOM_RS", "clock_i", branched_nodes, "complete")
 assert_trace("CLK_ONLY_RS", "clk", branched_nodes, "complete")
 assert_trace("CTRL_RS_D0", "clk", direct_aux_nodes, "complete")
+
+peer_position = inventory.get("positions", {}).get("top.u_tile_peer", {})
+if peer_position.get("found") is not True:
+    raise SystemExit(
+        "{} inventory did not find top.u_tile_peer".format(inventory_label)
+    )
+peer_instances = {
+    instance.get("name"): instance
+    for instance in peer_position.get("instances", [])
+    if isinstance(instance, dict)
+}
+peer_occ = "top.u_tile_peer.u_occ"
+peer_mux = "top.u_tile_peer.u_clk_mux"
+peer_core = "top.u_tile_peer.u_crg"
+peer_aux = "top.u_tile_peer.u_aux_crg"
+peer_branched_nodes = {
+    (peer_occ, "clk_occ", 1, (peer_occ,)),
+    (peer_mux, "clk_mux", 2, (peer_occ, peer_mux)),
+    (peer_core, "crg_core", 3, (peer_occ, peer_mux, peer_core)),
+    (peer_aux, "crg_aux", 3, (peer_occ, peer_mux, peer_aux)),
+}
+peer_direct_aux_nodes = {(peer_aux, "crg_aux", 1, (peer_aux,))}
+for name in ["AAAA_BBB_C{}".format(index) for index in range(6)]:
+    assert_trace(name, "clk", peer_branched_nodes, "complete", peer_instances)
+assert_trace(
+    "CUSTOM_RS", "clock_i", peer_branched_nodes, "complete", peer_instances
+)
+assert_trace(
+    "CLK_ONLY_RS", "clk", peer_branched_nodes, "complete", peer_instances
+)
+assert_trace(
+    "CTRL_RS_D0", "clk", peer_direct_aux_nodes, "complete", peer_instances
+)
 print(
     "{} NPI clock trace evidence OK: "
     "RS->u_occ->u_clk_mux->{{u_crg,u_aux_crg}}, custom clock_i, witness-depth=3".format(
         inventory_label
     )
+)
+print(
+    "{} trace cache scope isolation OK: top.u_tile and top.u_tile_peer "
+    "contain only their own same-named clock cones".format(inventory_label)
 )
 PY
 }
@@ -614,7 +657,7 @@ cd "$PARTIAL_ELAB_ROOT"
   -sv "$PROJECT_ROOT/examples/rtl/rs_example.sv"
 "$ELABCOM_BIN" -top top -elab "$PARTIAL_ELAB_DB"
 [ -d "$PARTIAL_ELAB_DB" ] || fail "partial-load elabcom did not create a KDB"
-printf 'top.u_tile\n' >"$PARTIAL_POSITIONS"
+printf 'top.u_tile\ntop.u_tile_peer\n' >"$PARTIAL_POSITIONS"
 write_sample_trace_rules "$PARTIAL_TRACE_RULES"
 
 set +e
@@ -824,7 +867,7 @@ POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
 POS_LOG="$TEST_ROOT/positive_console.log"
 
-printf 'top.u_tile\n' >"$CLEAN_POSITIONS"
+printf 'top.u_tile\ntop.u_tile_peer\n' >"$CLEAN_POSITIONS"
 write_sample_trace_rules "$CLEAN_TRACE_RULES"
 LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$COLLECTOR" \

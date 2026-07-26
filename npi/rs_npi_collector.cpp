@@ -1077,9 +1077,11 @@ class Collector {
     }
   }
 
-  bool trace_language_input_ports(const ModuleFrontier& current,
-                                  std::deque<ModuleFrontier>* queue,
-                                  TraceState* state) {
+  bool trace_language_input_ports(
+      const ModuleFrontier& current,
+      const std::set<std::string>& netlist_resolved_ports,
+      std::set<std::string>* fallback_classified_ports,
+      std::deque<ModuleFrontier>* queue, TraceState* state) {
     std::map<std::string, PortInfo> ports;
     npiHandle module = npi_handle_by_name(current.instance.c_str(), NULL);
     if (module != NULL) {
@@ -1087,7 +1089,12 @@ class Collector {
       if (iterator != NULL) {
         npiHandle port = NULL;
         while ((port = npi_scan(iterator)) != NULL) {
-          merge_trace_language_port(port, current.instance, &ports, state);
+          const std::string name = language_string(npiName, port);
+          if (name.empty() ||
+              netlist_resolved_ports.find(name) ==
+                  netlist_resolved_ports.end()) {
+            merge_trace_language_port(port, current.instance, &ports, state);
+          }
           npi_release_handle(port);
         }
       }
@@ -1104,7 +1111,12 @@ class Collector {
       if (*port == NULL) {
         continue;
       }
-      merge_trace_language_port(*port, current.instance, &ports, state);
+      const std::string name = language_string(npiName, *port);
+      if (name.empty() ||
+          netlist_resolved_ports.find(name) ==
+              netlist_resolved_ports.end()) {
+        merge_trace_language_port(*port, current.instance, &ports, state);
+      }
       npi_release_handle(*port);
     }
 
@@ -1114,10 +1126,15 @@ class Collector {
     unsigned int unknown_directions = 0;
     for (std::map<std::string, PortInfo>::const_iterator port = ports.begin();
          port != ports.end(); ++port) {
+      if (netlist_resolved_ports.find(port->first) !=
+          netlist_resolved_ports.end()) {
+        continue;
+      }
       if (!port->second.has_direction) {
         ++unknown_directions;
         continue;
       }
+      fallback_classified_ports->insert(port->first);
       if (port->second.direction != npiInput || port->first == "clk" ||
           port->first == "rst_n") {
         continue;
@@ -1149,7 +1166,10 @@ class Collector {
                                     npiNlHandle instance,
                                     const ModuleFrontier& current,
                                     unsigned int* scanned_ports,
-                                    unsigned int* unknown_directions,
+                                    std::set<std::string>* classified_ports,
+                                    std::set<std::string>* resolved_ports,
+                                    std::set<std::string>* unknown_ports,
+                                    unsigned int* unnamed_unknown_ports,
                                     std::deque<ModuleFrontier>* queue,
                                     TraceState* state) {
     npiNlHandle iterator = npi_nl_iterate(relation, instance);
@@ -1160,20 +1180,38 @@ class Collector {
     while ((port = npi_nl_scan(iterator)) != NULL) {
       ++(*scanned_ports);
       const NPI_INT32 direction = npi_nl_get(npiNlDirection, port);
+      const std::string name = netlist_string(npiNlName, port);
+      if (direction == npiNlInput || direction == npiNlOutput ||
+          direction == npiNlInout) {
+        if (!name.empty()) {
+          classified_ports->insert(name);
+        }
+      }
       if (direction != npiNlInput) {
-        if (direction != npiNlOutput && direction != npiNlInout) {
-          ++(*unknown_directions);
+        if (direction == npiNlOutput || direction == npiNlInout) {
+          if (!name.empty()) {
+            resolved_ports->insert(name);
+          }
+        } else {
+          if (name.empty()) {
+            ++(*unnamed_unknown_ports);
+          } else {
+            unknown_ports->insert(name);
+          }
         }
         npi_nl_release_handle(port);
         continue;
       }
-      const std::string name = netlist_string(npiNlName, port);
       if (name == "clk" || name == "rst_n") {
+        resolved_ports->insert(name);
         npi_nl_release_handle(port);
         continue;
       }
       std::vector<ModuleHit> hits;
       discover_upstream_modules(port, current.depth, &hits, state);
+      if (!hits.empty() && !name.empty()) {
+        resolved_ports->insert(name);
+      }
       append_module_hits(hits, current.depth + 1, current.path, queue, state);
       npi_nl_release_handle(port);
     }
@@ -1191,7 +1229,10 @@ class Collector {
     state->expanded_module_depth[current.instance] = current.depth;
 
     unsigned int scanned_ports = 0;
-    unsigned int unknown_directions = 0;
+    unsigned int unnamed_unknown_ports = 0;
+    std::set<std::string> netlist_classified_ports;
+    std::set<std::string> netlist_resolved_ports;
+    std::set<std::string> netlist_unknown_ports;
     npiNlHandle instance =
         npi_nl_handle_by_name(current.instance.c_str(), npiNlInst);
     if (instance == NULL) {
@@ -1201,10 +1242,12 @@ class Collector {
     if (instance != NULL) {
       trace_netlist_input_relation(
           npiNlInstPort, instance, current, &scanned_ports,
-          &unknown_directions, queue, state);
+          &netlist_classified_ports, &netlist_resolved_ports,
+          &netlist_unknown_ports, &unnamed_unknown_ports, queue, state);
       trace_netlist_input_relation(
           npiNlPseudoInstPort, instance, current, &scanned_ports,
-          &unknown_directions, queue, state);
+          &netlist_classified_ports, &netlist_resolved_ports,
+          &netlist_unknown_ports, &unnamed_unknown_ports, queue, state);
       npi_nl_release_handle(instance);
     }
 
@@ -1212,10 +1255,29 @@ class Collector {
     // Always merge the Language Model/L1 view so omitted input branches are
     // still traversed.  A complete Netlist view remains usable when that
     // fallback is unavailable.
-    const bool fallback_available =
-        trace_language_input_ports(current, queue, state);
-    if (!fallback_available &&
-        (scanned_ports == 0 || unknown_directions != 0)) {
+    std::set<std::string> fallback_classified_ports;
+    const bool fallback_available = trace_language_input_ports(
+        current, netlist_resolved_ports, &fallback_classified_ports, queue,
+        state);
+    unsigned int unresolved_unknown_ports = unnamed_unknown_ports;
+    for (std::set<std::string>::const_iterator name =
+             netlist_unknown_ports.begin();
+         name != netlist_unknown_ports.end(); ++name) {
+      if (netlist_classified_ports.find(*name) ==
+              netlist_classified_ports.end() &&
+          fallback_classified_ports.find(*name) ==
+              fallback_classified_ports.end()) {
+        ++unresolved_unknown_ports;
+      }
+    }
+    if (unresolved_unknown_ports != 0) {
+      std::ostringstream message;
+      message << "NPI Netlist returned " << unresolved_unknown_ports
+              << " intermediate port(s) with unknown direction for module: "
+              << current.instance;
+      mark_trace_unresolved(state, message.str());
+    }
+    if (!fallback_available && scanned_ports == 0) {
       mark_trace_unresolved(
           state, "NPI could not enumerate input ports for upstream module: " +
                      current.instance);

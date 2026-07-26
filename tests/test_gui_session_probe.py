@@ -161,6 +161,10 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn('mux = "top.u_tile.u_clk_mux"', source)
         self.assertIn('core = "top.u_tile.u_crg"', source)
         self.assertIn('aux = "top.u_tile.u_aux_crg"', source)
+        self.assertIn('peer_occ = "top.u_tile_peer.u_occ"', source)
+        self.assertIn('peer_core = "top.u_tile_peer.u_crg"', source)
+        self.assertIn("top.u_tile\\ntop.u_tile_peer\\n", source)
+        self.assertIn("trace cache scope isolation OK", source)
         self.assertIn('assert_trace("CUSTOM_RS", "clock_i"', source)
         self.assertIn("--crg-trace-max-depth 3", source)
         self.assertIn(

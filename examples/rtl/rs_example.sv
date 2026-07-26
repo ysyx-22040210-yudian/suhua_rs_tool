@@ -226,12 +226,25 @@ module top (
     output logic data_out,
     output logic ctrl_out
 );
+    logic peer_data_out;
+    logic peer_ctrl_out;
+
     tile u_tile (
         .ref_clk  (ref_clk),
         .rst_n    (rst_n),
         .data_in  (data_in),
         .data_out (data_out),
         .ctrl_out (ctrl_out)
+    );
+
+    // A second identical hierarchy proves that trace caches cannot leak
+    // same-named local nets or instances across parent scopes.
+    tile u_tile_peer (
+        .ref_clk  (ref_clk),
+        .rst_n    (rst_n),
+        .data_in  (data_in),
+        .data_out (peer_data_out),
+        .ctrl_out (peer_ctrl_out)
     );
 
 `ifdef RSCHECK_PARTIAL_LOAD_FIXTURE

@@ -61,12 +61,15 @@ class NpiCollectorContractTests(unittest.TestCase):
         source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
             encoding="utf-8"
         )
+        start = source.index("  ClockTrace trace_clock(")
+        end = source.index("  InstanceInfo build_instance(", start)
+        body = source[start:end]
         self.assertIn(
             'instance_full_name + "\\x1f" + clock_port + "\\x1f"',
-            source,
+            body,
         )
         self.assertNotIn(
-            'std::string cache_key = clock_port + "\\x1f";', source
+            'std::string cache_key = clock_port + "\\x1f";', body
         )
 
     def test_partial_kdb_always_merges_language_model_input_ports(self) -> None:
@@ -76,15 +79,40 @@ class NpiCollectorContractTests(unittest.TestCase):
         start = source.index("  void expand_module_inputs(")
         end = source.index("  ClockTrace trace_clock(", start)
         body = source[start:end]
-        fallback_call = "trace_language_input_ports(current, queue, state)"
+        fallback_call = "trace_language_input_ports("
         fallback_guard = "if (!fallback_available &&"
         self.assertIn("const bool fallback_available", body)
         self.assertIn(fallback_call, body)
         self.assertIn(fallback_guard, body)
         self.assertLess(body.index(fallback_call), body.index(fallback_guard))
+        self.assertIn("netlist_classified_ports", body)
+        self.assertIn("netlist_resolved_ports", body)
+        self.assertIn("netlist_unknown_ports", body)
+        self.assertIn("fallback_classified_ports.find(*name)", body)
         self.assertNotIn(
             "if (scanned_ports == 0 || unknown_directions != 0) {", body
         )
+
+        fallback_start = source.index("  bool trace_language_input_ports(")
+        fallback_end = source.index(
+            "  void trace_netlist_input_relation(", fallback_start
+        )
+        fallback_body = source[fallback_start:fallback_end]
+        self.assertIn("npi_iterate(npiPort, module)", fallback_body)
+        self.assertIn(
+            "npi_mod_inst_get_port(&mutable_full_name[0], fallback_ports)",
+            fallback_body,
+        )
+        self.assertLess(
+            fallback_body.index("netlist_resolved_ports.find(port->first)"),
+            fallback_body.index("if (!port->second.has_direction)"),
+        )
+
+        netlist_start = source.index("  void trace_netlist_input_relation(")
+        netlist_end = source.index("  void expand_module_inputs(", netlist_start)
+        netlist_body = source[netlist_start:netlist_end]
+        self.assertIn("if (!hits.empty() && !name.empty())", netlist_body)
+        self.assertIn("resolved_ports->insert(name)", netlist_body)
 
     def test_makefile_requires_and_links_verdi_npi_l1(self) -> None:
         makefile = (self.project_root / "npi" / "Makefile").read_text(
