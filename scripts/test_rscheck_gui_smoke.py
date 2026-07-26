@@ -7,8 +7,9 @@ import shlex
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(DEFAULT_PROJECT_ROOT) not in sys.path:
@@ -54,6 +55,50 @@ _RS_CFG_DONTCARE_TEXT = "任意非标准文本"
 _RS_CFG_NA_TEXT = "NA"
 _CRG_SOURCE_ALIAS = "core_clock_source"
 _CRG_SOURCE_FULL_PATH = "top.u_soc.u_crg_core"
+
+
+def _single_csv_crg_trace_evaluation(
+    rows: Sequence[Mapping[str, str | None]],
+) -> Mapping[str, object]:
+    if len(rows) != 1:
+        return {}
+    raw_evidence = rows[0].get("crg_trace_evidence")
+    if not isinstance(raw_evidence, str):
+        return {}
+    try:
+        evidence = json.loads(raw_evidence)
+    except json.JSONDecodeError:
+        return {}
+    if (
+        isinstance(evidence, list)
+        and len(evidence) == 1
+        and isinstance(evidence[0], dict)
+    ):
+        return evidence[0]
+    return {}
+
+
+def _install_callback_fail_fast(
+    root: Any,
+    mark_failed: Callable[[], None],
+) -> None:
+    def fail_on_callback_exception(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_traceback: object,
+    ) -> None:
+        mark_failed()
+        print("GUI_SMOKE_FAIL: unhandled Tk callback exception", file=sys.stderr)
+        traceback.print_exception(
+            exc_type,
+            exc_value,
+            exc_traceback,
+            file=sys.stderr,
+        )
+        sys.stderr.flush()
+        root.destroy()
+
+    root.report_callback_exception = fail_on_callback_exception
 
 
 def _clock_trace_fields(
@@ -1309,6 +1354,12 @@ def main() -> int:
     window_reported = False
     window_seen = False
 
+    def mark_failed() -> None:
+        nonlocal failed
+        failed = True
+
+    _install_callback_fail_fast(root, mark_failed)
+
     def poll() -> None:
         nonlocal cancel_deadline, completed, failed, started, timed_out
         nonlocal window_id, window_reported, window_seen
@@ -1682,22 +1733,6 @@ def main() -> int:
                     )
                     root.destroy()
                     return
-                try:
-                    csv_crg_evidence = (
-                        json.loads(csv_rows[0].get("crg_trace_evidence", ""))
-                        if len(csv_rows) == 1
-                        else None
-                    )
-                except json.JSONDecodeError:
-                    csv_crg_evidence = None
-                csv_crg_evaluation = (
-                    csv_crg_evidence[0]
-                    if isinstance(csv_crg_evidence, list)
-                    and len(csv_crg_evidence) == 1
-                    and isinstance(csv_crg_evidence[0], dict)
-                    else {}
-                )
-                csv_matched_crg = csv_crg_evaluation.get("matched")
                 if (
                     not isinstance(report_rows, list)
                     or len(report_rows) != 1
@@ -1756,6 +1791,8 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                csv_crg_evaluation = _single_csv_crg_trace_evaluation(csv_rows)
+                csv_matched_crg = csv_crg_evaluation.get("matched")
                 if (
                     not isinstance(report_rows, list)
                     or len(report_rows) != 1
