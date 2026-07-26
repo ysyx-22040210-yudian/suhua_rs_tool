@@ -1355,4 +1355,6 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将四个 NPI/NPI L1 目录传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前代码版本为 `0.9.0`。下述 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows `Ran 223 tests`、`OK (skipped=44)`；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN`、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过，上述六份 GUI 日志全部命中五根配置 round-trip marker。该记录不能证明 `0.9.0` 新增逐模块端口和 NPI L1 fallback；本轮需按本指南重新验收。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。
+当前代码版本为 `0.9.0`。[逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`：Windows `Ran 233 tests`、`OK (skipped=44)`；CentOS/Python 3.8 的 233 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、Verdi GUI、在线普通正例、自定义 `clock_i/reset_ni` 正例和反例、错误 `CRG_source` 仍 PASS、默认规则、离线 100 轮和 10,000 行负载均通过，七份 GUI 日志全部命中五根配置 round-trip 和逐模块端口 marker。
+
+下述 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。

@@ -578,7 +578,9 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前代码版本为 `0.9.0`。下述 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows `Ran 223 tests`、`OK (skipped=44)`，即 179 项执行通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN`、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过，六份 GUI 日志全部命中五根配置 round-trip marker。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。该记录不能证明 `0.9.0` 的逐模块端口、NPI L1 fallback 或 CRG 暂停判定；必须重新执行本指南。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线。
+当前代码版本为 `0.9.0`。[逐模块 clk/rst 端口与 CRG 暂停判定验证记录](TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 固定到功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`：Windows `Ran 233 tests`、`OK (skipped=44)`，即 189 项执行通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 233 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、Verdi GUI、在线普通正例、自定义 `clock_i/reset_ni` 正例和反例、错误 `CRG_source` 仍 PASS、默认规则、离线 100 轮和 10,000 行负载均通过，七份 GUI 日志全部命中五根配置 round-trip 和逐模块端口 marker。本轮 GUI 从桌面会话进程选择 `DISPLAY=:0`；通用 resolver 和合同测试不要求 GNOME 或 `gnome-session-binary`。
+
+下述 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线。
 
 `TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md`、`TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md`、`TEST_RESULTS_FULL_INSTANCE_2026-07-25.md`、`TEST_RESULTS_POSITION_MAPPING_2026-07-25.md`、`TEST_RESULTS_DYNAMIC_STEP_2026-07-25.md`、`TEST_RESULTS_RS_CFG_EN_2026-07-24.md` 和 `TEST_RESULTS_2026-07-24.md` 是此前功能阶段的历史基线，只用于对照。
 
