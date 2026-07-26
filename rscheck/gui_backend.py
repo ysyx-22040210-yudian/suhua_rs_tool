@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shlex
 import signal
 import subprocess
@@ -10,7 +11,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, Union
 
 from .checker import parameter_value_state
 from .model import FIELD_NAMES
@@ -18,6 +19,38 @@ from .model import FIELD_NAMES
 
 LIVE_SOURCE = "live"
 INVENTORY_SOURCE = "inventory"
+
+
+_POSIX_EXEC_HELPER = """\
+import os
+import signal
+import sys
+
+stdout_fd, stderr_fd, ready_fd = (int(value) for value in sys.argv[1:4])
+cwd = sys.argv[4]
+argv = sys.argv[5:]
+os.dup2(stdout_fd, 1)
+os.dup2(stderr_fd, 2)
+os.setsid()
+os.write(ready_fd, b"1")
+for name in os.listdir("/proc/self/fd"):
+    descriptor = int(name)
+    if descriptor > 2:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+for signal_name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+    if hasattr(signal, signal_name):
+        signal.signal(getattr(signal, signal_name), signal.SIG_DFL)
+if cwd:
+    os.chdir(cwd)
+os.execvpe(argv[0], argv, os.environ)
+"""
+
+
+_POSIX_SPAWN_LOCK = threading.Lock()
+_POSIX_LAUNCH_READY_TIMEOUT = 5.0
 
 
 class GuiInputError(ValueError):
@@ -654,10 +687,202 @@ def load_report(path: str | Path) -> LoadedReport:
     )
 
 
+class _PosixSpawnProcess:
+    def __init__(
+        self,
+        pid: int,
+        stdout_fd: int,
+        stderr_fd: int,
+        args: Sequence[str],
+    ) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+        self.args = tuple(args)
+        self._stdout_fd = stdout_fd
+        self._stderr_fd = stderr_fd
+        self._wait_lock = threading.Lock()
+
+    @classmethod
+    def start(
+        cls,
+        command: Sequence[str],
+        *,
+        cwd: str | Path | None,
+        environment: Mapping[str, str],
+    ) -> _PosixSpawnProcess:
+        with _POSIX_SPAWN_LOCK:
+            all_descriptors: list[int] = []
+            try:
+                stdout_read, stdout_write = os.pipe()
+                all_descriptors.extend((stdout_read, stdout_write))
+                stderr_read, stderr_write = os.pipe()
+                all_descriptors.extend((stderr_read, stderr_write))
+                ready_read, ready_write = os.pipe()
+                all_descriptors.extend((ready_read, ready_write))
+                launcher = [
+                    str(Path(sys.executable).resolve()),
+                    "-X",
+                    "utf8",
+                    "-I",
+                    "-S",
+                    "-c",
+                    _POSIX_EXEC_HELPER,
+                    str(stdout_write),
+                    str(stderr_write),
+                    str(ready_write),
+                    str(cwd) if cwd is not None else "",
+                    *command,
+                ]
+                write_descriptors = (stdout_write, stderr_write, ready_write)
+                for descriptor in write_descriptors:
+                    os.set_inheritable(descriptor, True)
+                # No optional posix_spawn arguments: glibc 2.17 uses vfork only
+                # when flags are zero and file_actions is null.
+                pid = os.posix_spawn(
+                    launcher[0], launcher, dict(environment)
+                )
+            except BaseException:
+                for descriptor in all_descriptors:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                raise
+            for descriptor in write_descriptors:
+                os.close(descriptor)
+
+        process = cls(pid, stdout_read, stderr_read, command)
+        try:
+            ready, _writable, _errors = select.select(
+                [ready_read], [], [], _POSIX_LAUNCH_READY_TIMEOUT
+            )
+            marker = os.read(ready_read, 1) if ready else b""
+        except BaseException:
+            process._force_kill()
+            process.communicate()
+            raise
+        finally:
+            os.close(ready_read)
+        if marker == b"1":
+            return process
+        process._force_kill()
+        _stdout, stderr = process.communicate()
+        detail = stderr.strip() or "launcher readiness timeout"
+        raise RuntimeError(
+            f"Linux GUI command launcher failed before exec: {detail}"
+        )
+
+    @staticmethod
+    def _exit_code(status: int) -> int:
+        if os.WIFEXITED(status):
+            return os.WEXITSTATUS(status)
+        if os.WIFSIGNALED(status):
+            return -os.WTERMSIG(status)
+        raise RuntimeError(f"unexpected child process status: {status}")
+
+    def poll(self) -> int | None:
+        with self._wait_lock:
+            if self.returncode is not None:
+                return self.returncode
+            waited_pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if waited_pid == 0:
+                return None
+            self.returncode = self._exit_code(status)
+            return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if timeout is None:
+            with self._wait_lock:
+                if self.returncode is None:
+                    _waited_pid, status = os.waitpid(self.pid, 0)
+                    self.returncode = self._exit_code(status)
+                return self.returncode
+        deadline = time.monotonic() + timeout
+        while True:
+            returncode = self.poll()
+            if returncode is not None:
+                return returncode
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            time.sleep(0.01)
+
+    def terminate(self) -> None:
+        os.kill(self.pid, signal.SIGTERM)
+
+    def kill(self) -> None:
+        os.kill(self.pid, signal.SIGKILL)
+
+    def _force_kill(self) -> None:
+        try:
+            os.killpg(self.pid, signal.SIGKILL)
+        except OSError:
+            if self.poll() is None:
+                try:
+                    self.kill()
+                except ProcessLookupError:
+                    pass
+
+    def communicate(self) -> tuple[str, str]:
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        read_errors: list[BaseException] = []
+
+        def read_pipe(descriptor: int, chunks: list[bytes]) -> None:
+            try:
+                with os.fdopen(descriptor, "rb") as stream:
+                    chunks.append(stream.read())
+            except BaseException as exc:
+                read_errors.append(exc)
+
+        readers = (
+            threading.Thread(
+                target=read_pipe,
+                args=(self._stdout_fd, stdout_chunks),
+                name="rscheck-gui-stdout",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=read_pipe,
+                args=(self._stderr_fd, stderr_chunks),
+                name="rscheck-gui-stderr",
+                daemon=True,
+            ),
+        )
+        started_readers: list[threading.Thread] = []
+        try:
+            for reader in readers:
+                reader.start()
+                started_readers.append(reader)
+        except BaseException:
+            self._force_kill()
+            pipe_descriptors = (self._stdout_fd, self._stderr_fd)
+            for descriptor in pipe_descriptors[len(started_readers) :]:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            self.wait()
+            for reader in started_readers:
+                reader.join()
+            raise
+        self.wait()
+        for reader in started_readers:
+            reader.join()
+        if read_errors:
+            raise read_errors[0]
+        return (
+            b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+            b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+        )
+
+
+_Process = Union[subprocess.Popen, _PosixSpawnProcess]
+
+
 class ProcessController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._process: subprocess.Popen[str] | None = None
+        self._process: _Process | None = None
         self._process_group_id: int | None = None
         self._starting = False
         self._cancel_requested = False
@@ -691,34 +916,19 @@ class ProcessController:
             child_environment.update(environment)
         child_environment["PYTHONUTF8"] = "1"
         child_environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        options: dict[str, Any] = {
-            "cwd": str(cwd) if cwd is not None else None,
-            "env": child_environment,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
-            "shell": False,
-        }
-        if os.name == "nt":
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            options["start_new_session"] = True
-
         try:
-            process = subprocess.Popen(list(command), **options)
+            process = self._start_process(command, cwd, child_environment)
         except Exception:
             with self._lock:
                 self._starting = False
                 self._cancel_requested = False
                 self._termination_done = None
             raise
-        termination_target: tuple[subprocess.Popen[str], int | None, threading.Event] | None
+        termination_target: tuple[_Process, int | None, threading.Event] | None
         with self._lock:
             self._process = process
-            # start_new_session=True guarantees that the child's PID is the
-            # stable process-group ID even if the group leader exits first.
+            # Both POSIX launch paths make the child's PID the stable process
+            # group ID even if the group leader exits first.
             self._process_group_id = process.pid if os.name != "nt" else None
             self._starting = False
             if self._cancel_requested and not self._termination_started:
@@ -755,8 +965,36 @@ class ProcessController:
                     self._termination_done = None
                 self._cancel_requested = False
 
+    @staticmethod
+    def _start_process(
+        command: Sequence[str],
+        cwd: str | Path | None,
+        environment: Mapping[str, str],
+    ) -> _Process:
+        if sys.platform.startswith("linux"):
+            return _PosixSpawnProcess.start(
+                command,
+                cwd=cwd,
+                environment=environment,
+            )
+        options: dict[str, Any] = {
+            "cwd": str(cwd) if cwd is not None else None,
+            "env": dict(environment),
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "shell": False,
+        }
+        if os.name == "nt":
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            options["start_new_session"] = True
+        return subprocess.Popen(list(command), **options)
+
     def cancel(self) -> bool:
-        termination_target: tuple[subprocess.Popen[str], int | None, threading.Event] | None
+        termination_target: tuple[_Process, int | None, threading.Event] | None
         with self._lock:
             if not self._starting and self._process is None:
                 return False
@@ -781,7 +1019,7 @@ class ProcessController:
 
     @staticmethod
     def _request_process_stop(
-        process: subprocess.Popen[str],
+        process: _Process,
         process_group_id: int | None,
         termination_done: threading.Event,
     ) -> None:
@@ -815,7 +1053,7 @@ class ProcessController:
 
     @staticmethod
     def _terminate_posix_group(
-        process: subprocess.Popen[str],
+        process: _Process,
         process_group_id: int,
         termination_done: threading.Event,
     ) -> None:

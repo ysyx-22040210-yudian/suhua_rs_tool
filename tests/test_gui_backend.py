@@ -728,6 +728,141 @@ class ProcessControllerTests(unittest.TestCase):
         self.assertFalse(result.cancelled)
         self.assertFalse(controller.is_running)
 
+    def test_large_stdout_and_stderr_are_drained_concurrently(self) -> None:
+        payload_size = 512 * 1024
+        controller = ProcessController()
+        result = controller.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys;"
+                    f"sys.stdout.write('o'*{payload_size});"
+                    "sys.stdout.flush();"
+                    f"sys.stderr.write('e'*{payload_size})"
+                ),
+            ]
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "o" * payload_size)
+        self.assertEqual(result.stderr, "e" * payload_size)
+        self.assertFalse(controller.is_running)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux required")
+    def test_repeated_worker_launches_preserve_requested_cwd(self) -> None:
+        controller = ProcessController()
+        outcomes = []
+        spawn_calls = []
+        real_posix_spawn = os.posix_spawn
+
+        def checked_posix_spawn(*args, **kwargs):
+            spawn_calls.append((args, kwargs))
+            return real_posix_spawn(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as name:
+            requested_cwd = str(Path(name).resolve())
+
+            def run() -> None:
+                for _ in range(40):
+                    outcomes.append(
+                        controller.run(
+                            [
+                                sys.executable,
+                                "-c",
+                                "import os; print(os.getcwd())",
+                            ],
+                            cwd=requested_cwd,
+                        )
+                    )
+
+            with patch(
+                "rscheck.gui_backend.subprocess.Popen",
+                side_effect=AssertionError("Linux launch must not use Popen"),
+            ), patch(
+                "rscheck.gui_backend.os.posix_spawn",
+                side_effect=checked_posix_spawn,
+            ):
+                worker = threading.Thread(target=run)
+                worker.start()
+                worker.join(timeout=20)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(outcomes), 40)
+        self.assertTrue(all(item.returncode == 0 for item in outcomes))
+        self.assertTrue(
+            all(item.stdout.strip() == requested_cwd for item in outcomes)
+        )
+        self.assertEqual(len(spawn_calls), 40)
+        self.assertTrue(
+            all(len(args) == 3 and not kwargs for args, kwargs in spawn_calls)
+        )
+        self.assertFalse(controller.is_running)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux required")
+    def test_linux_launcher_closes_unrelated_inheritable_fds(self) -> None:
+        sentinel_read, sentinel_write = os.pipe()
+        try:
+            os.set_inheritable(sentinel_write, True)
+            sentinel_target = os.readlink(f"/proc/self/fd/{sentinel_write}")
+            child_code = (
+                "import os;"
+                f"path='/proc/self/fd/{sentinel_write}';"
+                "print(os.readlink(path) if os.path.exists(path) else 'closed')"
+            )
+            result = ProcessController().run(
+                [sys.executable, "-c", child_code]
+            )
+        finally:
+            os.close(sentinel_read)
+            os.close(sentinel_write)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotEqual(result.stdout.strip(), sentinel_target)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux required")
+    def test_linux_launcher_ready_failure_is_recoverable(self) -> None:
+        controller = ProcessController()
+        with patch(
+            "rscheck.gui_backend._POSIX_EXEC_HELPER",
+            "import sys; sys.exit(7)",
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "failed before exec"
+            ):
+                controller.run([sys.executable, "-c", "print('unused')"])
+        self.assertFalse(controller.is_running)
+        recovered = controller.run(
+            [sys.executable, "-c", "print('recovered')"]
+        )
+        self.assertEqual(recovered.returncode, 0)
+        self.assertEqual(recovered.stdout.strip(), "recovered")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux required")
+    def test_linux_reader_start_failure_kills_child_and_recovers(self) -> None:
+        controller = ProcessController()
+        real_start = threading.Thread.start
+
+        def fail_stderr_reader(thread) -> None:
+            if thread.name == "rscheck-gui-stderr":
+                raise RuntimeError("injected stderr reader failure")
+            real_start(thread)
+
+        with patch.object(threading.Thread, "start", new=fail_stderr_reader):
+            with self.assertRaisesRegex(
+                RuntimeError, "injected stderr reader failure"
+            ):
+                controller.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(30)",
+                    ]
+                )
+        self.assertFalse(controller.is_running)
+        recovered = controller.run(
+            [sys.executable, "-c", "print('recovered')"]
+        )
+        self.assertEqual(recovered.stdout.strip(), "recovered")
+
     def test_running_process_can_be_cancelled(self) -> None:
         controller = ProcessController()
         outcomes = []
@@ -756,24 +891,28 @@ class ProcessControllerTests(unittest.TestCase):
         outcomes = []
         popen_entered = threading.Event()
         allow_popen = threading.Event()
-        real_popen = subprocess.Popen
+        real_start_process = controller._start_process
         first_call = True
 
-        def delayed_popen(*args, **kwargs):
+        def delayed_start_process(*args, **kwargs):
             nonlocal first_call
             if first_call:
                 first_call = False
                 popen_entered.set()
                 if not allow_popen.wait(timeout=5):
-                    raise RuntimeError("test did not release Popen")
-            return real_popen(*args, **kwargs)
+                    raise RuntimeError("test did not release process start")
+            return real_start_process(*args, **kwargs)
 
         def run() -> None:
             outcomes.append(
                 controller.run([sys.executable, "-c", "import time; time.sleep(30)"])
             )
 
-        with patch("rscheck.gui_backend.subprocess.Popen", side_effect=delayed_popen):
+        with patch.object(
+            controller,
+            "_start_process",
+            side_effect=delayed_start_process,
+        ):
             worker = threading.Thread(target=run)
             worker.start()
             self.assertTrue(popen_entered.wait(timeout=5))
