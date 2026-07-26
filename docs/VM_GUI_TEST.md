@@ -564,7 +564,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 NPI L0/L1 collector、验证 partial/clean KDB 和可见 Verdi/Tk GUI。clean KDB 上还会验证三层分支 CRG trace、规则 `clock_i`、depth 2 截断、clk/rst 端口隔离、两个门控专项、CRG 映射、100 轮稳定性和 10,000 行负载。每次 GUI smoke 都执行六根配置和三个数据库往返并断言 report v4/inventory v3。
+Verdi 端到端脚本会运行全量测试、构建 NPI L0/L1 collector、验证 partial/clean KDB 和可见 Verdi/Tk GUI。partial 与 clean inventory 都同时采集 `top.u_tile` 和 `top.u_tile_peer` 两个结构相同的 hierarchy，逐 scope 断言 13 个实例、33 个 trace node、4 个 unique module、foreign-prefix=0，以证明同名 local clock cone 的 cache 按完整 hierarchy 隔离；partial KDB 还验证 Netlist 端口集合缺失时由 Language Model/L1 补追 input 分支。clean KDB 上还会验证三层分支 CRG trace、规则 `clock_i`、depth 2 截断、clk/rst 端口隔离、两个门控专项、CRG 映射、100 轮稳定性和 10,000 行负载。每次 GUI smoke 都执行六根配置和三个数据库往返并断言 report v4/inventory v3。
 
 正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
@@ -614,6 +614,11 @@ bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 Ran ... tests in ...
 OK
 partial NPI load evidence OK: load reported errors but requested RTL remained queryable
+partial-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+partial-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
+partial NPI formal-port L0/L1 inventory evidence OK
+clean-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+clean-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
 RESULT: PASS | rows=2 errors=0 warnings=1
 [WARNING] NPI_LOAD_PARTIAL: ...
 Verdi GUI loaded elaborated top 'top' after ...
@@ -678,7 +683,7 @@ offline_gui_10000_rows.log
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
 - 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
 - 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，实际要求 RTL `RS_CRG_EN` 并检查默认端口。
-- `CLK_PORT_MISSING` / `RST_PORT_MISSING`：查看 report 中最终 `module_rule.clk_port/rst_port` 和 inventory 的全部 `ports`。旧 offline inventory 若只采了全局端口，必须用当前 collector 重采。partial KDB 中端口仍为空时检查 NPI L1 库与 fallback 日志。clk/rst 独立判定：模块存在且连接了规则指定的 clk、但没有 rst 时，行 FAIL 且只能报 `RST_PORT_MISSING`；同时出现 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED` 应按回归缺陷处理。当前不能关闭 rst 检查。
+- `CLK_PORT_MISSING` / `RST_PORT_MISSING`：查看 report 中最终 `module_rule.clk_port/rst_port` 和 inventory 的全部 `ports`。旧 offline inventory 若只采了全局端口，必须用当前 collector 重采。partial KDB 中端口仍为空时检查 NPI L1 库与 fallback 日志；当前 collector 会把 Netlist 已解析端口和 Language Model/L1 集合合并，补追非空但不完整的 Netlist input 集合，同时跳过已解析同名端口。clk/rst 独立判定：模块存在且连接了规则指定的 clk、但没有 rst 时，行 FAIL 且只能报 `RST_PORT_MISSING`；同时出现 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED` 应按回归缺陷处理。当前不能关闭 rst 检查。
 - `CRG_SOURCE_NOT_FOUND`：完整 v3 trace 未精确命中目标完整 hierarchy；查看 report v4 `crg_source_check` 和 `clock_trace.modules/path`。
 - `CRG_TRACE_DEPTH_LIMIT`：目标可能超过当前最大模块跳数；核对 GUI `CRG Trace 最大层数`，在 `1..256` 内调整并重采。
 - `CRG_TRACE_UNAVAILABLE`：trace 缺失/未解析、规则 formal 不一致，或旧 v2 legacy 证据未精确命中。三个 CRG code 都只影响 warning 数，不改变通过行或 CLI 退出码。
@@ -694,7 +699,9 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前代码版本为 `0.11.0`。现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用来源追踪时的十一日志历史基线，不能作为当前 inventory v3/report v4 和 depth-limit 专项证据。GUI resolver 仍不要求 GNOME 或 `gnome-session-binary`。
+当前代码版本为 `0.11.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，是当前版本的 VM GUI 签核依据：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v3、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。记录包含可直接复制的一次性 HTTP/1.1 fresh-checkout 命令、完整现场路径、marker 和 SHA-256。GUI resolver 仍不要求 GNOME 或 `gnome-session-binary`。
+
+现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用来源追踪时的十一日志历史基线，不能作为当前 inventory v3/report v4 和 depth-limit 专项证据。下列记录只作为历史对照。
 
 [RS_CFG_EN don't-care 与 VM GUI 压测验证记录](TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 是上一版 `0.9.1` 的固定基线，对应提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 240 项全部通过且无 skip；partial/clean KDB、mapped Verdi/Tk GUI、`has_rs_cfg_en=false` / Excel 任意文本专项 20 轮、clk 存在/rst 缺失专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九份 GUI 日志门禁全部通过。更早的 [clk 存在、rst 缺失 finding 隔离记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到历史功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`。
 

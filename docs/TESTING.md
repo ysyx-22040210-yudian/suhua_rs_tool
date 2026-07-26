@@ -26,7 +26,7 @@
 | R8 | Linux + X11/Xwayland + Tk | Excel/internal `RS_CFG_EN=NA` 逐行豁免 GUI 专项 | `0` | 默认 20 轮；RTL `RS_CRG_EN=1` 仍不产生门控 finding，其他 module/step/clk/rst 检查继续且整行 PASS |
 | R9 | Linux + X11/Xwayland + Tk | CRG_source 简称映射 GUI/JSON/CSV 专项 | `0` | 默认 20 轮；alias+full 保留，三层 witness 精确命中，`crg-source-check=pass trace-depth=3` |
 | R10 | Linux + Verdi/NPI + Tk | CRG trace 深度上限 GUI 在线压测 | `0` | 默认 20 轮；最大深度 2 时六个多层实例产生 6 个 `CRG_TRACE_DEPTH_LIMIT` warning，direct depth 1 分支仍 PASS，行和 CLI 仍通过 |
-| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports |
+| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports 和 Netlist 漏失的 trace input 分支 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
@@ -34,6 +34,7 @@
 | N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过；首组 CRG depth 3 命中且分支任一命中，inventory v3/report v4 |
 | N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 Excel/internal `RS_CFG_EN` 标签差异；实际 RTL parameter 为 `RS_CRG_EN` |
 | N3 | Linux + Verdi/NPI + Tk | 带 elaboration error 但 top 可查询的 partial KDB | `0` | collector/CLI/GUI 继续；2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning |
+| N4 | Linux + Verdi/NPI | 跨父 scope 的 trace cache 隔离 | `0` | partial/clean KDB 都同时采集 `top.u_tile` 和 `top.u_tile_peer`；同名 local clock cone 只包含自身完整 hierarchy，foreign-prefix 为 0 |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
 | G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
@@ -685,7 +686,7 @@ ldd "$COLLECTOR" | grep 'libnpiL1\.so'
 - `$COLLECTOR` 是当前 CentOS 架构的可执行文件。
 - `ldd` 中 `libNPI.so` 和 `libnpiL1.so` 都指向预期目录，且都不是 `not found`。
 
-该 collector 会合并 Language Model `npiPort` 遍历和 NPI L1 `npi_mod_inst_get_port` fallback，采集每个直接子 module instance 的全部 formal ports。Python runner 还会传 `--trace-rules` 和 `--trace-max-depth`，让 collector 从每种 RS module 的有效 clk formal 做有界 Netlist 上游追踪并写出 inventory v3 `clock_trace`。`--clk-port/--rst-port` 仍保留为兼容接口。
+该 collector 会合并 Language Model `npiPort` 遍历和 NPI L1 `npi_mod_inst_get_port` fallback，采集每个直接子 module instance 的全部 formal ports。递归展开上游模块时，它先记录 Netlist 已分类、已解析和未知端口集合，再用同一模块的 Language Model/L1 端口集合补追 Netlist 漏失或未解析的 input；Netlist 已解析的同名端口不会重复入队。对于方向未知的端口，只有 Netlist 与 Language/L1 都无法分类时才因方向证据不足把 trace 标为 unresolved；无法解析连接、对象预算耗尽等其他 NPI 证据问题仍会独立标为 unresolved。Python runner 还会传 `--trace-rules` 和 `--trace-max-depth`，让 collector 从每种 RS module 的有效 clk formal 做有界 Netlist 上游追踪并写出 inventory v3 `clock_trace`。trace cache 键包含 RS 实例完整 hierarchy、clk formal 和连接对象，不能在不同父 scope 的同名 local clock cone 之间复用。`--clk-port/--rst-port` 仍保留为兼容接口。
 
 若 NPI 库不在标准目录，在 `rscheck check` 命令中增加 `--npi-lib-dir "$NPI_LIB_DIR"`。
 
@@ -963,6 +964,11 @@ PY
 完整 VM 脚本还会基于同一 KDB 临时生成一行 `rs_custom/CUSTOM_RS` 规格和模块规则 `clk_port=clock_i`、`rst_port=reset_ni`，并故意把 `CRG_source` 写成错误值。clk/rst 和其他硬检查仍必须 PASS，CRG 子检查产生一个 `CRG_SOURCE_NOT_FOUND` warning；CLI 仍返回 `0`：
 
 ```text
+partial-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+partial-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
+partial NPI formal-port L0/L1 inventory evidence OK
+clean-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+clean-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
 custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
 crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND
 ```
@@ -1402,7 +1408,7 @@ work_lib_as_elab.log
 
 - 先查看 report v4 的 `module_rule.clk_port/rst_port`，确认规则键精确匹配 `RS_module`。未知模块默认使用 `clk/rst_n`；旧显式规则缺键时继承 `rtl.clk_port/rst_port`。
 - 查看 JSON inventory 中对应实例的 `ports`。当前 collector 应包含全部 formal ports；若是升级前生成、只含旧全局 clk/rst 的 offline inventory，请用当前 collector 重新在线采集。
-- partial KDB 中 Language Model 端口遍历为空时，collector 应由 NPI L1 `npi_mod_inst_get_port` fallback 补齐；若仍为空，核对 `libnpiL1.so`、实例完整路径和 collector 日志。
+- partial KDB 中 Language Model 端口遍历为空时，collector 应由 NPI L1 `npi_mod_inst_get_port` fallback 补齐；Netlist 返回非空但不完整的端口集合时，也必须合并 Language/L1 视图补追遗漏 input。若仍为空，核对 `libnpiL1.so`、实例完整路径和 collector 日志。
 - clk/rst 由 checker 独立判定。模块存在且连接了规则指定的 clk、但没有规则指定的 rst formal port 时，行必须 FAIL 且 finding 只能是 `RST_PORT_MISSING`；若同时看到 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`，先核对 inventory 中 clk 的 formal port/connection 证据，并按回归缺陷处理。当前没有跳过 rst 检查的开关。
 - `CRG_SOURCE_NOT_FOUND`：v3 trace 完整但没有模块完整 hierarchy 精确命中；核对 alias 映射和 `clock_trace.modules/path`。
 - `CRG_TRACE_DEPTH_LIMIT`：目标在本次最大模块跳数之外；确认后提高 `rtl.crg_trace_max_depth` 并重采。
@@ -1493,11 +1499,16 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、NPI L0/L1 collector 构建、partial/clean elaborated KDB、可见 Verdi、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、`clk/rst_n` input 排除和 direct depth 1；深度专项必须证明 max depth 2 只产生 warning。每次 GUI smoke 都完成六根配置和三个数据库往返，并生成 inventory v3/report v4。NPI 唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、NPI L0/L1 collector 构建、partial/clean elaborated KDB、可见 Verdi、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、`clk/rst_n` input 排除和 direct depth 1；partial 与 clean inventory 还必须同时采集 `top.u_tile`、`top.u_tile_peer` 两个结构相同的 hierarchy，并证明同名 clock cone cache 不跨 scope 污染。每个 scope 固定为 13 个实例、33 个 trace node、4 个 unique module，foreign-prefix 数量必须为 0。深度专项必须证明 max depth 2 只产生 warning。每次 GUI smoke 都完成六根配置和三个数据库往返，并生成 inventory v3/report v4。NPI 唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。
 
 成功输出至少应包含这些稳定 marker：
 
 ```text
+partial-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+partial-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
+partial NPI formal-port L0/L1 inventory evidence OK
+clean-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
+clean-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
 custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
 clk-present/rst-missing CLI evidence OK: ports=clk,d,q
 finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent
@@ -1567,7 +1578,9 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。普通在线正例默认 3 轮；CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射五个专项默认各 20 轮，分别由对应 `GUI_*_ITERATIONS` 变量控制。六个轮次变量都必须是十进制正整数。
 
-当前代码版本为 `0.11.0`。现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用 CRG 来源追踪时的十一日志历史基线，不能作为 inventory v3/report v4 和 depth-limit 专项的当前证据。
+当前代码版本为 `0.11.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v3、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录是当前 `0.11.0` 的签核依据。
+
+现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用 CRG 来源追踪时的十一日志历史基线，不能作为 inventory v3/report v4 和 depth-limit 专项的当前证据。下列记录只作为历史对照。
 
 [RS_CFG_EN don't-care 与 VM GUI 压测验证记录](TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 是上一版 `0.9.1` 的固定基线，对应提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 240 项全部通过且无 skip；partial/clean KDB、mapped Verdi/Tk GUI、`has_rs_cfg_en=false` / Excel 任意文本专项 20 轮、clk 存在/rst 缺失专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九份 GUI 日志门禁全部通过。更早的 [clk 存在、rst 缺失 finding 隔离记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到历史功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`。
 

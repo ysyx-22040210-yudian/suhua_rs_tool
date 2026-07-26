@@ -18,6 +18,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md)
 - [clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md)
 - [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)
 - [任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md)
@@ -295,7 +296,7 @@ make -C npi \
 
 标准 Verdi 布局下，NPI L1 头文件默认位于 `$VERDI_HOME/share/NPI/L1/C/inc`；`libnpiL1.so` 通常与 `libNPI.so` 同目录，也可能只存在于小写平台目录（例如 `.../lib/linux64`）。GNU Make 会按空白拆分目标名，因此仓库路径及上述四个 NPI 目录不得包含空白；Makefile 会对此提前报错。该限制只影响 collector/端到端构建，独立 GUI 启动器仍支持 KDB 路径包含空格。
 
-构建产物默认位于 `npi/build/rs_npi_collector`，同时链接 `libNPI.so` 和 `libnpiL1.so`。采集器使用 NPI Language Model 枚举每个实例的全部 formal ports，并用 `npi_mod_inst_get_port` 作为 NPI L1 fallback；这能覆盖 partial KDB 中 `instance -> npiPort` 关系为空、但按完整实例路径仍可查询端口的情况。Python runner 通过临时 `--trace-rules` 文件传入每种 `RS_module` 生效的 clk formal，并通过 `--trace-max-depth` 传入有界模块深度；collector 从这些端口执行 Netlist 上游追踪并生成 inventory v3。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。若 load 返回 0，collector 会按 NPI 手册示例继续探测 top：至少一个 top 可查询时继续并报告 `NPI_LOAD_PARTIAL`；没有任何 top 可查询时才退出 11。后续 position、实例、formal port 和 parameter 证据仍 fail-closed。
+构建产物默认位于 `npi/build/rs_npi_collector`，同时链接 `libNPI.so` 和 `libnpiL1.so`。采集器使用 NPI Language Model 枚举每个实例的全部 formal ports，并用 `npi_mod_inst_get_port` 作为 NPI L1 fallback；这能覆盖 partial KDB 中 `instance -> npiPort` 关系为空、但按完整实例路径仍可查询端口的情况。上游模块展开时，collector 还会把 Netlist 已解析端口与 Language Model/L1 端口集合合并：已解析的同名端口不重复追踪，Netlist 漏失或未解析的 input 由 Language/L1 补追。Python runner 通过临时 `--trace-rules` 文件传入每种 `RS_module` 生效的 clk formal，并通过 `--trace-max-depth` 传入有界模块深度；collector 从这些端口执行 Netlist 上游追踪并生成 inventory v3。trace cache 键包含 RS 实例完整 hierarchy，因而不同父 scope 中同名 local net 和 clock cone 不会串用结果。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。若 load 返回 0，collector 会按 NPI 手册示例继续探测 top：至少一个 top 可查询时继续并报告 `NPI_LOAD_PARTIAL`；没有任何 top 可查询时才退出 11。后续 position、实例、formal port 和 parameter 证据仍 fail-closed。
 
 运行前设置 `VERDI_HOME`。Python runner 会自动把对应 NPI library 目录加入采集器子进程的 `LD_LIBRARY_PATH`：
 
@@ -394,7 +395,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、position/CRG Source 两套简称映射、`step=0`、实例分组、逐模块 clk/rst 端口、有 clk/无 rst finding 隔离、动态拍数、RTL `RS_CRG_EN`、Excel `NA`/don't-care，以及从规则 clk formal 出发的多分支 CRG 递归、`clk/rst_n` 精确排除、深度边界、环路终止、v2 legacy 兼容、inventory v3/report v4、GUI CRG Trace 展示与 CSV trace 证据。真实 NPI/L1 编译、partial/clean KDB、多层追踪和可见 GUI 仍必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、position/CRG Source 两套简称映射、`step=0`、实例分组、逐模块 clk/rst 端口、有 clk/无 rst finding 隔离、动态拍数、RTL `RS_CRG_EN`、Excel `NA`/don't-care，以及从规则 clk formal 出发的多分支 CRG 递归、`clk/rst_n` 精确排除、深度边界、环路终止、完整 hierarchy trace cache 隔离、partial KDB Language/L1 input 补追、v2 legacy 兼容、inventory v3/report v4、GUI CRG Trace 展示与 CSV trace 证据。真实 NPI/L1 编译、partial/clean KDB、多层追踪和可见 GUI 仍必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -418,7 +419,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-下列环境和固定 SHA 记录是引入有界递归 CRG 追踪前的历史验证基线：
+当前有界递归 CRG 追踪版本已在下列环境签核：
 
 ```text
 CentOS 7.9
@@ -427,6 +428,10 @@ GCC/G++ 11.2.1
 Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
+
+[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`：CentOS/Python 3.8 的 299 项测试全部通过且无 skip；collector 编译无 warning；partial/clean elaborated KDB 均验证 `top.u_tile` / `top.u_tile_peer` 两个同名时钟锥按完整 hierarchy 隔离，并验证 Language/L1 端口集合补追；inventory v3/report v4、mapped Verdi/Tk GUI、depth 3 分支命中、depth 2 专项 20 轮、普通在线 3 轮、其他四个 20 轮专项、离线 100 轮、10,000 行负载和十二日志门禁全部通过。
+
+下列固定 SHA 记录是引入有界递归 CRG 追踪前的历史验证基线：
 
 [CRG_source 映射库与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 GitHub 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，记录的是当时只保留 CRG alias+full、尚未启用来源追踪的 `0.10.0` 行为和十一日志门禁，不能作为当前 inventory v3/report v4 追踪功能的验证证据。
 
