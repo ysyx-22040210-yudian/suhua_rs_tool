@@ -93,6 +93,20 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("notice=NPI_LOAD_PARTIAL", source)
         self.assertGreaterEqual(gui_smoke.count('if iid == "global":'), 2)
 
+    def test_vm_flow_requires_npi_l1_formal_port_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("NPI_L1_INC_DIR", source)
+        self.assertIn("libnpiL1.so", source)
+        self.assertIn("partial-load formal-port inventory mismatch", source)
+        self.assertIn("clock-source tracing must be disabled", source)
+        self.assertIn("partial NPI formal-port L0/L1 inventory evidence OK", source)
+        self.assertIn("custom module clk/rst formal-port rule evidence OK", source)
+        self.assertIn("CRG_source evidence retained without PASS/FAIL validation", source)
+        self.assertIn("online_gui_custom_port.log", source)
+        self.assertIn("mode=online case=custom-port", source)
+        self.assertIn("rule-ports=clock_i/reset_ni", source)
+
     def test_license_environment_import_contract_is_safe(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         runner = SITE_ENV_RUNNER.read_text(encoding="utf-8")

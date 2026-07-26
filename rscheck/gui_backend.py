@@ -358,6 +358,15 @@ def _validate_v3_row(
             raise GuiReportError(
                 f"report row {row_number}.module_rule.has_rs_cfg_en must be true or false"
             )
+        for port_field in ("clk_port", "rst_port"):
+            if port_field not in module_rule:
+                continue
+            port_name = module_rule[port_field]
+            if not isinstance(port_name, str) or not port_name.strip():
+                raise GuiReportError(
+                    f"report row {row_number}.module_rule.{port_field} "
+                    "must be a non-empty string"
+                )
         step_parameters = module_rule.get("step_parameters")
         if (
             not isinstance(step_parameters, list)

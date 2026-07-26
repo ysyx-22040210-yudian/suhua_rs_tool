@@ -51,6 +51,16 @@ class CheckerTests(unittest.TestCase):
         finally:
             Path(temp.name).unlink(missing_ok=True)
 
+    def _default_rule_inventory(self, mutate=lambda raw: None) -> object:
+        def use_default_ports(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                ports = instance["ports"]
+                if "rst" in ports:
+                    ports["rst_n"] = ports.pop("rst")
+            mutate(raw)
+
+        return self._mutated_inventory(use_default_ports)
+
     def test_passing_inventory(self) -> None:
         report = check_specs(self.specs, self.inventory, self.rtl, self.rules)
         self.assertTrue(report.passed)
@@ -149,6 +159,7 @@ class CheckerTests(unittest.TestCase):
             name="rs_pipe",
             has_rs_cfg_en=True,
             step_parameters=("rs_mode", "pipe_enable"),
+            rst_port="rst",
         )
         spec = replace(self.specs[0], step=4)
         report = check_specs(
@@ -169,6 +180,7 @@ class CheckerTests(unittest.TestCase):
             name="rs_pipe",
             has_rs_cfg_en=True,
             step_parameters=("RS_CFG_EN",),
+            rst_port="rst",
         )
         report = check_specs(
             [self.specs[0]],
@@ -187,7 +199,12 @@ class CheckerTests(unittest.TestCase):
         )
 
     def test_registered_module_without_step_parameters_counts_every_instance(self) -> None:
-        rule = ModuleRule(name="rs_pipe", has_rs_cfg_en=True, step_parameters=())
+        rule = ModuleRule(
+            name="rs_pipe",
+            has_rs_cfg_en=True,
+            step_parameters=(),
+            rst_port="rst",
+        )
         spec = replace(self.specs[0], step=6)
         report = check_specs([spec], self.inventory, self.rtl, {"rs_pipe": rule})
         self.assertTrue(report.passed)
@@ -195,7 +212,7 @@ class CheckerTests(unittest.TestCase):
 
     def test_unregistered_rs_module_uses_default_rule(self) -> None:
         spec = replace(self.specs[0], step=6)
-        report = check_specs([spec], self.inventory, self.rtl, {})
+        report = check_specs([spec], self._default_rule_inventory(), self.rtl, {})
 
         self.assertTrue(report.passed)
         self.assertEqual(report.rows[0].findings, ())
@@ -208,13 +225,17 @@ class CheckerTests(unittest.TestCase):
             ),
         )
         self.assertEqual(report.rows[0].effective_step, 6)
+        self.assertEqual(report.rows[0].module_rule.clk_port, "clk")
+        self.assertEqual(report.rows[0].module_rule.rst_port, "rst_n")
         self.assertEqual(
             [item.contribution for item in report.rows[0].step_evaluations],
             [1, 1, 1, 1, 1, 1],
         )
 
     def test_default_rule_reports_step_mismatch_for_six_physical_instances(self) -> None:
-        report = check_specs([self.specs[0]], self.inventory, self.rtl, {})
+        report = check_specs(
+            [self.specs[0]], self._default_rule_inventory(), self.rtl, {}
+        )
 
         self.assertFalse(report.passed)
         self.assertEqual(
@@ -234,7 +255,7 @@ class CheckerTests(unittest.TestCase):
 
         spec = replace(self.specs[0], step=6)
         report = check_specs(
-            [spec], self._mutated_inventory(mutate), self.rtl, {}
+            [spec], self._default_rule_inventory(mutate), self.rtl, {}
         )
 
         self.assertFalse(report.passed)
@@ -272,7 +293,7 @@ class CheckerTests(unittest.TestCase):
 
         spec = replace(self.specs[0], step=6)
         report = check_specs(
-            [spec], self._mutated_inventory(mutate), self.rtl, {}
+            [spec], self._default_rule_inventory(mutate), self.rtl, {}
         )
 
         self.assertFalse(report.passed)
@@ -286,7 +307,7 @@ class CheckerTests(unittest.TestCase):
 
     def test_default_rule_requires_fake_gating_excel_label(self) -> None:
         spec = replace(self.specs[0], step=6, rs_cfg_en="")
-        report = check_specs([spec], self.inventory, self.rtl, {})
+        report = check_specs([spec], self._default_rule_inventory(), self.rtl, {})
 
         self.assertFalse(report.passed)
         self.assertEqual(
@@ -455,7 +476,10 @@ class CheckerTests(unittest.TestCase):
 
         spec = replace(self.specs[0], rs_cfg_en="")
         rule = ModuleRule(
-            name="rs_pipe", has_rs_cfg_en=False, step_parameters=("rs_mode",)
+            name="rs_pipe",
+            has_rs_cfg_en=False,
+            step_parameters=("rs_mode",),
+            rst_port="rst",
         )
         report = check_specs(
             [spec], self._mutated_inventory(mutate), self.rtl, {"rs_pipe": rule}
@@ -465,7 +489,10 @@ class CheckerTests(unittest.TestCase):
     def test_rs_crg_en_database_presence_mismatch_fails(self) -> None:
         spec = replace(self.specs[0], rs_cfg_en="")
         rule = ModuleRule(
-            name="rs_pipe", has_rs_cfg_en=False, step_parameters=("rs_mode",)
+            name="rs_pipe",
+            has_rs_cfg_en=False,
+            step_parameters=("rs_mode",),
+            rst_port="rst",
         )
         report = check_specs([spec], self.inventory, self.rtl, {"rs_pipe": rule})
         self.assertFalse(report.passed)
@@ -544,19 +571,20 @@ class CheckerTests(unittest.TestCase):
                 with self.assertRaisesRegex(InventoryError, "parameters|parameter"):
                     self._mutated_inventory(mutate)
 
-    def test_module_and_clock_mismatches_make_step_unresolved(self) -> None:
+    def test_module_mismatch_makes_step_unresolved_without_port_noise(self) -> None:
         def mutate(raw) -> None:
             instances = raw["positions"]["top.u_tile"]["instances"]
             instances[1]["module"] = "wrong_pipe"
-            instances[1]["ports"]["clk"]["connection"] = "top.u_tile.clk_aux"
+            instances[1]["ports"] = {}
 
         report = check_specs(
             self.specs, self._mutated_inventory(mutate), self.rtl, self.rules
         )
         codes = {finding.code for finding in report.rows[0].findings}
-        self.assertIn("STEP_CALCULATION_UNRESOLVED", codes)
-        self.assertIn("RS_MODULE_MISMATCH", codes)
-        self.assertIn("CLK_CONNECTION_MISMATCH", codes)
+        self.assertEqual(
+            codes,
+            {"RS_MODULE_MISMATCH", "STEP_CALCULATION_UNRESOLVED"},
+        )
 
     def test_mixed_suffix_tags_are_warning_only(self) -> None:
         def mutate(raw) -> None:
@@ -646,7 +674,7 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(len(ambiguous), 1)
         self.assertEqual(ambiguous[0].instance, "top.u_tile.AAAA_BBB_C0")
 
-    def test_multiple_clock_sources_fail_closed(self) -> None:
+    def test_multiple_clock_sources_are_retained_without_validation(self) -> None:
         def mutate(raw) -> None:
             raw["positions"]["top.u_tile"]["instances"][0]["clk_sources"].append(
                 {"instance": "top.u_tile.u_other", "module": "other_crg"}
@@ -655,8 +683,9 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(
             self.specs, self._mutated_inventory(mutate), self.rtl, self.rules
         )
-        self.assertFalse(report.passed)
-        self.assertIn(
+        self.assertTrue(report.passed)
+        self.assertEqual(len(report.rows[0].instances[0].clk_sources), 2)
+        self.assertNotIn(
             "MULTIPLE_CLK_SOURCES", {item.code for item in report.rows[0].findings}
         )
 
@@ -717,22 +746,122 @@ class CheckerTests(unittest.TestCase):
         self.assertIn("CLK_UNCONNECTED", codes)
         self.assertIn("UNSUPPORTED_CONNECTION", codes)
 
-    def test_crg_source_mismatch_fails(self) -> None:
+    def test_module_rule_selects_custom_clk_and_rst_formal_names(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if not instance["name"].startswith("AAAA_BBB"):
+                    continue
+                ports = instance["ports"]
+                ports["pipe_clock"] = ports.pop("clk")
+                ports["pipe_reset_n"] = ports.pop("rst")
+
+        rule = replace(
+            self.rules["rs_pipe"],
+            clk_port="pipe_clock",
+            rst_port="pipe_reset_n",
+        )
+        report = check_specs(
+            [self.specs[0]],
+            self._mutated_inventory(mutate),
+            replace(self.rtl, clk_port="wrong_clk", rst_port="wrong_rst"),
+            {"rs_pipe": rule},
+        )
+
+        self.assertTrue(report.passed)
+
+    def test_missing_custom_formal_name_reports_the_configured_name(self) -> None:
+        rule = replace(self.rules["rs_pipe"], clk_port="pipe_clock")
+        report = check_specs(
+            [self.specs[0]], self.inventory, self.rtl, {"rs_pipe": rule}
+        )
+
+        missing = [
+            finding
+            for finding in report.rows[0].findings
+            if finding.code == "CLK_PORT_MISSING"
+        ]
+        self.assertEqual(len(missing), 6)
+        self.assertTrue(all("'pipe_clock'" in finding.message for finding in missing))
+
+    def test_crg_source_mismatch_is_not_judged(self) -> None:
         wrong = replace(self.specs[0], crg_source="wrong_crg")
         report = check_specs([wrong], self.inventory, self.rtl, self.rules)
-        self.assertFalse(report.passed)
-        self.assertIn(
+        self.assertTrue(report.passed)
+        self.assertEqual(report.rows[0].spec.crg_source, "wrong_crg")
+        self.assertNotIn(
             "CRG_SOURCE_MISMATCH", {item.code for item in report.rows[0].findings}
         )
 
-    def test_collector_warning_fails_closed(self) -> None:
+    def test_unresolved_crg_source_is_not_judged(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if instance["name"].startswith("AAAA_BBB"):
+                    instance["clk_sources"] = []
+
+        report = check_specs(
+            [self.specs[0]], self._mutated_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertTrue(report.passed)
+        self.assertTrue(
+            all(not instance.clk_sources for instance in report.rows[0].instances)
+        )
+        self.assertNotIn(
+            "CRG_SOURCE_UNRESOLVED",
+            {item.code for item in report.rows[0].findings},
+        )
+
+    def test_crg_collector_warnings_are_not_judged(self) -> None:
+        crg_warnings = (
+            "NPI Netlist module driver is missing instance or definition name "
+            "for clock connection: top.u_tile.clk_rs",
+            "clock driver traversal exceeded the depth limit for "
+            "top.u_tile.clk_rs",
+            "NPI Netlist could not resolve clock connection: "
+            "top.u_tile.clk_rs",
+        )
         warned = replace(
             self.inventory,
-            warnings=("clock driver traversal exceeded the depth limit",),
+            warnings=crg_warnings,
         )
         report = check_specs(self.specs, warned, self.rtl, self.rules)
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.global_findings, ())
+        self.assertEqual(report.error_count, 0)
+        self.assertEqual(report.warning_count, 0)
+
+    def test_non_crg_collector_warning_fails_closed(self) -> None:
+        warned = replace(
+            self.inventory,
+            warnings=(
+                "language hierarchy traversal exceeded the depth limit at "
+                "top.u_tile.generated_scope",
+            ),
+        )
+        report = check_specs(self.specs, warned, self.rtl, self.rules)
+
         self.assertFalse(report.passed)
         self.assertEqual(report.global_findings[0].code, "NPI_UNRESOLVED")
+
+    def test_only_crg_warnings_are_removed_from_mixed_collector_warnings(self) -> None:
+        generic_warning = (
+            "NPI parameter is missing its name in module instance: top.u_tile.u_rs"
+        )
+        warned = replace(
+            self.inventory,
+            warnings=(
+                "clock driver traversal exceeded the depth limit for "
+                "top.u_tile.clk_rs",
+                generic_warning,
+            ),
+        )
+        report = check_specs(self.specs, warned, self.rtl, self.rules)
+
+        self.assertFalse(report.passed)
+        self.assertEqual(len(report.global_findings), 1)
+        self.assertEqual(report.global_findings[0].code, "NPI_UNRESOLVED")
+        self.assertEqual(report.global_findings[0].message, generic_warning)
 
     def test_partial_load_notice_is_visible_but_nonfatal(self) -> None:
         noticed = replace(

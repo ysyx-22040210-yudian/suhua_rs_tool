@@ -17,6 +17,7 @@
 
 #include "npi.h"
 #include "npi_hdl.h"
+#include "npi_L1.h"
 #include "npi_nl.h"
 
 namespace {
@@ -49,11 +50,6 @@ struct PortInfo {
   std::string object_type;
 };
 
-struct DriverSource {
-  std::string instance;
-  std::string module;
-};
-
 struct ParameterInfo {
   std::string value;
   bool has_value;
@@ -70,7 +66,6 @@ struct InstanceInfo {
   bool has_line;
   std::map<std::string, PortInfo> ports;
   std::map<std::string, ParameterInfo> parameters;
-  std::vector<DriverSource> clk_sources;
 
   InstanceInfo() : line(0), has_line(false) {}
 };
@@ -312,14 +307,6 @@ std::string language_string(NPI_INT32 property, npiHandle object) {
   return value == NULL ? std::string() : std::string(value);
 }
 
-std::string netlist_string(NPI_INT32 property, npiNlHandle object) {
-  if (object == NULL) {
-    return std::string();
-  }
-  const NPI_BYTE8* value = npi_nl_get_str(property, object);
-  return value == NULL ? std::string() : std::string(value);
-}
-
 std::string pointer_key(const void* pointer) {
   std::ostringstream out;
   out << pointer;
@@ -340,24 +327,9 @@ std::string language_object_key(npiHandle object) {
   return out.str();
 }
 
-std::string netlist_object_key(npiNlHandle object) {
-  const NPI_INT32 type = npi_nl_get(npiNlType, object);
-  std::string name = netlist_string(npiNlFullName, object);
-  if (name.empty()) {
-    name = netlist_string(npiNlName, object);
-  }
-  if (name.empty()) {
-    name = pointer_key(object);
-  }
-  std::ostringstream out;
-  out << type << ':' << name;
-  return out.str();
-}
-
 class Collector {
  public:
-  Collector(const std::string& clk_port, const std::string& rst_port)
-      : clk_port_(clk_port), rst_port_(rst_port) {}
+  Collector(const std::string&, const std::string&) {}
 
   PositionInfo collect_position(const std::string& position) {
     PositionInfo result;
@@ -391,18 +363,6 @@ class Collector {
 
  private:
   static const unsigned int kMaxScopeDepth = 256;
-  static const unsigned int kMaxDriverDepth = 512;
-
-  struct TraceState {
-    explicit TraceState(const std::string& signal_name)
-        : signal(signal_name), depth_warning_emitted(false) {}
-
-    std::string signal;
-    std::set<std::string> visited;
-    std::set<std::string> source_keys;
-    std::vector<DriverSource> sources;
-    bool depth_warning_emitted;
-  };
 
   static bool instance_less(const InstanceInfo& left,
                             const InstanceInfo& right) {
@@ -410,14 +370,6 @@ class Collector {
       return left.full_name < right.full_name;
     }
     return left.name < right.name;
-  }
-
-  static bool source_less(const DriverSource& left,
-                          const DriverSource& right) {
-    if (left.instance != right.instance) {
-      return left.instance < right.instance;
-    }
-    return left.module < right.module;
   }
 
   void add_warning(const std::string& warning) { warnings_.insert(warning); }
@@ -500,25 +452,60 @@ class Collector {
     return result;
   }
 
-  std::map<std::string, PortInfo> collect_ports(npiHandle module) {
+  void merge_port(npiHandle port, const std::string& instance_full_name,
+                  std::map<std::string, PortInfo>* ports) {
+    if (port == NULL) {
+      return;
+    }
+    const std::string name = language_string(npiName, port);
+    if (name.empty()) {
+      add_warning("NPI port is missing its name in module instance: " +
+                  instance_full_name);
+      return;
+    }
+
+    const PortInfo info = read_high_connection(port);
+    std::map<std::string, PortInfo>::iterator existing = ports->find(name);
+    if (existing == ports->end()) {
+      ports->insert(std::make_pair(name, info));
+      return;
+    }
+    if (existing->second.connection.empty() && !info.connection.empty()) {
+      existing->second.connection = info.connection;
+    }
+    if (existing->second.object_type.empty() && !info.object_type.empty()) {
+      existing->second.object_type = info.object_type;
+    }
+  }
+
+  std::map<std::string, PortInfo> collect_ports(
+      npiHandle module, const std::string& instance_full_name) {
     std::map<std::string, PortInfo> result;
 
     npiHandle iterator = npi_iterate(npiPort, module);
-    if (iterator == NULL) {
-      return result;
+    if (iterator != NULL) {
+      npiHandle port = NULL;
+      while ((port = npi_scan(iterator)) != NULL) {
+        merge_port(port, instance_full_name, &result);
+        npi_release_handle(port);
+      }
     }
 
-    npiHandle port = NULL;
-    while ((port = npi_scan(iterator)) != NULL) {
-      const std::string name = language_string(npiName, port);
-      if (name == clk_port_ || name == rst_port_) {
-        std::map<std::string, PortInfo>::const_iterator existing =
-            result.find(name);
-        if (existing == result.end()) {
-          result.insert(std::make_pair(name, read_high_connection(port)));
-        }
+    if (instance_full_name.empty()) {
+      return result;
+    }
+    std::vector<char> mutable_full_name(instance_full_name.begin(),
+                                        instance_full_name.end());
+    mutable_full_name.push_back('\0');
+    hdlVec_t fallback_ports;
+    npi_mod_inst_get_port(&mutable_full_name[0], fallback_ports);
+    for (hdlVec_t::const_iterator port = fallback_ports.begin();
+         port != fallback_ports.end(); ++port) {
+      if (*port == NULL) {
+        continue;
       }
-      npi_release_handle(port);
+      merge_port(*port, instance_full_name, &result);
+      npi_release_handle(*port);
     }
     return result;
   }
@@ -558,142 +545,6 @@ class Collector {
     return result;
   }
 
-  npiNlHandle owning_instance(npiNlHandle inst_port) {
-    npiNlHandle instance = npi_nl_handle(npiNlInst, inst_port);
-    if (instance != NULL) {
-      return instance;
-    }
-    if (npi_nl_get(npiNlType, inst_port) != npiNlPseudoInstPort) {
-      return NULL;
-    }
-
-    npiNlHandle actual = npi_nl_handle(npiNlParent, inst_port);
-    if (actual == NULL) {
-      return NULL;
-    }
-    instance = npi_nl_handle(npiNlInst, actual);
-    npi_nl_release_handle(actual);
-    return instance;
-  }
-
-  void add_module_source(npiNlHandle instance, TraceState* state) {
-    DriverSource source;
-    source.instance = netlist_string(npiNlFullName, instance);
-    if (source.instance.empty()) {
-      source.instance = netlist_string(npiNlName, instance);
-    }
-    source.module = netlist_string(npiNlDefName, instance);
-    if (source.instance.empty() || source.module.empty()) {
-      add_warning("NPI Netlist module driver is missing instance or definition "
-                  "name for clock connection: " +
-                  state->signal);
-      return;
-    }
-    const std::string key = source.instance + "\x1f" + source.module;
-    if (state->source_keys.insert(key).second) {
-      state->sources.push_back(source);
-    }
-  }
-
-  void follow_driver(npiNlHandle driver, unsigned int depth,
-                     TraceState* state) {
-    const NPI_INT32 type = npi_nl_get(npiNlType, driver);
-    if (type == npiNlInstPort || type == npiNlPseudoInstPort) {
-      const NPI_INT32 direction = npi_nl_get(npiNlDirection, driver);
-      npiNlHandle instance = owning_instance(driver);
-      const bool module_cell =
-          instance != NULL &&
-          npi_nl_get(npiNlCellType, instance) == npiNlModuleCell;
-
-      if (module_cell &&
-          (direction == npiNlOutput || direction == npiNlInout)) {
-        add_module_source(instance, state);
-      } else if (direction == npiNlInput) {
-        // An input instance port is driven from the higher-level net.
-        walk_drivers(driver, depth + 1, state);
-      } else if (instance != NULL) {
-        // For an inferred primitive output, move through the primitive to its
-        // input pins before continuing upstream.
-        walk_drivers(instance, depth + 1, state);
-      } else {
-        walk_drivers(driver, depth + 1, state);
-      }
-
-      if (instance != NULL) {
-        npi_nl_release_handle(instance);
-      }
-      return;
-    }
-
-    if (type == npiNlInst) {
-      if (npi_nl_get(npiNlCellType, driver) == npiNlModuleCell) {
-        add_module_source(driver, state);
-      } else {
-        walk_drivers(driver, depth + 1, state);
-      }
-      return;
-    }
-
-    walk_drivers(driver, depth + 1, state);
-  }
-
-  void walk_drivers(npiNlHandle object, unsigned int depth, TraceState* state) {
-    if (object == NULL) {
-      return;
-    }
-    if (depth > kMaxDriverDepth) {
-      if (!state->depth_warning_emitted) {
-        add_warning("clock driver traversal exceeded the depth limit for " +
-                    state->signal);
-        state->depth_warning_emitted = true;
-      }
-      return;
-    }
-    if (!state->visited.insert(netlist_object_key(object)).second) {
-      return;
-    }
-
-    npiNlHandle iterator = npi_nl_iterate(npiNlDriver, object);
-    if (iterator == NULL) {
-      return;
-    }
-    npiNlHandle driver = NULL;
-    while ((driver = npi_nl_scan(iterator)) != NULL) {
-      follow_driver(driver, depth, state);
-      npi_nl_release_handle(driver);
-    }
-  }
-
-  std::vector<DriverSource> trace_clock_sources(
-      const std::string& connection) {
-    std::map<std::string, std::vector<DriverSource> >::const_iterator cached =
-        clock_source_cache_.find(connection);
-    if (cached != clock_source_cache_.end()) {
-      return cached->second;
-    }
-
-    std::vector<DriverSource> result;
-    npiNlHandle start =
-        npi_nl_handle_by_name(connection.c_str(), npiNlNet);
-    if (start == NULL) {
-      start = npi_nl_handle_by_name(connection.c_str(), npiNlUndefined);
-    }
-    if (start == NULL) {
-      add_warning("NPI Netlist could not resolve clock connection: " +
-                  connection);
-      clock_source_cache_[connection] = result;
-      return result;
-    }
-
-    TraceState state(connection);
-    walk_drivers(start, 0, &state);
-    npi_nl_release_handle(start);
-    std::sort(state.sources.begin(), state.sources.end(), source_less);
-    result.swap(state.sources);
-    clock_source_cache_[connection] = result;
-    return result;
-  }
-
   InstanceInfo build_instance(npiHandle module) {
     InstanceInfo result;
     result.name = language_string(npiName, module);
@@ -706,21 +557,12 @@ class Collector {
       result.has_line = true;
     }
 
-    result.ports = collect_ports(module);
+    result.ports = collect_ports(module, result.full_name);
     result.parameters = collect_parameters(module);
-    std::map<std::string, PortInfo>::const_iterator clock =
-        result.ports.find(clk_port_);
-    if (clock != result.ports.end() && !clock->second.connection.empty() &&
-        clock->second.object_type.find("Operation") == std::string::npos) {
-      result.clk_sources = trace_clock_sources(clock->second.connection);
-    }
     return result;
   }
 
-  std::string clk_port_;
-  std::string rst_port_;
   std::set<std::string> warnings_;
-  std::map<std::string, std::vector<DriverSource> > clock_source_cache_;
 };
 
 void write_json_string(std::ostream& out, const std::string& value) {
@@ -821,23 +663,7 @@ void write_instance(std::ostream& out, const InstanceInfo& instance,
   }
   out << indent << "  },\n";
 
-  out << indent << "  \"clk_sources\": [";
-  if (!instance.clk_sources.empty()) {
-    out << '\n';
-  }
-  for (std::vector<DriverSource>::const_iterator source =
-           instance.clk_sources.begin();
-       source != instance.clk_sources.end(); ++source) {
-    out << indent << "    {\"instance\": ";
-    write_json_string(out, source->instance);
-    out << ", \"module\": ";
-    write_json_string(out, source->module);
-    out << '}';
-    std::vector<DriverSource>::const_iterator next = source;
-    ++next;
-    out << (next == instance.clk_sources.end() ? "\n" : ",\n");
-  }
-  out << indent << "  ]\n";
+  out << indent << "  \"clk_sources\": []\n";
   out << indent << '}';
 }
 

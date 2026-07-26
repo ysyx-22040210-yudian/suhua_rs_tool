@@ -33,11 +33,15 @@
       "has_rs_cfg_en": true,
       "step_parameters": [
         "rs_mode"
-      ]
+      ],
+      "clk_port": "clk",
+      "rst_port": "rst"
     },
     "rs_plain": {
       "has_rs_cfg_en": false,
-      "step_parameters": []
+      "step_parameters": [],
+      "clk_port": "clk",
+      "rst_port": "rst"
     }
   }
 }

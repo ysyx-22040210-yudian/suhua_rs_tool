@@ -21,6 +21,20 @@ from .model import (
 _FAKE_GATING_LABEL = "假门控"
 
 
+# Schema v2 inventories produced before CRG validation was disabled can retain
+# failures from the former Netlist clock-source traversal. Those warnings are
+# CRG evidence only; other collector warnings must remain fail-closed.
+_IGNORED_CRG_WARNING_PREFIXES = (
+    "NPI Netlist module driver is missing instance or definition name for clock connection",
+    "clock driver traversal exceeded the depth limit",
+    "NPI Netlist could not resolve clock connection",
+)
+
+
+def _is_ignored_crg_warning(warning: str) -> bool:
+    return warning.strip().startswith(_IGNORED_CRG_WARNING_PREFIXES)
+
+
 def _leaf_name(name: str) -> str:
     value = name.strip().rstrip(".")
     return value.rsplit(".", 1)[-1]
@@ -34,15 +48,6 @@ def _signal_matches(expected: str, actual: str, position: str, allow_leaf: bool)
     if actual == f"{position}.{expected}":
         return True
     return allow_leaf and _leaf_name(expected) == _leaf_name(actual)
-
-
-def _source_matches(expected: str, instance: str, module: str, mode: str) -> bool:
-    expected = expected.strip()
-    if mode in {"module", "module_or_instance"} and expected == module:
-        return True
-    if mode in {"instance", "module_or_instance"}:
-        return expected == instance or expected == _leaf_name(instance)
-    return False
 
 
 def _row_finding(
@@ -288,15 +293,16 @@ def _match_group(
     return valid, invalid
 
 
-def _check_ports_and_sources(
+def _check_ports(
     spec: SpecRow,
     instance: ActualInstance,
     config: RtlConfig,
+    rule: ModuleRule,
 ) -> list[Finding]:
     findings: list[Finding] = []
     for role, port_name, expected_connection in (
-        ("CLK", config.clk_port, spec.clk),
-        ("RST", config.rst_port, spec.rst),
+        ("CLK", rule.clk_port, spec.clk),
+        ("RST", rule.rst_port, spec.rst),
     ):
         port = instance.ports.get(port_name)
         if port is None:
@@ -352,52 +358,6 @@ def _check_ports_and_sources(
                 )
             )
 
-    unique_sources = {
-        (source.instance, source.module): source for source in instance.clk_sources
-    }
-    sources = list(unique_sources.values())
-    if not sources:
-        findings.append(
-            _row_finding(
-                spec,
-                "CRG_SOURCE_UNRESOLVED",
-                f"{instance.full_name}: no upstream module source was resolved for clk",
-                instance=instance.full_name,
-                expected=spec.crg_source,
-                actual=[],
-            )
-        )
-    elif len(sources) > 1:
-        findings.append(
-            _row_finding(
-                spec,
-                "MULTIPLE_CLK_SOURCES",
-                f"{instance.full_name}: clk has multiple upstream module sources",
-                instance=instance.full_name,
-                expected="one unique module source",
-                actual=[
-                    {"instance": source.instance, "module": source.module}
-                    for source in sources
-                ],
-            )
-        )
-    elif not any(
-        _source_matches(spec.crg_source, source.instance, source.module, config.crg_match)
-        for source in sources
-    ):
-        actual_sources = [
-            {"instance": source.instance, "module": source.module} for source in sources
-        ]
-        findings.append(
-            _row_finding(
-                spec,
-                "CRG_SOURCE_MISMATCH",
-                f"{instance.full_name}: clk source does not match CRG_source",
-                instance=instance.full_name,
-                expected=spec.crg_source,
-                actual=actual_sources,
-            )
-        )
     return findings
 
 
@@ -415,6 +375,8 @@ def _check_row(
             name=spec.rs_module,
             has_rs_cfg_en=True,
             step_parameters=(),
+            clk_port="clk",
+            rst_port="rst_n",
         )
     findings.extend(_check_rs_cfg_en_label(spec, rule))
 
@@ -518,7 +480,7 @@ def _check_row(
             evaluation, step_findings = _evaluate_step_instance(spec, instance, rule)
             step_evaluations.append(evaluation)
             findings.extend(step_findings)
-        findings.extend(_check_ports_and_sources(spec, instance, config))
+            findings.extend(_check_ports(spec, instance, config, rule))
 
     if matched_instances:
         contributions = [item.contribution for item in step_evaluations]
@@ -591,6 +553,7 @@ def check_specs(
     global_findings: list[Finding] = [
         Finding(severity="error", code="NPI_UNRESOLVED", message=warning)
         for warning in inventory.warnings
+        if not _is_ignored_crg_warning(warning)
     ]
     global_findings.extend(
         Finding(severity="warning", code="NPI_LOAD_PARTIAL", message=notice)

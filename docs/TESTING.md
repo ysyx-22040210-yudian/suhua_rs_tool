@@ -14,14 +14,14 @@
 | L2 | Windows + Microsoft Excel | 真实 XLSX 九字段乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | position 简写 + schema v2 离线正例 inventory + report v3 | `0` | `tile_core` 解析为 `top.u_tile`，NPI/inventory 只使用全路径；6 个物理实例贡献 `[1,1,0,1,1,1]`，两组均 PASS |
 | L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH` |
-| L5 | 通用本地环境 | position 映射、默认/显式模块规则、动态 step、RTL `RS_CRG_EN`、Excel/internal `RS_CFG_EN` 和旧 inventory | `0` | 映射命中/直通/重复组、隐式默认规则、显式覆盖优先、0/非0/缺失/`null`/X/Z、多 parameter AND 语义、step 0 及 schema v1 拒绝均有独立用例 |
+| L5 | 通用本地环境 | position 映射、默认/显式模块规则、逐模块 clk/rst、动态 step、RTL `RS_CRG_EN`、Excel/internal `RS_CFG_EN`、CRG 暂停判定和旧 inventory | `0` | 映射命中/直通/重复组、默认 `clk/rst_n`、显式端口、旧配置继承、0/非0/缺失/`null`/X/Z、多 parameter AND、CRG 不影响结果、step 0 及 schema v1 拒绝均有独立用例 |
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
 | R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS；report 保留 `tile_core`，collector/inventory 只出现 `top.u_tile`，并保留动态拍数证据 |
 | R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
 | R5 | Windows / Linux / macOS + Tk | GUI 完整配置导出、导入与事务回归 | `0` | 五个根对象完整往返；副本、dirty、搜索过滤、同路径拒绝及无效/取消/拒绝原子性均通过，输出固定 config-io marker |
-| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件且 `libNPI.so` 可解析 |
+| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
@@ -73,9 +73,9 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、单/多 parameter 动态拍数、未知值 fail-closed、clk/rst、CRG、多源、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、elab-only CLI 契约、GUI 五根完整配置导入/导出的事务与副本语义、未编辑纯数字 sheet 名的字符串类型保持、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置校验、XLSX/CSV/TSV 九字段解析、position 映射命中与完整路径直通、`step=0`、实例分组、模块规则库、逐模块 clk/rst 端口、旧规则端口继承与保存显式化、单/多 parameter 动态拍数、未知值 fail-closed、CRG 字段保留但不判定、逐实例 RTL `RS_CRG_EN` 与 Excel/internal `RS_CFG_EN` 标签、inventory schema v2 的 `warnings/notices`、report schema v3、partial-load warning、旧 schema 拒绝、NPI L1 collector 合同、elab-only CLI 契约、GUI 五根完整配置导入/导出的事务与副本语义、未编辑纯数字 sheet 名的字符串类型保持、GUI 命令构造与生命周期、进程组取消和跨桌面 GUI 会话发现。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
-实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/clk/rst/CRG 检查并计入物理实例数及规则计算后的有效 `step`，但不得进入 tag/index/连续编号判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
+实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/逐模块 clk/rst 检查并计入物理实例数及规则计算后的有效 `step`；其 `CRG_source` 只保留证据，不得进入 tag/index/连续编号或 PASS/FAIL 判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
 ### 3.2 Windows 工具自带 GUI 启动和布局检查
 
@@ -98,7 +98,7 @@ python -m pip install -e .
 rtl-rs-check-gui
 ```
 
-窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的兼容配置键 `has_rs_cfg_en=true`、`step_parameters=rs_mode`，并确认界面将该规则说明为 RTL `RS_CRG_EN` parameter。最后修改 GUI Excel 设置和两个内存数据库，导出完整配置副本并重新导入，确认五个根对象完整恢复。截图必须基于当前版本重新验收，且不提交仓库。
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查九个列映射、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。在映射页搜索 `tile_core`，确认其全路径为 `top.u_tile`，并用临时配置完成一次映射新建、修改、保存、重载和删除；规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode` 和 `clk_port=clk/rst_port=rst`。新建规则时把两个端口输入留空，应保存为 `clk/rst_n`。最后修改 GUI Excel 设置和两个内存数据库，导出完整配置副本并重新导入，确认五个根对象及所有端口规则完整恢复。截图必须基于当前版本重新验收，且不提交仓库。
 
 从仓库根目录可直接复制运行可见 GUI smoke。脚本使用临时配置验证 position 映射和模块规则的新建/保存/重载/删除，并把当前 Excel/列号、完整 `rtl`、包含未单独保存修改的两个数据库导出为副本后重新导入；它不会修改仓库配置，成功后把“Position 映射库”页保留 10 秒：
 
@@ -259,17 +259,21 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 }
 ```
 
-预期 finding 至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`。当前反例的模块名、clk/rst 和 CRG 故意保持正确，因此不得要求旧版本的五类无关差异。
+预期 finding 至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`。当前反例的模块名和 clk/rst 故意保持正确；`CRG_source` 的值无论正确与否都不得产生 finding。
 
-### 3.5 模块规则、动态 step、RTL `RS_CRG_EN` 和兼容标签合同回归
+### 3.5 模块端口规则、动态 step、RTL `RS_CRG_EN` 和兼容标签合同回归
 
 全量测试必须独立覆盖下列情况；不能只依赖一个同时触发多种 finding 的反例：
 
 | 规则/实例条件 | 预期 |
 |---|---|
-| 没有模块专属显式规则 | 使用默认 `has_rs_cfg_en=true`、`step_parameters=[]`；兼容规则键实际要求 RTL `RS_CRG_EN`；`validate` 接受输入 |
+| 没有模块专属显式规则 | 使用默认 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`；兼容规则键实际要求 RTL `RS_CRG_EN`；`validate` 接受输入 |
 | 默认规则，6 个物理实例 | 每个实例贡献 1，有效拍数 6 |
-| 存在大小写精确匹配的显式规则 | 显式 `has_rs_cfg_en` 和 `step_parameters` 覆盖默认值；前者控制 RTL `RS_CRG_EN` |
+| 存在大小写精确匹配的显式规则 | 显式 `has_rs_cfg_en`、`step_parameters`、`clk_port`、`rst_port` 覆盖默认值；前者控制 RTL `RS_CRG_EN` |
+| GUI 新建/修改规则时 clk/rst 输入留空 | 规范化为 `clk`、`rst_n`，导出/保存后显式写入 JSON |
+| 旧显式规则缺少 `clk_port/rst_port` | 分别继承同一配置的 `rtl.clk_port/rst_port`；保存/导出时显式化且语义不变 |
+| 自定义 `clk_port/rst_port` | checker 只按该模块规则选择端口；不同 `RS_module` 可使用不同 formal port 名 |
+| RTL 模块没有规则指定的 rst formal port | `RST_PORT_MISSING`；当前没有跳过 rst 检查的规则 |
 | `step_parameters=["rs_mode"]`，值为 `1,1,0,1,1,1` | 贡献 `[1,1,0,1,1,1]`，有效拍数 5 |
 | 两个 step parameters 且值都已解析 | 只有全部非零的实例贡献 1，至少一个为 0 贡献 0 |
 | step parameter 缺失 | `STEP_PARAMETER_MISSING` + `STEP_CALCULATION_UNRESOLVED` |
@@ -283,8 +287,9 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 | `has_rs_cfg_en=false`，RTL 实际存在 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_UNEXPECTED` |
 | `step_parameters` 包含 `RS_CRG_EN` | 配置错误；该 parameter 由专门逻辑处理 |
 | `step_parameters` 包含另一个真实 RTL parameter `RS_CFG_EN` | 作为普通动态拍参数接受，不与 Excel/internal 标签字段混淆 |
+| `CRG_source` 错误、`clk_sources=[]` 或旧 inventory 有多个来源 | 均不产生 CRG finding，不改变 PASS/FAIL；字段和旧证据仍保留在 report |
 
-还必须断言 report `schema_version=3`，每行都包含最终采用的默认或显式 `module_rule`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。
+还必须断言 report `schema_version=3`，每行最终采用的默认或显式 `module_rule` 都包含 `clk_port/rst_port`，`step_check.physical_instances` 等于 matched instances 数量，`effective_step` 等于所有已知贡献之和。inventory 仍必须是 schema v2；schema v1、缺少实例 `parameters` 或值不是 `string|null` 的 inventory 必须被拒绝。对自定义端口运行 offline 检查前，旧 collector 只采全局端口生成的 inventory 必须重采，不能用缺失 key 模拟当前 collector 行为。
 
 Position 映射必须有独立合同测试：`tile_core -> top.u_tile` 命中后 `SpecRow.position` 为全路径、`position_alias` 为简写；未登记的 `top.u_tile` 直通且 alias 为空；映射后相同 `(position, RS_inst)` 仍判重复；CLI/GUI report v3 和 CSV 保留 alias；交给 NPI runner 的唯一 positions 只能包含完整路径，绝不能包含 `tile_core`。
 
@@ -314,7 +319,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 python3 -m rscheck gui
 ```
 
-macOS 不支持真实 NPI 在线采集；在线 collector、`libNPI.so` 和 elaborated KDB 加载测试必须在 Linux/Verdi 环境执行。
+macOS 不支持真实 NPI 在线采集；在线 collector、`libNPI.so`、`libnpiL1.so` 和 elaborated KDB 加载测试必须在 Linux/Verdi 环境执行。
 
 可单独运行 elab-only 契约测试：
 
@@ -391,7 +396,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.8.1` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.9.0` 设备门禁，必须在目标设备重跑并确认 config-io marker，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -448,7 +453,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.8.1` 必须重新运行并出现 config-io marker。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是导入/导出功能之前的历史性能基线，见 [NPI partial-load 兼容与 GUI 压测验证记录](TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)；当前 `0.9.0` 必须重新运行并出现 config-io marker。
 
 离线反例使用相同 inventory，但规格故意写错。脚本自身预期 GUI 显示 `FAIL`，因此 smoke 成功仍返回 `0`：
 
@@ -498,7 +503,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.8.1` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
+2026-07-24 九列版本的 2.12 秒墙钟时间、最大 RSS 175,612 KiB，以及 0.7.1 fresh run 的 10,000 行结果都只是完整配置导入/导出之前的历史性能数据；旧数字不是当前 `0.9.0` 性能结论，也不是不同设备的硬门槛。若需要本机时间/RSS 基线，应在目标设备重跑本节命令并确认 config-io marker；缺少 `/usr/bin/time` 时先安装发行版的 `time` 包。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -537,6 +542,16 @@ export PYTHON_BIN="${PYTHON_BIN:-python3}"
 export CXX="${CXX:-g++}"
 export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
 export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
+export NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
+if [ -z "${NPI_L1_LIB_DIR:-}" ]; then
+  if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
+    NPI_L1_LIB_DIR="$NPI_LIB_DIR"
+  else
+    NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
+    NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
+  fi
+fi
+export NPI_L1_LIB_DIR
 
 # 若系统有多个 Python/GCC 工具链，在这里 source 对应的 enable 脚本。
 # source <PYTHON_TOOLCHAIN_ENABLE>
@@ -549,6 +564,8 @@ test -x "$VERDI_HOME/bin/vericom"
 test -x "$VERDI_HOME/bin/elabcom"
 test -f "$NPI_INC_DIR/npi.h"
 test -f "$NPI_LIB_DIR/libNPI.so"
+test -f "$NPI_L1_INC_DIR/npi_L1.h"
+test -f "$NPI_L1_LIB_DIR/libnpiL1.so"
 ```
 
 若任一 `test` 返回非零，先修复安装路径或环境变量，不要继续构建。
@@ -563,25 +580,30 @@ make -C npi \
   NPI_PLATFORM="$NPI_PLATFORM" \
   NPI_INC="$NPI_INC_DIR" \
   NPI_LIB="$NPI_LIB_DIR" \
+  NPI_L1_INC="$NPI_L1_INC_DIR" \
+  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
   CXX="$CXX"
 
 COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
 test -x "$COLLECTOR"
 file "$COLLECTOR"
-ldd "$COLLECTOR" | grep 'libNPI.so'
+ldd "$COLLECTOR" | grep 'libNPI\.so'
+ldd "$COLLECTOR" | grep 'libnpiL1\.so'
 ```
 
-仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；GNU Make 会拆分目标名，Makefile 会在构建前明确拒绝这类路径。
+仓库路径及 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` 不得包含空白；GNU Make 会拆分目标名，Makefile 会在构建前明确拒绝这类路径。
 
 预期：
 
 - `make` 返回 `0`。
 - `$COLLECTOR` 是当前 CentOS 架构的可执行文件。
-- `ldd` 中 `libNPI.so` 指向 `$NPI_LIB_DIR`，且不是 `not found`。
+- `ldd` 中 `libNPI.so` 和 `libnpiL1.so` 都指向预期目录，且都不是 `not found`。
+
+该 collector 会合并 Language Model `npiPort` 遍历和 NPI L1 `npi_mod_inst_get_port` fallback，采集每个直接子 module instance 的全部 formal ports；`--clk-port/--rst-port` 仍保留在进程接口中，但不再过滤 inventory。clock source trace 当前停用，因此新 inventory 的每个 `clk_sources` 都必须是空数组。
 
 若 NPI 库不在标准目录，在 `rscheck check` 命令中增加 `--npi-lib-dir "$NPI_LIB_DIR"`。
 
-该选项只配置 collector 子进程的动态库搜索路径，不是设计参数，也不会传给 `npi_load_design`。
+该选项只配置 collector 子进程的主要 NPI 动态库搜索路径，不是设计参数，也不会传给 `npi_load_design`。`libnpiL1.so` 位于其他目录时由构建时的 rpath 和当前 `LD_LIBRARY_PATH` 定位。
 
 ## 7. 使用 vericom 和 elabcom 生成测试 KDB
 
@@ -626,7 +648,7 @@ $ELAB_ROOT/work.lib++       # vericom 编译库，不可传给生产工具
 $ELAB_ROOT/kdb.elab++       # elabcom elaborated KDB，可传给 --elab-db
 ```
 
-`--elab-db` 不强制目录名必须以 `.elab++` 结尾，因为 `elabcom -elab <path>` 允许自定义名称；但该路径必须存在且必须是目录。collector 调用 `npi_load_design -elab <path>`；返回 0 时还会按手册示例枚举 top。存在可查询 top 才继续，并由后续 position/实例/端口/parameter/CRG 检查保持 fail-closed；无 top 才退出 11。
+`--elab-db` 不强制目录名必须以 `.elab++` 结尾，因为 `elabcom -elab <path>` 允许自定义名称；但该路径必须存在且必须是目录。collector 调用 `npi_load_design -elab <path>`；返回 0 时还会按手册示例枚举 top。存在可查询 top 才继续，并由后续 position/实例/全部 formal port/parameter 检查保持 fail-closed；无 top 才退出 11。`CRG_source` 当前不在 fail-closed 检查集合中。
 
 ## 8. 在线正例
 
@@ -724,6 +746,19 @@ for name, expected_mode in expected_modes.items():
         or parameters.get("rs_mode") != expected_mode
     ):
         raise SystemExit("inventory lost effective parameters for {}: {!r}".format(name, parameters))
+    ports = instances[name].get("ports")
+    if not isinstance(ports, dict) or set(ports) != {"clk", "rst", "d", "q"}:
+        raise SystemExit("collector did not retain all rs_pipe formal ports for {}: {!r}".format(name, ports))
+    if instances[name].get("clk_sources") != []:
+        raise SystemExit("new collector must leave clk_sources empty: {!r}".format(instances[name]))
+
+custom = instances.get("CUSTOM_RS")
+if not isinstance(custom, dict) or custom.get("module") != "rs_custom":
+    raise SystemExit("custom-port fixture instance is missing: {!r}".format(custom))
+if set(custom.get("ports", {})) != {"clock_i", "reset_ni", "d", "q"}:
+    raise SystemExit("rs_custom formal ports are incomplete: {!r}".format(custom))
+if custom.get("clk_sources") != []:
+    raise SystemExit("rs_custom clock-source trace must be disabled: {!r}".format(custom))
 
 expected = {
     "passed": True,
@@ -743,11 +778,15 @@ for row in report["rows"]:
         raise SystemExit("report lost Excel position alias: {!r}".format(row["spec"]))
     if row["spec"].get("RS_CFG_EN") != "假门控":
         raise SystemExit("report lost RS_CFG_EN Excel evidence: {!r}".format(row["spec"]))
+    if not row["spec"].get("CRG_source"):
+        raise SystemExit("report lost retained CRG_source evidence: {!r}".format(row["spec"]))
     rule = row.get("module_rule")
     if rule != {
         "name": "rs_pipe",
         "has_rs_cfg_en": True,
         "step_parameters": ["rs_mode"],
+        "clk_port": "clk",
+        "rst_port": "rst",
     }:
         raise SystemExit("unexpected module rule evidence: {!r}".format(rule))
     for instance in row["matched_instances"]:
@@ -776,7 +815,14 @@ print("positive position-mapping/inventory-v2/report-v3 evidence OK:", actual)
 PY
 ```
 
-预期输出 `positive position-mapping/inventory-v2/report-v3 evidence OK`，Python 返回 `0`。这同时证明 Excel 使用简写、报告保留简写、collector/inventory 只处理解析后的完整路径。
+预期输出 `positive position-mapping/inventory-v2/report-v3 evidence OK`，Python 返回 `0`。这同时证明 Excel 使用简写、报告保留简写、collector/inventory 只处理解析后的完整路径，并采到未出现在两行 Excel 中的 `rs_custom.CUSTOM_RS` 全部 `clock_i/reset_ni/d/q` formal ports。
+
+完整 VM 脚本还会基于同一份真实 inventory 临时生成一行 `rs_custom/CUSTOM_RS` 规格和模块规则 `clk_port=clock_i`、`rst_port=reset_ni`，并故意把 `CRG_source` 写成错误值。该行必须 PASS，日志必须出现这两个固定 marker：
+
+```text
+custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
+CRG_source evidence retained without PASS/FAIL validation
+```
 
 ### 8.2 VM 上工具自带 GUI 的在线 KDB smoke
 
@@ -796,6 +842,16 @@ export PYTHON_BIN="${PYTHON_BIN:-python3}"
 export CXX="${CXX:-g++}"
 export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
 export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
+export NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
+if [ -z "${NPI_L1_LIB_DIR:-}" ]; then
+  if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
+    NPI_L1_LIB_DIR="$NPI_LIB_DIR"
+  else
+    NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
+    NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
+  fi
+fi
+export NPI_L1_LIB_DIR
 export COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
 
 cd "$PROJECT_ROOT"
@@ -808,10 +864,14 @@ make -C npi \
   NPI_PLATFORM="$NPI_PLATFORM" \
   NPI_INC="$NPI_INC_DIR" \
   NPI_LIB="$NPI_LIB_DIR" \
+  NPI_L1_INC="$NPI_L1_INC_DIR" \
+  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
   CXX="$CXX"
 test -x "$COLLECTOR"
 test -d "$ELAB_DB"
 test -f "$NPI_LIB_DIR/libNPI.so"
+test -f "$NPI_L1_INC_DIR/npi_L1.h"
+test -f "$NPI_L1_LIB_DIR/libnpiL1.so"
 
 bash scripts/launch_rscheck_gui.sh --probe-only
 source scripts/lib/gui_session.sh
@@ -868,11 +928,11 @@ grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
 )
 ```
 
-成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...`、`header-map=column-index strict-header=false` 和 `contract=elab-only`。运行日志中的命令必须包含 `--collector` 和 `--elab-db`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS，首组显示 6 个物理实例、有效/期望拍 `5/5`。inventory 必须是 schema v2，report 必须是 schema v3，贡献必须为 `[1,1,0,1,1,1]`。在线 smoke 的报告和临时 inventory 位于系统临时目录，退出后自动清理。2026-07-24 记录不包含动态 step，不能作为本项证据。
+成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`window_id=0x...`、`header-map=column-index strict-header=false`、`contract=elab-only` 和 `module-rule-ports=preserved`。运行日志中的命令必须包含 `--collector` 和 `--elab-db`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS，首组显示 6 个物理实例、有效/期望拍 `5/5`。inventory 必须是 schema v2、保留 `rs_pipe` 的全部 `clk/rst/d/q` formal ports 且 `clk_sources=[]`；report 必须是 schema v3、模块规则含 `clk_port/rst_port`，贡献必须为 `[1,1,0,1,1,1]`。在线 smoke 的报告和临时 inventory 位于系统临时目录，退出后自动清理。2026-07-24 记录不包含动态 step，不能作为本项证据。
 
 ## 9. 在线反例
 
-反例复用同一个 `$ELAB_DB`，只把规格替换为 `tests/fixtures/specs_negative.csv`。该规格保留正确模块、clk/rst 和 CRG；RTL `RS_CRG_EN=0` 保持不变，只把有效拍数 `5` 写成 `6`，并把 Excel/internal `RS_CFG_EN` 标签写成 `真门控`。
+反例复用同一个 `$ELAB_DB`，只把规格替换为 `tests/fixtures/specs_negative.csv`。该规格保留正确模块和 clk/rst；`CRG_source` 虽继续填写但不参与结果。RTL `RS_CRG_EN=0` 保持不变，只把有效拍数 `5` 写成 `6`，并把 Excel/internal `RS_CFG_EN` 标签写成 `真门控`。
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -907,7 +967,7 @@ sed -n '1,160p' "$NEG_LOG"
 
 - 退出码严格为 `1`，不是 `0` 或 `2`。
 - 控制台首行为 `RESULT: FAIL | rows=1 errors=<正整数> warnings=0`；不要固定历史 error 总数。
-- finding 至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`；不要要求当前反例没有故意制造的模块/连线/CRG 错误。
+- finding 至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH`；不得出现 CRG finding。
 
 ### 9.1 反例 JSON 摘要和 finding 断言
 
@@ -1106,10 +1166,11 @@ work_lib_as_elab.log
 - 确认 `COLLECTOR` 指向文件而不是目录。
 - 执行 `test -x "$COLLECTOR"` 和 `file "$COLLECTOR"`。
 
-### 14.4 `libNPI.so: cannot open shared object file`
+### 14.4 `libNPI.so` / `libnpiL1.so` 无法加载
 
 - 检查 `VERDI_HOME` 和 `NPI_PLATFORM`。
-- 执行 `ldd "$COLLECTOR" | grep libNPI`。
+- 检查 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`；头文件必须分别包含 `npi.h`、`npi_L1.h`。
+- 执行 `ldd "$COLLECTOR" | grep -E 'libNPI|libnpiL1'`，两项都不能是 `not found`。
 - 必要时使用 `--npi-lib-dir "$NPI_LIB_DIR"`。
 - 不要把动态库路径伪装成设计参数；它与 `--elab-db` 是不同用途。
 
@@ -1128,9 +1189,9 @@ work_lib_as_elab.log
 ### 14.7 `NPI_LOAD_PARTIAL` 或 `error[NPI_LOAD]`
 
 - 当前 Python runner 会在 collector 启动前拒绝 `work.lib++` 及其符号链接别名；若看到对应错误，改传真正的 elaborated KDB。
-- `warning[NPI_LOAD_PARTIAL]` 表示 load 返回 0，但 NPI 仍能枚举 top。该 warning 本身不阻止 PASS；继续核对报告中所有目标证据，不能用它忽略 `POSITION_NOT_FOUND`、端口、parameter 或 CRG 错误。
+- `warning[NPI_LOAD_PARTIAL]` 表示 load 返回 0，但 NPI 仍能枚举 top。该 warning 本身不阻止 PASS；继续核对报告中所有目标证据，不能用它忽略 `POSITION_NOT_FOUND`、端口或 parameter 错误。`CRG_source` 当前不参与判定。
 - `error[NPI_LOAD]` / 退出 11 表示 load 返回 0 且没有任何 top 可查询。返回第 7 节重建 KDB，并确认 `-top` 与 Excel 层次根一致。
-- 执行 `ldd "$COLLECTOR" | grep libNPI.so`，确认运行时库、`VERDI_HOME`、PATH 中的 Verdi 与生成 KDB 的版本/平台一致。
+- 执行 `ldd "$COLLECTOR" | grep -E 'libNPI|libnpiL1'`，确认两个运行时库、`VERDI_HOME`、PATH 中的 Verdi 与生成 KDB 的版本/平台一致。
 - 直接运行 collector 时分别保存 stdout/stderr，并查看当前工作目录下 `rs_npi_collectorLog/compiler.log`。Python runner 在失败时会同时保留两个输出流的首尾诊断。
 
 ### 14.8 正例出现 `POSITION_NOT_FOUND`
@@ -1141,11 +1202,13 @@ work_lib_as_elab.log
 - 确认解析后的 `top.u_tile` 与展开后的完整 NPI 层次一致。
 - 确认没有拿到其他工程或旧版本 RTL 的 KDB。
 
-### 14.9 正例出现 `NPI_UNRESOLVED`、`CRG_SOURCE_UNRESOLVED` 或多驱动
+### 14.9 `CLK_PORT_MISSING` / `RST_PORT_MISSING` 或 CRG 值不同
 
-- 查看 JSON inventory 中对应实例的 `ports` 和 `clk_sources`。
-- collector 的 traversal/driver warning 会 fail-closed，不应通过忽略 warning 来获得 PASS。
-- 检查 clock gate/buffer 后实际被追踪到的第一个模块是否与 `CRG_source` 一致。
+- 先查看 report v3 的 `module_rule.clk_port/rst_port`，确认规则键精确匹配 `RS_module`。未知模块默认使用 `clk/rst_n`；旧显式规则缺键时继承 `rtl.clk_port/rst_port`。
+- 查看 JSON inventory 中对应实例的 `ports`。当前 collector 应包含全部 formal ports；若是升级前生成、只含旧全局 clk/rst 的 offline inventory，请用当前 collector 重新在线采集。
+- partial KDB 中 Language Model 端口遍历为空时，collector 应由 NPI L1 `npi_mod_inst_get_port` fallback 补齐；若仍为空，核对 `libnpiL1.so`、实例完整路径和 collector 日志。
+- 模块没有规则指定的 rst formal port 时仍会报告 `RST_PORT_MISSING`；当前没有跳过 rst 检查的开关。
+- `CRG_source` 不一致、没有来源或旧 inventory 中有多个 `clk_sources` 当前均不影响 PASS/FAIL。新 collector 的 `clk_sources` 固定为 `[]`，不得期待 `CRG_SOURCE_*` finding。
 
 ### 14.10 RTL `RS_CRG_EN` 检查失败（兼容 code 为 `RS_CFG_EN_*`）
 
@@ -1159,7 +1222,7 @@ work_lib_as_elab.log
 
 ### 14.11 模块规则或动态 step 检查失败
 
-- 显式规则没有生效：规则键与 `RS_module` 大小写不完全一致。工具会采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`，即要求 RTL `RS_CRG_EN`；核对 report v3 的 `module_rule`。
+- 显式规则没有生效：规则键与 `RS_module` 大小写不完全一致。工具会采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，即要求 RTL `RS_CRG_EN` 并检查默认端口；核对 report v3 的 `module_rule`。
 - `STEP_PARAMETER_MISSING`：规则中的 parameter 不存在于该实例；核对拼写、模块类型和 KDB。
 - `STEP_PARAMETER_VALUE_UNRESOLVED`：parameter 为 `null`、X/Z/`?` 或非法值；该实例贡献未知。
 - `STEP_CALCULATION_UNRESOLVED`：至少一个实例贡献未知；查看 report v3 的 `step_check.contributions`，先解决根因。
@@ -1231,12 +1294,22 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、inventory v2/report v3、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。每次 GUI smoke 还会完成 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五根配置的完整导出/导入往返。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、带 NPI L1 的 collector 构建、故意带 elaboration error 但 top 可查询的 partial KDB CLI/GUI 回归、clean 示例 `vericom/elabcom`、`verdi -elab <kdb.elab++>` 严格 top 窗口检测、同一 fresh KDB 的在线 GUI 普通正例、自定义 `clock_i/reset_ni` 正例和反例、离线 GUI 100 轮/10,000 行，以及 `tile_core -> top.u_tile`、NPI positions 仅全路径、全部 formal ports、`clk_sources=[]`、inventory v2/report v3、逐模块 `clk_port/rst_port`、6 个物理实例、`rs_mode` 和 `[1,1,0,1,1,1]` 贡献证据断言。每次 GUI smoke 还会完成 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五根配置的完整导出/导入往返。partial KDB 必须为 2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning，GUI 的 GLOBAL 行显示 PASS。启动阶段和 PASS 前复核都要求新窗口标题匹配 `VERDI_READY_REGEX`；任意新 Verdi 窗口加固定等待不能通过。脚本还确认精确 KDB 对应进程仍存活，并扫描 Verdi/collector 日志。`work.lib++` 仅供 `elabcom` 准备 KDB；NPI 检查的唯一设计输入始终是 `--elab-db`。脚本默认只按本次 KDB 路径关闭它启动的 Verdi；设置 `KEEP_VERDI_GUI=1` 才在成功后保留窗口。
 
-VM 脚本对以下六份 GUI 日志逐一执行硬断言；缺少任意一份日志中的固定 marker 都会使脚本非零退出：
+真实 NPI 端口与 CRG 暂停判定成功时还必须出现：
+
+```text
+partial NPI formal-port L0/L1 inventory evidence OK; clock-source tracing disabled
+custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
+CRG_source evidence retained without PASS/FAIL validation
+GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port ... rule-ports=clock_i/reset_ni ...
+```
+
+VM 脚本对以下七份 GUI 日志逐一执行硬断言；缺少任意一份日志中的固定 marker 都会使脚本非零退出：
 
 ```text
 online_gui_positive.log
+online_gui_custom_port.log
 partial_load_gui.log
 online_gui_negative.log
 offline_gui_default_rule.log
@@ -1275,11 +1348,11 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 | GUI 选择 | `GUI_USER`、`GUI_DISPLAY`、`GUI_XAUTHORITY`、`GUI_SESSION_PID` |
 | Verdi 就绪 | `GUI_START_TIMEOUT`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX` |
 | 测试工具链 | `PYTHON_BIN`、`CXX` |
-| 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR` |
+| 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` |
 | GUI 压测规模 | `GUI_ONLINE_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS` |
 | fresh 运行目录 | `VM_RUN_BASE`（绝对路径） |
 | 站点环境/license | `VERDI_ENV_FILE`（绝对路径）、`VERDI_AUTO_LICENSE_IMPORT` |
 
-`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将 `NPI_INC_DIR`/`NPI_LIB_DIR` 传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
+`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。端到端脚本构建时将四个 NPI/NPI L1 目录传给 Makefile，并在在线检查中显式使用 `--npi-lib-dir "$NPI_LIB_DIR"`。完整默认值、SSH/VNC/XRDP 命令、成功输出和故障排查见 [Verdi GUI 端到端复现指南](VM_GUI_TEST.md)。直接运行时产物位于 `.gitignore` 排除的目录；fresh 驱动产物位于仓库外的本轮 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*`，两者均不提交 Git。
 
-当前 `0.8.1` 验收见 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md)，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows `Ran 223 tests`、`OK (skipped=44)`；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN`、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过，上述六份 GUI 日志全部命中五根配置 round-trip marker。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。
+当前代码版本为 `0.9.0`。下述 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录](TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 是 `0.8.1` 历史基线，固定到提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows `Ran 223 tests`、`OK (skipped=44)`；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN`、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过，上述六份 GUI 日志全部命中五根配置 round-trip marker。该记录不能证明 `0.9.0` 新增逐模块端口和 NPI L1 fallback；本轮需按本指南重新验收。`TEST_RESULTS_CONFIG_IO_2026-07-26.md` 是 `0.8.0` 历史基线，其余 `TEST_RESULTS_*.md` 是更早功能阶段的历史基线。

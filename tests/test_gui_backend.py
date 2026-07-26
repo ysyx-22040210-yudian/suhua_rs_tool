@@ -436,6 +436,8 @@ class GuiBackendTests(unittest.TestCase):
                         "name": spec["RS_module"],
                         "has_rs_cfg_en": True,
                         "step_parameters": ["rs_mode"],
+                        "clk_port": "clock_i",
+                        "rst_port": "reset_ni",
                     },
                     "step_check": {
                         "expected": 1,
@@ -465,6 +467,39 @@ class GuiBackendTests(unittest.TestCase):
             path.write_text(json.dumps(report), encoding="utf-8")
             loaded = load_report(path)
             self.assertEqual(loaded.rows[0]["step_check"]["effective_step"], 1)
+            self.assertEqual(
+                loaded.rows[0]["module_rule"]["clk_port"], "clock_i"
+            )
+            self.assertEqual(
+                loaded.rows[0]["module_rule"]["rst_port"], "reset_ni"
+            )
+
+            legacy_report = copy.deepcopy(report)
+            legacy_rule = legacy_report["rows"][0]["module_rule"]
+            legacy_rule.pop("clk_port")
+            legacy_rule.pop("rst_port")
+            path.write_text(json.dumps(legacy_report), encoding="utf-8")
+            legacy_loaded = load_report(path)
+            self.assertNotIn("clk_port", legacy_loaded.rows[0]["module_rule"])
+            self.assertNotIn("rst_port", legacy_loaded.rows[0]["module_rule"])
+
+            for port_field in ("clk_port", "rst_port"):
+                for invalid_value in (None, "", "   ", 1):
+                    with self.subTest(
+                        port_field=port_field, invalid_value=invalid_value
+                    ):
+                        invalid_report = copy.deepcopy(report)
+                        invalid_report["rows"][0]["module_rule"][port_field] = (
+                            invalid_value
+                        )
+                        path.write_text(
+                            json.dumps(invalid_report), encoding="utf-8"
+                        )
+                        with self.assertRaisesRegex(
+                            GuiReportError,
+                            rf"module_rule\.{port_field}.*non-empty string",
+                        ):
+                            load_report(path)
 
             for parameter_name in ("RS_CFG_EN", "RS_CRG_EN"):
                 with self.subTest(compatible_step_parameter=parameter_name):

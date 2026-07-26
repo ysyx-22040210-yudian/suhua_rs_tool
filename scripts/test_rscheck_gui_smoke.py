@@ -136,6 +136,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run an offline passing case for an unregistered RS_module",
     )
+    parser.add_argument(
+        "--custom-port",
+        action="store_true",
+        help="run an online passing case whose module uses clock_i/reset_ni",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -248,7 +253,7 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                         "connection": f"{position}.clk_default",
                         "type": "npiNet",
                     },
-                    "rst": {
+                    "rst_n": {
                         "connection": f"{position}.rst_n",
                         "type": "npiNet",
                     },
@@ -279,6 +284,27 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
     return specs_path, inventory_path
 
 
+def _write_custom_port_spec(output: Path) -> Path:
+    specs_path = output / "custom_port_specs.csv"
+    with specs_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(_BUSINESS_HEADERS)
+        writer.writerow(
+            (
+                "CUSTOM_IF",
+                "rs_custom",
+                "CUSTOM_RS",
+                "tile_core",
+                1,
+                "clk_rs",
+                "rst_n",
+                "intentionally_wrong_source",
+                "假门控",
+            )
+        )
+    return specs_path
+
+
 def _read_json_object(path: Path, label: str) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -306,21 +332,32 @@ def main() -> int:
     if args.expect_partial_load and not online:
         raise SystemExit("--expect-partial-load requires online NPI mode")
     if args.expect_partial_load and (
-        args.negative or args.default_rule or args.generated_rows or args.validate_only
+        args.negative
+        or args.default_rule
+        or args.custom_port
+        or args.generated_rows
+        or args.validate_only
     ):
         raise SystemExit(
             "--expect-partial-load requires a positive online full check"
         )
-    if args.negative and args.generated_rows:
-        raise SystemExit("--negative and --generated-rows are mutually exclusive")
+    if args.negative and (args.generated_rows or args.custom_port):
+        raise SystemExit(
+            "--negative is mutually exclusive with --generated-rows and --custom-port"
+        )
     if args.default_rule and online:
         raise SystemExit("--default-rule is available only in offline inventory mode")
-    if args.default_rule and (args.negative or args.generated_rows):
+    if args.default_rule and (args.negative or args.generated_rows or args.custom_port):
         raise SystemExit(
-            "--default-rule is mutually exclusive with --negative and --generated-rows"
+            "--default-rule is mutually exclusive with --negative, --generated-rows, "
+            "and --custom-port"
         )
     if args.default_rule and args.validate_only:
         raise SystemExit("--default-rule requires a full check, not --validate-only")
+    if args.custom_port and not online:
+        raise SystemExit("--custom-port requires online NPI mode")
+    if args.custom_port and args.validate_only:
+        raise SystemExit("--custom-port requires a full check, not --validate-only")
 
     root = tk.Tk()
     app = RsCheckApp(root)
@@ -346,6 +383,22 @@ def main() -> int:
                 f"GUI config button layout overlaps or overflows: {expected_text}"
             )
         previous_right = right
+    app.notebook.select(app.rules_tab)
+    root.update()
+    rule_columns = (
+        "module",
+        "rs_cfg_en",
+        "clk_port",
+        "rst_port",
+        "step_parameters",
+    )
+    rule_width = sum(int(app.rule_tree.column(name, "width")) for name in rule_columns)
+    if app.rule_tree.winfo_width() <= 1 or rule_width > app.rule_tree.winfo_width() + 2:
+        raise SystemExit(
+            "GUI module rule table overflows at the 980x680 minimum window size"
+        )
+    app.notebook.select(app.setup_tab)
+    root.update()
     modal_errors: list[str] = []
 
     def capture_error(title: str, message: str, **_kwargs: object) -> None:
@@ -361,6 +414,16 @@ def main() -> int:
         encoding="utf-8"
     )
     source_config = json.loads(source_config_text)
+    if args.custom_port:
+        source_config.setdefault("module_rules", {})["rs_custom"] = {
+            "has_rs_cfg_en": True,
+            "step_parameters": [],
+            "clk_port": "clock_i",
+            "rst_port": "reset_ni",
+        }
+        source_config_text = (
+            json.dumps(source_config, ensure_ascii=False, indent=2) + "\n"
+        )
     original_position_mappings = source_config.get("position_mappings", {})
     if original_position_mappings.get("tile_core") != "top.u_tile":
         raise SystemExit(
@@ -443,6 +506,8 @@ def main() -> int:
     app.module_name_var.set("gui_smoke_rule")
     app.module_has_rs_cfg_en_var.set(False)
     app.module_step_parameters_var.set("smoke_mode")
+    app.module_clk_port_var.set("")
+    app.module_rst_port_var.set("  ")
     app._apply_rule()
     if not app._module_rules_dirty:
         raise SystemExit("GUI module rule edit did not set dirty state")
@@ -454,6 +519,8 @@ def main() -> int:
     if saved_config.get("module_rules", {}).get("gui_smoke_rule") != {
         "has_rs_cfg_en": False,
         "step_parameters": ["smoke_mode"],
+        "clk_port": "clk",
+        "rst_port": "rst_n",
     }:
         raise SystemExit("GUI module rule save/reload failed")
     app.module_search_var.set("gui_smoke")
@@ -465,7 +532,14 @@ def main() -> int:
         raise SystemExit("GUI module rule search did not isolate the saved rule")
     app.rule_tree.selection_set(filtered_rules[0])
     app._on_rule_selected()
+    if (
+        app.module_clk_port_var.get() != "clk"
+        or app.module_rst_port_var.get() != "rst_n"
+    ):
+        raise SystemExit("GUI module rule selection lost default port names")
     app.module_step_parameters_var.set("smoke_mode, extra_mode")
+    app.module_clk_port_var.set("clock_i")
+    app.module_rst_port_var.set("reset_ni")
     app._apply_rule()
     if not app._module_rules_dirty:
         raise SystemExit("GUI module rule update did not set dirty state")
@@ -477,6 +551,8 @@ def main() -> int:
     if updated_config.get("module_rules", {}).get("gui_smoke_rule") != {
         "has_rs_cfg_en": False,
         "step_parameters": ["smoke_mode", "extra_mode"],
+        "clk_port": "clock_i",
+        "rst_port": "reset_ni",
     }:
         raise SystemExit("GUI module rule update/reload failed")
     app.module_search_var.set("gui_smoke")
@@ -509,7 +585,11 @@ def main() -> int:
     for index, name in enumerate(FIELD_NAMES, start=20):
         app.column_vars[name].set(str(index))
     app._module_rules["gui_unsaved_rule"] = ModuleRule(
-        "gui_unsaved_rule", False, ("smoke_enable",)
+        "gui_unsaved_rule",
+        False,
+        ("smoke_enable",),
+        "gui_clk",
+        "gui_reset_n",
     )
     app._position_mappings["gui_unsaved_position"] = "top.u_gui_unsaved"
     app._module_rules_dirty = True
@@ -552,6 +632,8 @@ def main() -> int:
     if exported_config.get("module_rules", {}).get("gui_unsaved_rule") != {
         "has_rs_cfg_en": False,
         "step_parameters": ["smoke_enable"],
+        "clk_port": "gui_clk",
+        "rst_port": "gui_reset_n",
     }:
         raise SystemExit("GUI config export omitted an unsaved module rule")
     if exported_config.get("position_mappings", {}).get(
@@ -577,6 +659,12 @@ def main() -> int:
         raise SystemExit("GUI config import did not restore Excel settings")
     if "gui_unsaved_rule" not in app._module_rules:
         raise SystemExit("GUI config import did not restore the module rule database")
+    imported_rule = app._module_rules["gui_unsaved_rule"]
+    if (
+        imported_rule.clk_port != "gui_clk"
+        or imported_rule.rst_port != "gui_reset_n"
+    ):
+        raise SystemExit("GUI config import lost module rule port names")
     if "gui_unsaved_position" not in app._position_mappings:
         raise SystemExit("GUI config import did not restore the position database")
     if app._loaded_config is None or app._loaded_config.rtl != rtl_before_export:
@@ -588,7 +676,9 @@ def main() -> int:
         raise SystemExit("GUI smoke failed to restore its active config after I/O test")
     config_io_verified = True
     expected_rows = (
-        1 if args.negative or args.default_rule else args.generated_rows or 2
+        1
+        if args.negative or args.default_rule or args.custom_port
+        else args.generated_rows or 2
     )
     expected_tree_rows = expected_rows + (1 if args.expect_partial_load else 0)
     sample_position_mapping = not (
@@ -596,6 +686,9 @@ def main() -> int:
     )
     if args.default_rule:
         excel_path, inventory_path = _write_default_rule_inputs(output)
+    elif args.custom_port:
+        excel_path = _write_custom_port_spec(output)
+        inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
     elif args.generated_rows:
         excel_path, inventory_path = _write_generated_inputs(
             output, args.generated_rows
@@ -750,10 +843,24 @@ def main() -> int:
         if not args.validate_only and not args.generated_rows:
             first_result = "row-0"
             first_values = app.result_tree.item(first_result, "values")
-            expected_group = "DEFAULT_RS" if args.default_rule else "AAAA_BBB"
-            expected_instances = "2" if args.default_rule else "6"
+            expected_group = (
+                "DEFAULT_RS"
+                if args.default_rule
+                else "CUSTOM_RS"
+                if args.custom_port
+                else "AAAA_BBB"
+            )
+            expected_instances = (
+                "2" if args.default_rule else "1" if args.custom_port else "6"
+            )
             expected_step_cell = (
-                "2/2" if args.default_rule else "5/6" if args.negative else "5/5"
+                "2/2"
+                if args.default_rule
+                else "1/1"
+                if args.custom_port
+                else "5/6"
+                if args.negative
+                else "5/5"
             )
             if (
                 len(first_values) < 8
@@ -885,12 +992,25 @@ def main() -> int:
                         return
                 module_rule = record.get("module_rule")
                 step_check = record.get("step_check")
-                expected_step_parameters = [] if args.default_rule else ["rs_mode"]
+                configured_rule = original_module_rules.get(
+                    spec.get("RS_module"), {}
+                )
+                if not isinstance(configured_rule, dict):
+                    configured_rule = {}
+                expected_step_parameters = (
+                    []
+                    if args.default_rule
+                    else configured_rule.get("step_parameters", [])
+                )
+                expected_clk_port = configured_rule.get("clk_port", "clk")
+                expected_rst_port = configured_rule.get("rst_port", "rst_n")
                 if (
                     not isinstance(module_rule, dict)
                     or module_rule.get("name") != spec.get("RS_module")
                     or module_rule.get("has_rs_cfg_en") is not True
                     or module_rule.get("step_parameters") != expected_step_parameters
+                    or module_rule.get("clk_port") != expected_clk_port
+                    or module_rule.get("rst_port") != expected_rst_port
                     or not isinstance(step_check, dict)
                     or not isinstance(step_check.get("effective_step"), int)
                     or (
@@ -946,7 +1066,7 @@ def main() -> int:
                     ):
                         contribution_evidence_valid = False
                         break
-                    if args.default_rule:
+                    if not expected_step_parameters:
                         if parameter_evidence != {} or value != 1:
                             contribution_evidence_valid = False
                             break
@@ -1003,6 +1123,26 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                if args.custom_port and (
+                    spec.get("RS_module") != "rs_custom"
+                    or spec.get("RS_inst") != "CUSTOM_RS"
+                    or spec.get("CRG_source") != "intentionally_wrong_source"
+                    or step_check.get("expected") != 1
+                    or step_check.get("physical_instances") != 1
+                    or step_check.get("effective_step") != 1
+                    or contribution_values != [1]
+                    or len(instances) != 1
+                    or set(instances[0].get("ports", {}))
+                    != {"clock_i", "reset_ni", "d", "q"}
+                    or record.get("findings")
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: custom module port or CRG evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
                 if args.negative:
                     finding_codes = {
                         finding.get("code")
@@ -1041,6 +1181,14 @@ def main() -> int:
             evidence_instances = evidence.get("matched_instances")
             evidence_step = evidence.get("step_check")
             evidence_rule = evidence.get("module_rule")
+            evidence_configured_rule = original_module_rules.get(
+                evidence_spec.get("RS_module") if isinstance(evidence_spec, dict) else "",
+                {},
+            )
+            if not isinstance(evidence_configured_rule, dict):
+                evidence_configured_rule = {}
+            evidence_clk_port = evidence_configured_rule.get("clk_port", "clk")
+            evidence_rst_port = evidence_configured_rule.get("rst_port", "rst_n")
             if (
                 not isinstance(evidence_spec, dict)
                 or evidence_spec.get("RS_CFG_EN") != expected_label
@@ -1048,6 +1196,8 @@ def main() -> int:
                 or not evidence_instances
                 or not isinstance(evidence_step, dict)
                 or not isinstance(evidence_rule, dict)
+                or evidence_rule.get("clk_port") != evidence_clk_port
+                or evidence_rule.get("rst_port") != evidence_rst_port
             ):
                 failed = True
                 print(
@@ -1142,7 +1292,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'partial-load' if args.expect_partial_load else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -1150,8 +1300,10 @@ def main() -> int:
             f"{' position-map=tile_core->top.u_tile' if sample_position_mapping else ''}"
             f"{' npi-positions=full-path-only' if sample_position_mapping and not args.validate_only else ''}"
             f"{' rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' if args.default_rule else ''}"
+            f" rule-ports={'clk/rst_n' if args.default_rule else 'clock_i/reset_ni' if args.custom_port else 'clk/rst'}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
-            f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' if config_io_verified else ''}"
+            f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules module-rule-ports=preserved' if config_io_verified else ''}"
+            " rules-layout=980x680-fit"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
         )

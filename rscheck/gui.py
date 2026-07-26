@@ -96,7 +96,11 @@ def _parse_step_parameters(value: str) -> tuple[str, ...]:
 
 
 def _module_rule_from_form(
-    module_name: str, has_rs_cfg_en: bool, step_parameters: str
+    module_name: str,
+    has_rs_cfg_en: bool,
+    step_parameters: str,
+    clk_port: str = "",
+    rst_port: str = "",
 ) -> ModuleRule:
     name = module_name.strip()
     if not name:
@@ -106,10 +110,20 @@ def _module_rule_from_form(
     parameters = _parse_step_parameters(step_parameters)
     if any(any(character.isspace() for character in item) for item in parameters):
         raise GuiInputError("parameter 名不能包含空白字符")
+    normalized_clk_port = clk_port.strip() or "clk"
+    normalized_rst_port = rst_port.strip() or "rst_n"
+    for label, port_name in (
+        ("clk", normalized_clk_port),
+        ("rst", normalized_rst_port),
+    ):
+        if any(character.isspace() for character in port_name):
+            raise GuiInputError(f"{label} 端口名不能包含空白字符")
     return ModuleRule(
         name=name,
         has_rs_cfg_en=bool(has_rs_cfg_en),
         step_parameters=parameters,
+        clk_port=normalized_clk_port,
+        rst_port=normalized_rst_port,
     )
 
 
@@ -261,6 +275,8 @@ class RsCheckApp:
         self.module_name_var = tk.StringVar()
         self.module_has_rs_cfg_en_var = tk.BooleanVar(value=False)
         self.module_step_parameters_var = tk.StringVar()
+        self.module_clk_port_var = tk.StringVar(value="clk")
+        self.module_rst_port_var = tk.StringVar(value="rst_n")
         self.module_rule_status_var = tk.StringVar(value="规则 0")
         self.position_search_var = tk.StringVar()
         self.position_alias_var = tk.StringVar()
@@ -556,14 +572,22 @@ class RsCheckApp:
         tree_frame.columnconfigure(0, weight=1)
         self.rule_tree = ttk.Treeview(
             tree_frame,
-            columns=("module", "rs_cfg_en", "step_parameters"),
+            columns=(
+                "module",
+                "rs_cfg_en",
+                "clk_port",
+                "rst_port",
+                "step_parameters",
+            ),
             show="headings",
             selectmode="browse",
         )
         for name, title, width in (
-            ("module", "RS_module", 260),
-            ("rs_cfg_en", "RS_CRG_EN parameter", 170),
-            ("step_parameters", "决定 step 的 parameters", 420),
+            ("module", "RS_module", 210),
+            ("rs_cfg_en", "RS_CRG_EN", 130),
+            ("clk_port", "clk 端口", 105),
+            ("rst_port", "rst 端口", 105),
+            ("step_parameters", "决定 step 的 parameters", 300),
         ):
             self.rule_tree.heading(name, text=title)
             self.rule_tree.column(
@@ -583,7 +607,7 @@ class RsCheckApp:
         editor = ttk.LabelFrame(tab, text="规则编辑", padding=10)
         editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         editor.columnconfigure(1, weight=1)
-        editor.columnconfigure(4, weight=2)
+        editor.columnconfigure(3, weight=1)
         ttk.Label(editor, text="RS_module").grid(row=0, column=0, sticky="w")
         ttk.Entry(editor, textvariable=self.module_name_var).grid(
             row=0, column=1, sticky="ew", padx=(8, 18)
@@ -592,10 +616,24 @@ class RsCheckApp:
             editor,
             text="有 RS_CRG_EN",
             variable=self.module_has_rs_cfg_en_var,
-        ).grid(row=0, column=2, sticky="w", padx=(0, 18))
-        ttk.Label(editor, text="step parameters").grid(row=0, column=3, sticky="w")
+        ).grid(row=0, column=2, columnspan=2, sticky="w")
+        ttk.Label(editor, text="clk 端口").grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
+        )
+        ttk.Entry(editor, textvariable=self.module_clk_port_var).grid(
+            row=1, column=1, sticky="ew", padx=(8, 18), pady=(8, 0)
+        )
+        ttk.Label(editor, text="rst 端口").grid(
+            row=1, column=2, sticky="w", pady=(8, 0)
+        )
+        ttk.Entry(editor, textvariable=self.module_rst_port_var).grid(
+            row=1, column=3, sticky="ew", padx=(8, 0), pady=(8, 0)
+        )
+        ttk.Label(editor, text="step parameters").grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
         ttk.Entry(editor, textvariable=self.module_step_parameters_var).grid(
-            row=0, column=4, sticky="ew", padx=(8, 0)
+            row=2, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
 
         actions = ttk.Frame(tab)
@@ -1172,6 +1210,8 @@ class RsCheckApp:
                 values=(
                     name,
                     "有" if rule.has_rs_cfg_en else "无",
+                    rule.clk_port,
+                    rule.rst_port,
                     ", ".join(rule.step_parameters) or "-",
                 ),
             )
@@ -1195,12 +1235,16 @@ class RsCheckApp:
         self.module_name_var.set(rule.name)
         self.module_has_rs_cfg_en_var.set(rule.has_rs_cfg_en)
         self.module_step_parameters_var.set(", ".join(rule.step_parameters))
+        self.module_clk_port_var.set(rule.clk_port)
+        self.module_rst_port_var.set(rule.rst_port)
 
     def _new_rule(self) -> None:
         self._editing_module_name = ""
         self.module_name_var.set("")
         self.module_has_rs_cfg_en_var.set(False)
         self.module_step_parameters_var.set("")
+        self.module_clk_port_var.set("clk")
+        self.module_rst_port_var.set("rst_n")
         if hasattr(self, "rule_tree"):
             self.rule_tree.selection_remove(*self.rule_tree.selection())
 
@@ -1210,6 +1254,8 @@ class RsCheckApp:
                 self.module_name_var.get(),
                 self.module_has_rs_cfg_en_var.get(),
                 self.module_step_parameters_var.get(),
+                self.module_clk_port_var.get(),
+                self.module_rst_port_var.get(),
             )
         except GuiInputError as exc:
             messagebox.showerror("规则错误", str(exc), parent=self.root)

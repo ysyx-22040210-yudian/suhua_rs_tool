@@ -14,6 +14,36 @@ from rscheck.model import InventoryError, RtlConfig, SpecRow
 from rscheck.npi_runner import _collector_environment, collect_inventory
 
 
+class NpiCollectorContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.project_root = Path(__file__).resolve().parents[1]
+
+    def test_collector_merges_language_and_l1_formal_ports(self) -> None:
+        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('#include "npi_L1.h"', source)
+        self.assertIn("npi_iterate(npiPort, module)", source)
+        self.assertIn(
+            "npi_mod_inst_get_port(&mutable_full_name[0], fallback_ports)", source
+        )
+        self.assertNotIn("name == clk_port_", source)
+        self.assertNotIn("trace_clock_sources", source)
+        self.assertNotIn("npi_nl_iterate(npiNlDriver", source)
+        self.assertIn('\\"clk_sources\\": []', source)
+
+    def test_makefile_requires_and_links_verdi_npi_l1(self) -> None:
+        makefile = (self.project_root / "npi" / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("NPI_L1_INC ?= $(NPI_ROOT)/L1/C/inc", makefile)
+        self.assertIn("NPI_PLATFORM_LOWER :=", makefile)
+        self.assertIn("NPI_L1_LIB ?= $(NPI_DEFAULT_L1_LIB)", makefile)
+        self.assertIn('$(NPI_L1_INC)/npi_L1.h', makefile)
+        self.assertIn('$(NPI_L1_LIB)/libnpiL1.so', makefile)
+        self.assertIn("-lnpiL1 -lNPI", makefile)
+
+
 class NpiRunnerTests(unittest.TestCase):
     def _spec(self) -> SpecRow:
         return SpecRow(
@@ -36,6 +66,7 @@ class NpiRunnerTests(unittest.TestCase):
             verdi_home = Path(name)
             library = verdi_home / "share" / "NPI" / "lib" / "LINUX64"
             library.mkdir(parents=True)
+            (library / "libNPI.so").touch()
             with patch.dict(
                 os.environ,
                 {
@@ -46,10 +77,33 @@ class NpiRunnerTests(unittest.TestCase):
                 clear=True,
             ):
                 environment = _collector_environment()
+            entries = environment["LD_LIBRARY_PATH"].split(os.pathsep)
             self.assertEqual(
-                environment["LD_LIBRARY_PATH"].split(os.pathsep),
-                [str(library), "/existing/lib"],
+                os.path.normcase(entries[0]), os.path.normcase(str(library))
             )
+            self.assertEqual(entries[1:], ["/existing/lib"])
+
+    def test_lowercase_verdi_npi_library_is_discovered(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            verdi_home = Path(name)
+            library = verdi_home / "share" / "NPI" / "lib" / "linux64"
+            library.mkdir(parents=True)
+            (library / "libNPI.so").touch()
+            with patch.dict(
+                os.environ,
+                {
+                    "VERDI_HOME": str(verdi_home),
+                    "NPI_PLATFORM": "LINUX64",
+                    "LD_LIBRARY_PATH": "/existing/lib",
+                },
+                clear=True,
+            ):
+                environment = _collector_environment()
+            entries = environment["LD_LIBRARY_PATH"].split(os.pathsep)
+            self.assertEqual(
+                os.path.normcase(entries[0]), os.path.normcase(str(library))
+            )
+            self.assertEqual(entries[1:], ["/existing/lib"])
 
     def test_explicit_missing_npi_library_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:

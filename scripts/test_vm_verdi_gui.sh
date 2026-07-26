@@ -71,6 +71,8 @@ ELABCOM_BIN="${ELABCOM_BIN-}"
 NPI_PLATFORM="${NPI_PLATFORM-}"
 NPI_INC_DIR="${NPI_INC_DIR-}"
 NPI_LIB_DIR="${NPI_LIB_DIR-}"
+NPI_L1_INC_DIR="${NPI_L1_INC_DIR-}"
+NPI_L1_LIB_DIR="${NPI_L1_LIB_DIR-}"
 GUI_START_TIMEOUT="${GUI_START_TIMEOUT:-180}"
 VERDI_WINDOW_REGEX="${VERDI_WINDOW_REGEX:-verdi|novas|debussy}"
 VERDI_READY_REGEX="${VERDI_READY_REGEX:-<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)}"
@@ -404,8 +406,35 @@ if [ -z "$NPI_LIB_DIR" ]; then
   fi
 fi
 [ -n "$NPI_PLATFORM" ] || NPI_PLATFORM="${NPI_LIB_DIR##*/}"
+NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
+if [ -z "$NPI_L1_LIB_DIR" ]; then
+  if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
+    NPI_L1_LIB_DIR="$NPI_LIB_DIR"
+  else
+    NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
+    if [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER/libnpiL1.so" ]; then
+      NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
+    else
+      for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libnpiL1.so; do
+        [ -f "$candidate_library" ] || continue
+        NPI_L1_LIB_DIR="${candidate_library%/libnpiL1.so}"
+        break
+      done
+    fi
+  fi
+fi
 [ -f "$NPI_INC_DIR/npi.h" ] || fail "NPI header not found: $NPI_INC_DIR/npi.h"
 [ -f "$NPI_LIB_DIR/libNPI.so" ] || fail "libNPI.so not found; set NPI_LIB_DIR"
+[ -f "$NPI_L1_INC_DIR/npi_L1.h" ] ||
+  fail "NPI L1 header not found; set NPI_L1_INC_DIR"
+[ -f "$NPI_L1_LIB_DIR/libnpiL1.so" ] ||
+  fail "libnpiL1.so not found; set NPI_L1_LIB_DIR"
+
+NPI_RUNTIME_LIB_DIRS="$NPI_LIB_DIR"
+if [ "$NPI_L1_LIB_DIR" != "$NPI_LIB_DIR" ]; then
+  NPI_RUNTIME_LIB_DIRS="$NPI_L1_LIB_DIR:$NPI_RUNTIME_LIB_DIRS"
+fi
+export LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 [ -d "$PROJECT_ROOT" ] || fail "PROJECT_ROOT is not a directory: $PROJECT_ROOT"
 [ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
@@ -431,10 +460,14 @@ make -C npi \
   NPI_PLATFORM="$NPI_PLATFORM" \
   NPI_INC="$NPI_INC_DIR" \
   NPI_LIB="$NPI_LIB_DIR" \
+  NPI_L1_INC="$NPI_L1_INC_DIR" \
+  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
   CXX="$CXX"
 COLLECTOR="$NPI_BUILD_DIR/rs_npi_collector"
 [ -x "$COLLECTOR" ] || fail "collector was not built: $COLLECTOR"
-ldd "$COLLECTOR" | tee "$TEST_ROOT/collector_ldd.txt" | grep 'libNPI.so'
+ldd "$COLLECTOR" | tee "$TEST_ROOT/collector_ldd.txt"
+grep -q 'libNPI.so' "$TEST_ROOT/collector_ldd.txt"
+grep -q 'libnpiL1.so' "$TEST_ROOT/collector_ldd.txt"
 if grep -q 'not found' "$TEST_ROOT/collector_ldd.txt"; then
   fail "collector has unresolved shared libraries"
 fi
@@ -458,7 +491,7 @@ cd "$PARTIAL_ELAB_ROOT"
 printf 'top.u_tile\n' >"$PARTIAL_POSITIONS"
 
 set +e
-LD_LIBRARY_PATH="$NPI_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$COLLECTOR" \
     --positions "$PARTIAL_POSITIONS" \
     --output "$PARTIAL_INVENTORY" \
@@ -493,7 +526,31 @@ if position.get("found") is not True:
 names = {item.get("name") for item in position.get("instances", [])}
 if "CTRL_RS_D0" not in names or "AAAA_BBB_C0" not in names:
     raise SystemExit("partial-load inventory is missing expected RS instances: {!r}".format(names))
+expected_ports_by_module = {
+    "rs_pipe": {"clk", "rst", "d", "q"},
+    "rs_custom": {"clock_i", "reset_ni", "d", "q"},
+    "crg_core": {"ref_clk", "clk_out"},
+    "crg_aux": {"ref_clk", "clk_out"},
+}
+for instance in position.get("instances", []):
+    module = instance.get("module")
+    if module not in expected_ports_by_module:
+        continue
+    ports = instance.get("ports")
+    if not isinstance(ports, dict) or set(ports) != expected_ports_by_module[module]:
+        raise SystemExit(
+            "partial-load formal-port inventory mismatch for {}: {!r}".format(
+                instance.get("full_name"), ports
+            )
+        )
+    if instance.get("clk_sources") != []:
+        raise SystemExit(
+            "clock-source tracing must be disabled for {}: {!r}".format(
+                instance.get("full_name"), instance.get("clk_sources")
+            )
+        )
 print("partial NPI load evidence OK: load reported errors but requested RTL remained queryable")
+print("partial NPI formal-port L0/L1 inventory evidence OK; clock-source tracing disabled")
 PY
 
 cd "$PROJECT_ROOT"
@@ -740,6 +797,29 @@ instances = {
     instance["name"]: instance
     for instance in inventory["positions"]["top.u_tile"]["instances"]
 }
+expected_ports_by_module = {
+    "rs_pipe": {"clk", "rst", "d", "q"},
+    "rs_custom": {"clock_i", "reset_ni", "d", "q"},
+    "crg_core": {"ref_clk", "clk_out"},
+    "crg_aux": {"ref_clk", "clk_out"},
+}
+for instance in instances.values():
+    module = instance.get("module")
+    if module not in expected_ports_by_module:
+        continue
+    ports = instance.get("ports")
+    if not isinstance(ports, dict) or set(ports) != expected_ports_by_module[module]:
+        raise SystemExit(
+            "formal-port inventory mismatch for {}: {!r}".format(
+                instance.get("full_name"), ports
+            )
+        )
+    if instance.get("clk_sources") != []:
+        raise SystemExit(
+            "clock-source tracing must be disabled for {}: {!r}".format(
+                instance.get("full_name"), instance.get("clk_sources")
+            )
+        )
 expected_group_names = ["AAAA_BBB_C{}".format(index) for index in range(6)]
 actual_group_names = sorted(
     name for name in instances if name.startswith("AAAA_BBB_C")
@@ -809,6 +889,8 @@ for row in report["rows"]:
         "name": "rs_pipe",
         "has_rs_cfg_en": True,
         "step_parameters": ["rs_mode"],
+        "clk_port": "clk",
+        "rst_port": "rst",
     }
     if row.get("module_rule") != expected_rule:
         raise SystemExit("unexpected module rule evidence: {!r}".format(row.get("module_rule")))
@@ -880,6 +962,96 @@ print("position mapping evidence OK: tile_core -> top.u_tile; NPI full paths onl
 print("dynamic step inventory/report evidence OK")
 PY
 
+CUSTOM_PORT_SPEC="$TEST_ROOT/custom_port_specs.csv"
+CUSTOM_PORT_CONFIG="$TEST_ROOT/custom_port_config.json"
+CUSTOM_PORT_REPORT="$TEST_ROOT/custom_port_report.json"
+CUSTOM_PORT_LOG="$TEST_ROOT/custom_port_check.log"
+
+"$PYTHON_BIN" - \
+  "$PROJECT_ROOT/examples/specs.csv" \
+  "$PROJECT_ROOT/config/rscheck.example.json" \
+  "$CUSTOM_PORT_SPEC" \
+  "$CUSTOM_PORT_CONFIG" <<'PY'
+import csv
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8-sig", newline="") as stream:
+    header = next(csv.reader(stream))
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    config = json.load(stream)
+
+config["module_rules"]["rs_custom"] = {
+    "has_rs_cfg_en": True,
+    "step_parameters": [],
+    "clk_port": "clock_i",
+    "rst_port": "reset_ni",
+}
+with open(sys.argv[3], "w", encoding="utf-8", newline="") as stream:
+    writer = csv.writer(stream)
+    writer.writerow(header)
+    writer.writerow(
+        [
+            "CUSTOM_IF",
+            "rs_custom",
+            "CUSTOM_RS",
+            "tile_core",
+            1,
+            "clk_rs",
+            "rst_n",
+            "intentionally_wrong_source",
+            "假门控",
+        ]
+    )
+with open(sys.argv[4], "w", encoding="utf-8") as stream:
+    json.dump(config, stream, ensure_ascii=False, indent=2)
+    stream.write("\n")
+PY
+
+"$PYTHON_BIN" -m rscheck check \
+  --excel "$CUSTOM_PORT_SPEC" \
+  --config "$CUSTOM_PORT_CONFIG" \
+  --inventory "$POS_INVENTORY" \
+  --json-report "$CUSTOM_PORT_REPORT" \
+  2>&1 | tee "$CUSTOM_PORT_LOG"
+grep -Fq 'RESULT: PASS | rows=1 errors=0 warnings=0' "$CUSTOM_PORT_LOG"
+
+"$PYTHON_BIN" - "$CUSTOM_PORT_REPORT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    report = json.load(stream)
+row = report.get("rows", [None])[0]
+if not isinstance(row, dict) or row.get("passed") is not True:
+    raise SystemExit("custom-port row did not pass: {!r}".format(row))
+if row.get("module_rule") != {
+    "name": "rs_custom",
+    "has_rs_cfg_en": True,
+    "step_parameters": [],
+    "clk_port": "clock_i",
+    "rst_port": "reset_ni",
+}:
+    raise SystemExit("custom-port module rule was not retained: {!r}".format(row))
+if row.get("spec", {}).get("CRG_source") != "intentionally_wrong_source":
+    raise SystemExit("CRG_source report evidence was not retained: {!r}".format(row))
+instances = row.get("matched_instances", [])
+if len(instances) != 1 or instances[0].get("name") != "CUSTOM_RS":
+    raise SystemExit("custom-port full-instance match failed: {!r}".format(instances))
+ports = instances[0].get("ports", {})
+if set(ports) != {"clock_i", "reset_ni", "d", "q"}:
+    raise SystemExit("custom formal ports are incomplete: {!r}".format(ports))
+codes = {
+    finding.get("code")
+    for finding in row.get("findings", [])
+    if isinstance(finding, dict)
+}
+if any(code.startswith("CRG_SOURCE_") for code in codes if isinstance(code, str)):
+    raise SystemExit("CRG_source unexpectedly affected the result: {!r}".format(codes))
+print("custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni")
+print("CRG_source evidence retained without PASS/FAIL validation")
+PY
+
 ONLINE_GUI_LOG="$TEST_ROOT/online_gui_positive.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
@@ -900,6 +1072,26 @@ grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$ONLINE_GUI_LOG"
 assert_no_collector_errors "$ONLINE_GUI_LOG"
+
+CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout "$NPI_TIMEOUT" \
+  --custom-port \
+  --iterations 1 \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$CUSTOM_PORT_GUI_LOG"
+grep -Fq \
+  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port iterations=1' \
+  "$CUSTOM_PORT_GUI_LOG"
+grep -Fq 'contract=elab-only' "$CUSTOM_PORT_GUI_LOG"
+grep -Fq 'rule-ports=clock_i/reset_ni' "$CUSTOM_PORT_GUI_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$CUSTOM_PORT_GUI_LOG"
+assert_no_collector_errors "$CUSTOM_PORT_GUI_LOG"
 
 ONLINE_NEGATIVE_LOG="$TEST_ROOT/online_gui_negative.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -967,6 +1159,7 @@ grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_LOAD_LOG"
 
 for gui_log in \
   "$ONLINE_GUI_LOG" \
+  "$CUSTOM_PORT_GUI_LOG" \
   "$PARTIAL_GUI_LOG" \
   "$ONLINE_NEGATIVE_LOG" \
   "$DEFAULT_RULE_LOG" \
@@ -988,7 +1181,7 @@ echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$ONLINE_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then

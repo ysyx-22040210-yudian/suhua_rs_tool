@@ -450,6 +450,15 @@ class CliTests(unittest.TestCase):
             config.write_text(
                 json.dumps(raw_config, ensure_ascii=False), encoding="utf-8"
             )
+            raw_inventory = json.loads(
+                (ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8")
+            )
+            for instance in raw_inventory["positions"]["top.u_tile"]["instances"]:
+                if instance["name"].startswith("AAAA_BBB"):
+                    ports = instance["ports"]
+                    ports["rst_n"] = ports.pop("rst")
+            inventory = directory / "default_rule_inventory.json"
+            inventory.write_text(json.dumps(raw_inventory), encoding="utf-8")
             json_report = directory / "default_rule_report.json"
 
             with redirect_stdout(StringIO()):
@@ -463,7 +472,7 @@ class CliTests(unittest.TestCase):
                         "--sheet",
                         "1",
                         "--inventory",
-                        str(ROOT / "tests" / "fixtures" / "inventory.json"),
+                        str(inventory),
                         "--json-report",
                         str(json_report),
                     ]
@@ -478,6 +487,8 @@ class CliTests(unittest.TestCase):
                 "name": "rs_pipe",
                 "has_rs_cfg_en": True,
                 "step_parameters": [],
+                "clk_port": "clk",
+                "rst_port": "rst_n",
             },
         )
         self.assertEqual(report["rows"][0]["step_check"]["effective_step"], 6)

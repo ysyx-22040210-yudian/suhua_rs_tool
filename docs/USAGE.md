@@ -106,7 +106,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
-| `CRG_source` | clk 预期的唯一上游来源 | 按 `rtl.crg_match` 与上游 module definition 或实例名比较 |
+| `CRG_source` | clk 预期的上游来源标签 | 当前仍必填、解析并写入 report，但暂不参与 PASS/FAIL |
 | `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | 由解析后的规则决定应精确填写 `假门控` 还是留空，并核对逐实例 effective `RS_CRG_EN` |
 
 一行定义一组，唯一组键是 `(解析后的完整 position, RS_inst)`。同一个完整 `position` 下可以有多组，每组占一行；即使两行使用不同文本，只要映射到同一完整路径且 `RS_inst` 相同，也属于重复组并会被拒绝。
@@ -198,7 +198,7 @@ python -m rscheck validate \
 
 例如 RTL 本地例化名为 `CTRL_RS_D0` 时，可以在 Excel 直接填写 `RS_inst=CTRL_RS_D0`；此时 remainder 为空并匹配该实例。
 
-所有匹配实例，包括空后缀实例，都会照常检查 `RS_module`、模块规则要求的 parameters、逐实例 `step` 贡献、clk/rst 连接和 `CRG_source`。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。空后缀实例不具有 suffix tag/index，因此不参与 `SUFFIX_TAG_MISMATCH` 或连续编号检查。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，仅非空 remainder 且成功解析出 index 的成员必须从 `index_base` 开始连续并使用同一个 tag。连续性不按有效 `step` 截短。
+所有匹配实例，包括空后缀实例，都会照常检查 `RS_module`、模块规则要求的 parameters、逐实例 `step` 贡献和 clk/rst 连接。`CRG_source` 仍保留在规格与报告中，但当前不参与判定。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。空后缀实例不具有 suffix tag/index，因此不参与 `SUFFIX_TAG_MISMATCH` 或连续编号检查。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，仅非空 remainder 且成功解析出 index 的成员必须从 `index_base` 开始连续并使用同一个 tag。连续性不按有效 `step` 截短。
 
 完整名输入是对既有前缀匹配的补充，不是 exact-only 模式。若同一 scope 同时存在 `PFX` 和 `PFX_C0`，填写 `RS_inst=PFX` 会同时匹配前者的空 remainder 和后者符合默认 suffix 规则的 `_C0`；两行使用重叠 `RS_inst` 并命中同一实例时仍报 `AMBIGUOUS_GROUP_MATCH`。当前没有只匹配 `PFX` 的显式模式。
 
@@ -223,7 +223,11 @@ python -m rscheck validate \
 
 ### 3.3 clk/rst 连线
 
-formal port 名由 `rtl.clk_port` 和 `rtl.rst_port` 指定，默认分别是 `clk`、`rst`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。
+formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 `rst_port` 指定。GUI 新建或修改规则时，这两个输入框留空会分别规范化为 `clk`、`rst_n`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。
+
+没有精确显式规则的未知模块使用隐式默认端口 `clk`、`rst_n`。为兼容旧 JSON，已有显式模块规则若缺少 `clk_port/rst_port`，加载时继承历史全局 `rtl.clk_port/rst_port`；规则在内存中始终具有明确端口名，下一次通过 GUI 保存规则库或导出配置时会把两项显式写回。`rtl.clk_port/rst_port` 因此只承担旧配置迁移和 collector 命令兼容，不再覆盖一个已经带端口名的模块规则。
+
+端口名可自定义，但两个检查都不会被空字符串关闭。当前没有“该模块无 rst”或“跳过 rst 检查”的规则；若 RTL 模块确实没有规则指定的 rst formal port，该实例会报告 `RST_PORT_MISSING`。
 
 比较时会忽略信号字符串中的空白，并接受：
 
@@ -234,36 +238,34 @@ formal port 名由 `rtl.clk_port` 和 `rtl.rst_port` 指定，默认分别是 `c
 
 ### 3.4 CRG 来源
 
-collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到唯一有效的上游 module cell 时才可通过；无来源、多来源和采集 warning 都会 fail-closed。
+`CRG_source` 当前仍是 Excel 的必填内部属性，会经过列映射、行解析并原样进入 JSON/CSV report，便于以后恢复来源规则或人工审计；它目前**完全不参与 PASS/FAIL**。错误值、找不到来源、多个来源以及空 `clk_sources` 都不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding。
 
-`rtl.crg_match` 决定 `CRG_source` 的比较对象：
-
-| 值 | 比较对象 |
-|---|---|
-| `module` | module definition 名，默认值 |
-| `instance` | 上游实例完整路径或本地叶子实例名 |
-| `module_or_instance` | 上述任一种 |
-
-推断出的 primitive gate/buffer 会继续向上穿透；只有它在 Netlist 中表现为 module cell 时才会作为 `CRG_source` 候选。
+当前 collector 已停用 Netlist clock source trace，新在线采集的每个实例都写出 `"clk_sources": []`。旧 schema v2 offline inventory 中已有的 `clk_sources` 仍能加载和显示，但 checker 不比较它们。配置键 `rtl.crg_match` 为兼容旧配置保留，当前不改变判定结果。
 
 ### 3.5 模块规则库
 
-配置中的 `module_rules` 是 `RS_module` 到检查策略的可选覆盖数据库。解析顺序固定为：先按区分大小写的模块名查找显式规则；精确匹配时使用显式规则，否则使用隐式默认规则 `has_rs_cfg_en=true`、`step_parameters=[]`。`has_rs_cfg_en` 为兼容既有配置保留，实际控制 RTL `RS_CRG_EN` parameter 检查。因此没有模块专属项时不会导致 `validate` 或 RTL 检查失败；默认行为是要求逐实例 `RS_CRG_EN=0`、Excel/internal `RS_CFG_EN` 精确填写 `假门控`，并让每个匹配实例贡献 `1` 拍。
+配置中的 `module_rules` 是 `RS_module` 到检查策略的可选覆盖数据库。解析顺序固定为：先按区分大小写的模块名查找显式规则；精确匹配时使用显式规则，否则使用隐式默认规则 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port="clk"`、`rst_port="rst_n"`。`has_rs_cfg_en` 为兼容既有配置保留，实际控制 RTL `RS_CRG_EN` parameter 检查。因此没有模块专属项时不会导致 `validate` 或 RTL 检查失败；默认行为是要求逐实例 `RS_CRG_EN=0`、Excel/internal `RS_CFG_EN` 精确填写 `假门控`，让每个匹配实例贡献 `1` 拍，并检查 formal ports `clk`、`rst_n`。
 
 ```json
 "module_rules": {
   "rs_pipe": {
     "has_rs_cfg_en": true,
-    "step_parameters": ["rs_mode"]
+    "step_parameters": ["rs_mode"],
+    "clk_port": "clk_i",
+    "rst_port": "reset_n"
   },
   "rs_plain": {
     "has_rs_cfg_en": false,
-    "step_parameters": []
+    "step_parameters": [],
+    "clk_port": "clk",
+    "rst_port": "rst_n"
   }
 }
 ```
 
-显式规则名和 parameter 名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CRG_EN`。`RS_CFG_EN` 不再是保留的 RTL parameter 名；若 RTL 确实另有同名 parameter，可把它作为普通 `step_parameters` 项。显式规则优先于默认规则，其键必须与 Excel/RTL `RS_module` 大小写完全一致。RTL 中未列入 `step_parameters` 的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
+显式规则名、parameter 名和端口名必须是无首尾空白的非空字符串；`step_parameters` 必须是无重复项的 JSON 数组，且不能包含由专门逻辑处理的 `RS_CRG_EN`。`RS_CFG_EN` 不再是保留的 RTL parameter 名；若 RTL 确实另有同名 parameter，可把它作为普通 `step_parameters` 项。显式规则优先于默认规则，其键必须与 Excel/RTL `RS_module` 大小写完全一致。RTL 中未列入 `step_parameters` 的其他 parameters 允许存在，它们仍作为证据写入 inventory/report，但不影响有效拍数。
+
+仓库的 `examples/rtl/rs_example.sv` 提供 `rs_custom` / `CUSTOM_RS` 夹具，formal ports 为 `clock_i`、`reset_ni`。VM 真实 NPI 测试会临时加入对应模块规则，证明它不依赖全局 `clk/rst` 名称。
 
 ### 3.6 RTL `RS_CRG_EN` effective 参数与 Excel `RS_CFG_EN` 标签
 
@@ -286,7 +288,7 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 多个参数采用“全部非零”语义。例如 `step_parameters=["rs_mode", "pipe_enable"]` 时，两个值都已解析且都非零才贡献 `1`；都已解析且至少一个为零时贡献 `0`。参数缺失报 `STEP_PARAMETER_MISSING`；`null`、X/Z/`?` 或非法值报 `STEP_PARAMETER_VALUE_UNRESOLVED`。任一所需参数未知时该实例贡献就是 `null`，即使另一个参数已知为零也不使用部分证据。任一实例贡献未知时，整行 `effective_step` 为 `null` 并报 `STEP_CALCULATION_UNRESOLVED`。只有全部贡献已知时才求和，并用 `STEP_MISMATCH` 报告与 Excel `step` 的差异。
 
-同一 Excel 行匹配多个实例时，每个实例的模块、parameter、clk/rst 和 CRG 都必须通过；任一硬错误都会使该行 FAIL。
+同一 Excel 行匹配多个实例时，每个实例的模块、parameter 和按模块规则选定的 clk/rst 都必须通过；任一硬错误都会使该行 FAIL。`CRG_source` 当前不在硬检查集合中。
 
 ## 4. 配置文件完整说明
 
@@ -329,11 +331,15 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
   "module_rules": {
     "rs_pipe": {
       "has_rs_cfg_en": true,
-      "step_parameters": ["rs_mode"]
+      "step_parameters": ["rs_mode"],
+      "clk_port": "clk_i",
+      "rst_port": "reset_n"
     },
     "rs_plain": {
       "has_rs_cfg_en": false,
-      "step_parameters": []
+      "step_parameters": [],
+      "clk_port": "clk",
+      "rst_port": "rst_n"
     }
   }
 }
@@ -358,8 +364,8 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `rtl.clk_port` | 非空字符串 | `clk` | 打拍模块的 clk formal port 名 |
-| `rtl.rst_port` | 非空字符串 | `rst` | 打拍模块的 rst formal port 名 |
+| `rtl.clk_port` | 非空字符串 | `clk` | 旧显式模块规则缺少 `clk_port` 时的兼容继承值；collector 命令仍传递该值，但不按它过滤端口 |
+| `rtl.rst_port` | 非空字符串 | `rst` | 旧显式模块规则缺少 `rst_port` 时的兼容继承值；collector 命令仍传递该值，但不按它过滤端口 |
 | `rtl.suffix_regex` | 非空正则字符串 | `(?P<tag>.+?)(?P<index>[0-9]+)` | 匹配实例名减去 `RS_inst` 后的非空 remainder；空 remainder 直接合法；正则必须含命名组 `index` |
 | `rtl.index_base` | 非负整数 | `0` | 连续 index 检查的起点 |
 | `rtl.require_contiguous_indices` | JSON 布尔值 | `false` | 是否强制相同 tag 和连续 index |
@@ -367,6 +373,8 @@ collector 使用 Netlist Model 的 `npiNlDriver` 逆向追踪 clk。只有找到
 | `rtl.crg_match` | 枚举字符串 | `module` | `module`、`instance` 或 `module_or_instance` |
 
 非空 remainder 会由 `suffix_regex` 自动按完整字符串匹配，无需自行添加 `^`/`$`；空 remainder 会绕过该正则并作为合法完整名匹配。`index` 组在运行时必须只产生 ASCII 数字，推荐固定写成 `(?P<index>[0-9]+)`。`tag` 组不是语法必需，但要使用 tag 一致性检查时应保留。
+
+`rtl.clk_port/rst_port` 和 `rtl.crg_match` 保留在配置 schema 中以保证旧文件可加载。新配置应在每个显式 `module_rules` 项中写 `clk_port/rst_port`；`crg_match` 当前不参与结果判定。
 
 ### 4.4 `position_mappings`
 
@@ -405,14 +413,18 @@ python -m rscheck position-db delete \
 
 ### 4.5 `module_rules`
 
-`module_rules` 必须是 JSON 对象，可以为空。每个键是一个需要覆盖默认行为的精确模块定义名，每个值必须且只能包含：
+`module_rules` 必须是 JSON 对象，可以为空。每个键是一个需要覆盖默认行为的精确模块定义名。当前格式的每个值使用以下四项；未知键会被拒绝：
 
 | 配置项 | 类型 | 说明 |
 |---|---|---|
 | `has_rs_cfg_en` | JSON 布尔值 | 兼容配置键；`true` 要求 RTL `RS_CRG_EN` 存在、值为 0 且 Excel `RS_CFG_EN` 填 `假门控`；`false` 要求 RTL 不存在 `RS_CRG_EN` 且 Excel 留空 |
 | `step_parameters` | 唯一字符串数组 | 决定逐实例拍贡献的 effective parameters；空数组表示每个实例贡献 1 |
+| `clk_port` | 非空字符串 | 该模块的 clk formal port 名；GUI 留空时使用 `clk` |
+| `rst_port` | 非空字符串 | 该模块的 rst formal port 名；GUI 留空时使用 `rst_n` |
 
-没有精确显式项的模块自动采用 `has_rs_cfg_en=true`、`step_parameters=[]`。显式项优先，名称比较区分大小写。这里的兼容键 `has_rs_cfg_en` 始终控制 `RS_CRG_EN`，不会回退匹配 RTL `RS_CFG_EN`。
+没有精确显式项的模块自动采用 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port="clk"`、`rst_port="rst_n"`。显式项优先，名称比较区分大小写。这里的兼容键 `has_rs_cfg_en` 始终控制 `RS_CRG_EN`，不会回退匹配 RTL `RS_CFG_EN`。
+
+旧配置中的显式规则可以暂时省略 `clk_port/rst_port`：加载器分别从同一文件的 `rtl.clk_port/rst_port` 继承，保持升级前语义。配置一旦由 GUI 保存规则库、导出完整配置或经 `save_config` 写回，这两个键就会在每条规则中显式化。新手写配置应直接包含两项，不要依赖继承。
 
 ### 4.6 命令行覆盖
 
@@ -477,15 +489,15 @@ bash scripts/launch_rscheck_gui.sh
 
 ### 5.3 完整配置导入和导出
 
-`0.8.1` 的可移植配置 JSON 由且仅由以下五个根对象组成：
+`0.9.0` 的可移植配置 JSON 由且仅由以下五个根对象组成：
 
 | 根对象 | 导出来源 | 内容 |
 |---|---|---|
 | `excel` | 当前 GUI | 工作表、表头行、数据起始行、是否严格校验表头 |
 | `columns` | 当前 GUI | 九个内部属性的 1-based 列号 |
-| `rtl` | 当前已加载配置 | suffix 规则、连续编号开关和 clk/rst formal port 等 RTL 解析设置 |
+| `rtl` | 当前已加载配置 | suffix 规则、连续编号开关，以及供旧规则继承的全局 clk/rst 等 RTL 兼容设置 |
 | `position_mappings` | 当前 GUI 内存数据库 | 全部 position 简写到完整 RTL 路径的映射 |
-| `module_rules` | 当前 GUI 内存数据库 | 全部模块规则及其兼容键 `has_rs_cfg_en`、`step_parameters`；前者控制 RTL `RS_CRG_EN` |
+| `module_rules` | 当前 GUI 内存数据库 | 全部模块规则及其 `has_rs_cfg_en`、`step_parameters`、`clk_port`、`rst_port`；前者控制 RTL `RS_CRG_EN` |
 
 “导出”是副本操作。它会先校验当前 GUI 的 Excel 选项和列号，再把上述五个根对象写入另一个 JSON。两个数据库中已经点击“应用新建/修改”但尚未点击各自“保存”按钮的修改也包含在副本中；页面搜索只改变表格显示，不影响导出范围。导出成功后仍使用原来的当前配置路径，两个数据库原有的“未保存”状态也保持不变，原配置文件不会被改写。工具会解析规范化路径并拒绝把导出目标设为当前配置自身；需要覆盖其他已有副本时由系统保存对话框确认。若用户只改了“配置 JSON”路径输入框而没有点击“加载”，导出会在打开保存对话框前拒绝，确保 `rtl` 始终来自界面实际加载的配置。
 
@@ -509,14 +521,15 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 ### 5.5 “模块规则库”页
 
-加载配置后，规则页列出模块名、是否具有 RTL `RS_CRG_EN` 和决定拍数的 parameters。配置文件中对应的布尔键仍为 `has_rs_cfg_en`。用户可以搜索规则，或通过“新建/修改”“删除”维护当前配置：
+加载配置后，规则页列出模块名、是否具有 RTL `RS_CRG_EN`、clk/rst formal port 名和决定拍数的 parameters。配置文件中对应的布尔键仍为 `has_rs_cfg_en`。用户可以搜索规则，或通过“新建/修改”“删除”维护当前配置：
 
 1. `RS_module` 填 RTL module definition 的精确名称；
 2. 勾选“有 RS_CRG_EN parameter”或保持未勾选；
-3. “决定 step 的 parameters”使用逗号分隔，例如 `rs_mode, pipe_enable`；无控制 parameter 时留空；
-4. 点击“应用新建/修改”只修改 GUI 内存；点击“保存规则库”才原子写回当前配置 JSON并重新加载校验。
+3. `clk 端口`、`rst 端口` 填该模块实际 formal port 名；留空时分别自动使用 `clk`、`rst_n`；
+4. “决定 step 的 parameters”使用逗号分隔，例如 `rs_mode, pipe_enable`；无控制 parameter 时留空；
+5. 点击“应用新建/修改”只修改 GUI 内存；点击“保存规则库”才原子写回当前配置 JSON并重新加载校验。
 
-重复 parameter、`RS_CRG_EN` 被误放入 `step_parameters`、空模块名等会在应用时拒绝。存在“未保存”规则时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。
+重复 parameter、`RS_CRG_EN` 被误放入 `step_parameters`、空模块名或含空白的端口名等会在应用时拒绝。存在“未保存”规则时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。旧规则缺少端口键时会先显示继承后的实际值，保存后 JSON 中每条规则都会显式包含端口名。
 
 ### 5.6 执行、结果和取消
 
@@ -525,7 +538,7 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
 
-“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、`module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、端口、clk 来源和源文件/行号。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。`spec.CRG_source` 仍可查看，但不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
 GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
@@ -584,7 +597,7 @@ schema v2 不记录 RTL commit、elabcom 命令、top、宏、include 路径、K
 - inventory 来自本工具当前版本 collector 的成功在线运行；
 - RTL commit、依赖库、宏、include 路径和 elaboration top 未变化；
 - elaborated KDB 未重新生成或替换；
-- `position`、`rtl.clk_port`、`rtl.rst_port` 及相关配置未变化；
+- `position`、匹配模块规则的 `clk_port/rst_port` 及相关配置未变化；
 - inventory 文件未被手工编辑；
 - 使用者明确接受离线快照的信任边界。
 
@@ -617,17 +630,12 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
               "connection": "top.u_tile.clk_rs",
               "type": "npiNet"
             },
-            "rst": {
+            "reset_n": {
               "connection": "top.u_tile.rst_n",
               "type": "npiNet"
             }
           },
-          "clk_sources": [
-            {
-              "instance": "top.u_tile.u_crg",
-              "module": "crg_core"
-            }
-          ]
+          "clk_sources": []
         }
       ]
     }
@@ -637,7 +645,9 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 }
 ```
 
-加载器要求 `schema_version=2`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。`warnings` 是必需数组，其中的 traversal/driver 问题会转换为全局 `NPI_UNRESOLVED` 硬错误。`notices` 是向后兼容的可选数组，旧 schema v2 可省略；当前 collector 用它记录返回 0 但 top 仍可查询的 partial load，报告将其显示为非致命 `NPI_LOAD_PARTIAL` warning。
+加载器要求 `schema_version=2`、`positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。`ports` 可以包含模块的全部 formal ports，checker 再按模块规则选择 clk/rst。`warnings` 是必需数组，其中的 traversal 问题会转换为全局 `NPI_UNRESOLVED` 硬错误。`notices` 是向后兼容的可选数组，旧 schema v2 可省略；当前 collector 用它记录返回 0 但 top 仍可查询的 partial load，报告将其显示为非致命 `NPI_LOAD_PARTIAL` warning。`clk_sources` 为兼容 schema 保留；新 collector 固定写空数组，旧文件的非空内容也不参与判定。
+
+升级前生成的 offline inventory 可能只采集了当时全局配置指定的两个端口。如果现在为模块配置了不同的 `clk_port/rst_port`，旧文件中没有对应 port key 会产生 `CLK_PORT_MISSING` 或 `RST_PORT_MISSING`；不能把它解释为 RTL 缺口。请用当前 collector 对原 elaborated KDB 重新在线采集后，再把新 inventory 用于离线检查。
 
 ## 8. 构建 NPI collector
 
@@ -653,11 +663,16 @@ make -C npi VERDI_HOME=/path/to/verdi NPI_PLATFORM=LINUX64
 npi/build/rs_npi_collector
 ```
 
-Makefile 使用 C++11，包含 `$VERDI_HOME/share/NPI/inc`，并从以下目录链接 `libNPI.so`：
+Makefile 使用 C++11，并同时依赖 NPI Language Model 与 NPI L1：
 
 ```text
-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM
+NPI_INC       默认 $VERDI_HOME/share/NPI/inc
+NPI_LIB       默认 $VERDI_HOME/share/NPI/lib/$NPI_PLATFORM（找不到时尝试小写平台名）
+NPI_L1_INC    默认 $VERDI_HOME/share/NPI/L1/C/inc
+NPI_L1_LIB    默认 NPI_LIB（找不到 libnpiL1.so 时尝试小写平台目录）
 ```
+
+构建会检查 `npi.h`、`npi_L1.h`、`libNPI.so` 和 `libnpiL1.so`，并为两个库目录写入 rpath。
 
 安装布局不符合上述结构时，可直接覆盖 Makefile 的目录和编译器：
 
@@ -665,14 +680,18 @@ $VERDI_HOME/share/NPI/lib/$NPI_PLATFORM
 : "${VERDI_HOME:?set VERDI_HOME in the current shell}"
 : "${NPI_INC_DIR:?set NPI_INC_DIR in the current shell}"
 : "${NPI_LIB_DIR:?set NPI_LIB_DIR in the current shell}"
+: "${NPI_L1_INC_DIR:?set NPI_L1_INC_DIR in the current shell}"
+: "${NPI_L1_LIB_DIR:?set NPI_L1_LIB_DIR in the current shell}"
 make -C npi \
   VERDI_HOME="$VERDI_HOME" \
   NPI_INC="$NPI_INC_DIR" \
   NPI_LIB="$NPI_LIB_DIR" \
+  NPI_L1_INC="$NPI_L1_INC_DIR" \
+  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
   CXX="${CXX:-g++}"
 ```
 
-GNU Make 无法可靠表示带空白的目标路径，因此仓库路径、`NPI_INC_DIR` 和 `NPI_LIB_DIR` 不得包含空白；Makefile 会在解析阶段给出明确错误。该约束不影响 `launch_verdi_gui.sh`，后者支持带空格的 KDB 路径。
+GNU Make 无法可靠表示带空白的目标路径，因此仓库路径、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR` 和 `NPI_L1_LIB_DIR` 不得包含空白；Makefile 会在解析阶段给出明确错误。该约束不影响 `launch_verdi_gui.sh`，后者支持带空格的 KDB 路径。
 
 运行前设置：
 
@@ -687,6 +706,8 @@ Python runner 会尝试把标准 NPI 平台目录加入 collector 子进程的 `
 --npi-lib-dir /tools/verdi/share/NPI/lib/LINUX64
 ```
 
+`libnpiL1.so` 若位于不同目录，由构建时的 `NPI_L1_LIB` rpath 定位；运行前可用 `ldd npi/build/rs_npi_collector | grep -E 'libNPI|libnpiL1'` 确认两者都不是 `not found`。
+
 清理构建产物：
 
 ```bash
@@ -700,9 +721,11 @@ npi/build/rs_npi_collector \
   --positions positions.txt \
   --output inventory.json \
   --clk-port clk \
-  --rst-port rst \
+  --rst-port rst_n \
   --elab-db /absolute/path/to/kdb.elab++
 ```
+
+`--clk-port/--rst-port` 目前仍是 collector 命令行的必填兼容参数，但不再限制采集范围；collector 会枚举每个实例的全部 formal ports，并用 NPI L1 `npi_mod_inst_get_port` 按实例全路径补采 Language Model 未返回的端口。最终由 Python checker 按逐模块 `clk_port/rst_port` 选择要检查的两个端口。
 
 ## 9. 生产 elaborated KDB 输入
 
@@ -772,8 +795,8 @@ python -m rscheck check \
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
 5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；若 load 返回 0，则枚举 top，存在可查询 top 时记录 partial notice 并继续，否则退出 11；
-6. collector 遍历层次、端口、逐实例 effective parameters 和 clk driver，生成 schema v2 inventory；任何目标证据缺失仍 fail-closed；
-7. Python 加载 inventory，执行组、拍数、模块、clk/rst、CRG 和 RTL `RS_CRG_EN` 检查；
+6. collector 遍历层次、逐实例全部 formal ports 和 effective parameters；端口先用 Language Model 枚举，再用 NPI L1 按完整实例路径补采，生成 schema v2 inventory；`clk_sources` 固定为空；
+7. Python 加载 inventory，执行组、拍数、模块、逐模块 clk/rst 和 RTL `RS_CRG_EN` 检查；`CRG_source` 仅保留为报告证据；
 8. 可选保存 inventory 和 JSON/CSV 报告。
 
 在线专用参数：
@@ -850,12 +873,14 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如硬错误 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`，或非致命 warning `NPI_LOAD_PARTIAL`；
 - `rows[].spec`：规范化后的九字段规格和源行号；`position` 是解析后的完整 RTL 路径，命中映射时 `position_alias` 保存 Excel 原始简写，未命中时为空；兼容标签字段 `RS_CFG_EN` 可以是空字符串；
-- `rows[].module_rule`：本行最终采用的规则；无显式覆盖时也会记录隐式默认的 `has_rs_cfg_en=true` 与空 `step_parameters`；
+- `rows[].module_rule`：本行最终采用的规则；始终包含最终生效的 `clk_port/rst_port`；无显式覆盖时记录隐式默认的 `has_rs_cfg_en=true`、空 `step_parameters`、`clk_port="clk"`、`rst_port="rst_n"`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
-- `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、端口连线、clk 来源及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`，门控 parameter 证据键为 `RS_CRG_EN`；
+- `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、全部 formal port 连线、兼容字段 `clk_sources` 及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`，门控 parameter 证据键为 `RS_CRG_EN`；新在线采集的 `clk_sources` 为 `[]`；
 - `rows[].findings`：code、message、expected、actual 等诊断信息。
 
 输出目录不存在时会自动创建。
+
+`rows[].spec.CRG_source` 继续保存 Excel 原值，但当前不会生成任何 CRG finding，也不会影响 `summary.passed`。
 
 GUI 为历史问题复现保留 report schema v2 的只读兼容显示，但 v2 没有模块规则和逐实例贡献，不能证明动态 step 判定；当前 CLI 新生成的报告始终是 v3。
 
@@ -908,11 +933,11 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
 | `formula cells are not supported` | XLSX/XLSM 的映射字段是公式单元格 | 将值固化为文本/数字；额外未映射列不受影响 |
 | collector executable not found | 未构建或路径不对 | 执行 `make -C npi ...` 并检查 `npi/build/rs_npi_collector` |
-| `libNPI.so` 找不到 | `VERDI_HOME`、`NPI_PLATFORM` 或运行库目录错误 | 设置环境变量，或用 `--npi-lib-dir` 指向直接包含 `.so` 的平台目录 |
+| `npi_L1.h` / `libnpiL1.so` / `libNPI.so` 找不到 | Verdi NPI/L1 安装布局、`VERDI_HOME`、`NPI_PLATFORM` 或目录变量错误 | 设置 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`；用 `ldd` 同时确认 `libNPI.so` 与 `libnpiL1.so` |
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
 | `unexpected argument` / `unrecognized arguments` | 仍在使用旧 `-- -f/-sv/-lib` 透传 | 删除透传，先在外部流程生成 KDB，再只传 `--elab-db` |
 | `npi_init failed` | NPI 环境、license 或版本问题 | 检查 license、Verdi 安装和平台库 |
-| `NPI_LOAD_PARTIAL` | `npi_load_design` 报告 elaboration error，但至少一个 top 仍可查询 | 工具继续检查并显示非致命 warning；核对 report 中 position、实例、端口、parameter 和 CRG 证据，任何相关缺失仍会使检查失败 |
+| `NPI_LOAD_PARTIAL` | `npi_load_design` 报告 elaboration error，但至少一个 top 仍可查询 | 工具继续检查并显示非致命 warning；核对 report 中 position、实例、全部 formal ports 和 parameter 证据，相关缺失仍会使检查失败 |
 | `error[NPI_LOAD]` / collector 退出 11 | load 返回 0，且没有任何 top 可查询 | 确认 collector 的 `ldd`、`VERDI_HOME` 与生成 KDB 的工具版本一致；查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`，必要时重新 elaboration；`work.lib++` 会更早被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
 | `POSITION_NOT_FOUND` | 映射后的路径不属于当前 elaborated top；或 Excel 简写未命中数据库，被当作完整路径直通 | 查看 report 的 `position`/`position_alias`，核对映射键、映射值和同一 KDB 中的完整 hierarchy |
@@ -926,20 +951,18 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `SUFFIX_TAG_MISMATCH` | 同组实例的 tag 不同 | 核对命名；默认是 warning，连续 index 模式下还会导致硬错误 |
 | `STAGE_INDEX_MISMATCH` | index 不连续、不从 `index_base` 开始或 tag 不唯一 | 修正实例命名或关闭不需要的连续检查 |
 | `RS_MODULE_MISMATCH` | 实例 definition 与 `RS_module` 不同 | 核对模块替换、wrapper 和规格模块名 |
-| `CLK_PORT_MISSING` / `RST_PORT_MISSING` | 配置的 formal port 不存在 | 修正 `rtl.clk_port/rst_port` 或 RTL |
+| `CLK_PORT_MISSING` / `RST_PORT_MISSING` | 当前模块规则指定的 formal port 不存在，或复用了只采旧全局端口的历史 offline inventory | 核对 report 的 `module_rule.clk_port/rst_port` 与 RTL；旧 inventory 用当前 collector 重采。没有 rst formal port 的模块仍会报 `RST_PORT_MISSING`，当前没有“跳过 rst”开关 |
 | `CLK_UNCONNECTED` / `RST_UNCONNECTED` | formal port 没有 high connection | 修正例化连线 |
 | `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对 `position` 的简单名或完整层次名，并核对连接 |
 | `UNSUPPORTED_CONNECTION` | clk/rst 经 concat、运算、mux 等复杂表达式连接 | 改为可追踪的直接信号，或扩展采集/规则模型 |
-| `CRG_SOURCE_UNRESOLVED` | 顶层输入、无 driver、无法到达 module cell | 补充可识别来源或接受该 fail-closed 结果 |
-| `MULTIPLE_CLK_SOURCES` | clk 存在多个唯一上游 module source | 消除多驱动或修正结构 |
-| `CRG_SOURCE_MISMATCH` | 唯一来源与 `CRG_source` 不一致 | 核对 `rtl.crg_match` 和 Excel 来源字段 |
+| `CRG_source` 与预期不同但仍 PASS | 当前版本暂停 CRG 正确性判定 | 这是当前设计；字段仍进入 report，但新 inventory 的 `clk_sources=[]`，不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding |
 | `RS_CFG_EN_PARAMETER_MISSING` | 兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
 | `RS_CFG_EN_PARAMETER_UNEXPECTED` | `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
 | `RS_CFG_EN_LABEL_MISMATCH` | Excel/internal `RS_CFG_EN` 文本不是规则要求的精确 `假门控` 或空白 | 使用文本 `假门控`，不要使用布尔值、数字或别名；`RS_CRG_EN` 非零时还会同时报告 value mismatch |
 | `RS_CFG_EN_VALUE_MISMATCH` | 实例有 `RS_CRG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
 | `RS_CFG_EN_VALUE_UNRESOLVED` | collector 找到 `RS_CRG_EN` 但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CRG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst`；完整名也可能与较短前缀重叠 | 重新设计互不重叠的组名；当前没有 exact-only 模式 |
-| `NPI_UNRESOLVED` | collector 产生 traversal/driver warning | 视为硬错误；检查 KDB、层次和 Netlist driver 信息，不要忽略 |
+| `NPI_UNRESOLVED` | collector 产生层次/端口遍历 warning | 视为硬错误；检查 KDB、层次和 NPI Language/L1 端口信息，不要忽略 |
 | `NPI_LOAD_PARTIAL` | KDB 有 elaboration error，但 top 可查询 | severity 为 warning；仅表示允许继续，不能覆盖后续任何硬 finding |
 | `no usable X11 display` | 当前 DISPLAY 不可用，或无法发现/认证其他会话 | 从本地/VNC/XRDP 图形终端运行，或使用带客户端 X server 的 `ssh -Y`；再执行 `--probe-only` |
 | `multiple usable X11 displays` | 自动探测到多个有效 DISPLAY | 设置 `GUI_DISPLAY`，必要时同时设置 `GUI_USER` 或 `GUI_XAUTHORITY` |
@@ -954,10 +977,10 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
 - SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 后缀风格；检查单个元素时可直接把 `u[0]` 作为完整本地 `RS_inst`，按数组前缀分组时才需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
-- CRG 追踪要求唯一 module cell 来源；顶层输入、多驱动和无法解析的 primitive 网络会 fail-closed。
+- `CRG_source` 当前仅解析和报告，不做来源追踪或正确性判断；新 inventory 的 `clk_sources` 固定为空。
 - RTL `RS_CRG_EN` 和 `step_parameters` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
 - `allow_leaf_signal_match=true` 会放宽层次比较，可能让不同 scope 的同名信号误匹配。
-- inventory `warnings` 中的 traversal/driver 问题会升级为 `NPI_UNRESOLVED` error；partial-load stderr warning 写入 inventory `notices`，在 report/GUI 中保持非致命 `NPI_LOAD_PARTIAL`。
+- inventory `warnings` 中的 NPI traversal 问题会升级为 `NPI_UNRESOLVED` error；partial-load stderr warning 写入 inventory `notices`，在 report/GUI 中保持非致命 `NPI_LOAD_PARTIAL`。
 - 在线模式只消费现有 elaborated KDB，不接收 RTL/filelist，也不负责 RTL 编译或 elaboration。
 - 离线 inventory 是可信快照例外，不包含来源证明；它不能替代新鲜 KDB 的在线采集。
 - NPI 真实构建和在线运行依赖特定 Synopsys 版本、平台动态库和 license；离线 Python 测试不能覆盖这些环境因素。
@@ -965,11 +988,11 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 ## 14. 推荐操作顺序
 
 1. 固定 RTL commit、宏、库、include 和 top，生成新的 elaborated KDB。
-2. 配置九个内部属性的 1-based 列映射；实际表头可任意命名；按需维护 position 简写到 RTL 全路径的映射库；只为需要改变默认行为的 `RS_module` 添加显式覆盖规则。
+2. 配置九个内部属性的 1-based 列映射；实际表头可任意命名；按需维护 position 简写到 RTL 全路径的映射库；为端口名不是默认 `clk/rst_n` 或需要改变其他默认行为的 `RS_module` 添加显式规则，并填写其 `clk_port/rst_port`。
 3. 按最终解析规则填写 Excel/internal `RS_CFG_EN` 标签和预期有效 `step`；默认标签是 `假门控`，实际 RTL `RS_CRG_EN` 必须为 0，且每个物理实例贡献 1，有效拍可为 0。
 4. 执行 `validate`，确认 sheet、列号映射、position 解析结果和规范化内容；只有主动采用标准表头时才按需开启严格表头诊断。
 5. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
 6. 同时输出 report schema v3 JSON/CSV，并用 `--keep-inventory` 保存 schema v2 快照。
 7. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。
-8. RTL、KDB、position 映射或模块规则变化后立即重新在线采集或重新检查。
+8. RTL、KDB、position 映射或模块规则变化后立即重新在线采集或重新检查；尤其是从旧 inventory 切换到自定义模块端口名时必须重采全部 formal ports。
 9. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。

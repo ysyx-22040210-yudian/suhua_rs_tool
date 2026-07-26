@@ -12,6 +12,25 @@ from .inventory import load_inventory
 from .model import Inventory, InventoryError, RtlConfig, SpecRow
 
 
+def _verdi_npi_library_dir(environment: dict[str, str]) -> Path | None:
+    verdi_home = environment.get("VERDI_HOME") or environment.get("NOVAS_INST_DIR")
+    if not verdi_home:
+        return None
+    library_root = Path(verdi_home) / "share" / "NPI" / "lib"
+    platform = environment.get("NPI_PLATFORM", "LINUX64")
+    candidates = [library_root / platform]
+    lowercase = library_root / platform.lower()
+    if lowercase not in candidates:
+        candidates.append(lowercase)
+    for candidate in candidates:
+        if (candidate / "libNPI.so").is_file():
+            return candidate
+    for library in sorted(library_root.glob("*/libNPI.so")):
+        if library.is_file():
+            return library.parent
+    return None
+
+
 def _collector_environment(npi_lib_dir: str | Path | None = None) -> dict[str, str]:
     environment = os.environ.copy()
     library_dir: Path | None = None
@@ -20,12 +39,7 @@ def _collector_environment(npi_lib_dir: str | Path | None = None) -> dict[str, s
         if not library_dir.is_dir():
             raise InventoryError(f"NPI library directory not found: {library_dir}")
     else:
-        verdi_home = environment.get("VERDI_HOME") or environment.get("NOVAS_INST_DIR")
-        if verdi_home:
-            platform = environment.get("NPI_PLATFORM", "LINUX64")
-            candidate = Path(verdi_home) / "share" / "NPI" / "lib" / platform
-            if candidate.is_dir():
-                library_dir = candidate
+        library_dir = _verdi_npi_library_dir(environment)
 
     if library_dir is not None:
         current = environment.get("LD_LIBRARY_PATH", "")

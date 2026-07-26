@@ -31,6 +31,23 @@ module rs_pipe #(
     end
 endmodule
 
+module rs_custom #(
+    parameter logic RS_CRG_EN = 1'b1
+) (
+    input  logic clock_i,
+    input  logic reset_ni,
+    input  logic d,
+    output logic q
+);
+    always_ff @(posedge clock_i or negedge reset_ni) begin
+        if (!reset_ni) begin
+            q <= 1'b0;
+        end else if (!RS_CRG_EN) begin
+            q <= d;
+        end
+    end
+endmodule
+
 module tile (
     input  logic ref_clk,
     input  logic rst_n,
@@ -45,6 +62,7 @@ module tile (
     logic stage_2;
     logic stage_3;
     logic stage_4;
+    logic custom_stage;
 
     crg_core u_crg (
         .ref_clk (ref_clk),
@@ -124,6 +142,16 @@ module tile (
         .rst (rst_n),
         .d   (data_in),
         .q   (ctrl_out)
+    );
+
+    // The VM regression owns this instance through a temporary custom-port spec.
+    rs_custom #(
+        .RS_CRG_EN (1'b0)
+    ) CUSTOM_RS (
+        .clock_i  (clk_rs),
+        .reset_ni (rst_n),
+        .d        (data_in),
+        .q        (custom_stage)
     );
 endmodule
 

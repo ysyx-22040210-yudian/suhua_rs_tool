@@ -53,7 +53,12 @@ def _string(value: Any, name: str) -> str:
     return value.strip()
 
 
-def _module_rules(value: Any) -> dict[str, ModuleRule]:
+def _module_rules(
+    value: Any,
+    *,
+    legacy_clk_port: str,
+    legacy_rst_port: str,
+) -> dict[str, ModuleRule]:
     raw_rules = _require_mapping(value, "module_rules")
     rules: dict[str, ModuleRule] = {}
     for raw_name, raw_rule in raw_rules.items():
@@ -65,7 +70,7 @@ def _module_rules(value: Any) -> dict[str, ModuleRule]:
         rule = _require_mapping(raw_rule, f"module_rules.{name}")
         _reject_unknown(
             rule,
-            {"has_rs_cfg_en", "step_parameters"},
+            {"has_rs_cfg_en", "step_parameters", "clk_port", "rst_port"},
             f"module_rules.{name}",
         )
         if "has_rs_cfg_en" not in rule:
@@ -106,6 +111,14 @@ def _module_rules(value: Any) -> dict[str, ModuleRule]:
             name=name,
             has_rs_cfg_en=has_rs_cfg_en,
             step_parameters=tuple(parameters),
+            clk_port=_string(
+                rule.get("clk_port", legacy_clk_port),
+                f"module_rules.{name}.clk_port",
+            ),
+            rst_port=_string(
+                rule.get("rst_port", legacy_rst_port),
+                f"module_rules.{name}.rst_port",
+            ),
         )
     return rules
 
@@ -186,7 +199,6 @@ def config_from_dict(raw: Any) -> ToolConfig:
     excel_raw = _require_mapping(root.get("excel", {}), "excel")
     columns_raw = _require_mapping(root.get("columns", {}), "columns")
     rtl_raw = _require_mapping(root.get("rtl", {}), "rtl")
-    module_rules = _module_rules(root.get("module_rules"))
     position_mappings = _position_mappings(root.get("position_mappings", {}))
     _reject_unknown(
         root,
@@ -284,6 +296,11 @@ def config_from_dict(raw: Any) -> ToolConfig:
         ),
         crg_match=crg_match,
     )
+    module_rules = _module_rules(
+        root.get("module_rules"),
+        legacy_clk_port=rtl.clk_port,
+        legacy_rst_port=rtl.rst_port,
+    )
 
     return ToolConfig(
         excel=excel,
@@ -319,6 +336,8 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
             name: {
                 "has_rs_cfg_en": rule.has_rs_cfg_en,
                 "step_parameters": list(rule.step_parameters),
+                "clk_port": rule.clk_port,
+                "rst_port": rule.rst_port,
             }
             for name, rule in sorted(config.module_rules.items())
         },

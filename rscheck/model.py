@@ -65,12 +65,16 @@ class ModuleRule:
     name: str
     has_rs_cfg_en: bool
     step_parameters: tuple[str, ...] = ()
+    clk_port: str = "clk"
+    rst_port: str = "rst_n"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "has_rs_cfg_en": self.has_rs_cfg_en,
             "step_parameters": list(self.step_parameters),
+            "clk_port": self.clk_port,
+            "rst_port": self.rst_port,
         }
 
 

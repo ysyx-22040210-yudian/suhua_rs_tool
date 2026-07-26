@@ -30,6 +30,8 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.rtl.require_contiguous_indices)
         self.assertTrue(config.module_rules["rs_pipe"].has_rs_cfg_en)
         self.assertEqual(config.module_rules["rs_pipe"].step_parameters, ("rs_mode",))
+        self.assertEqual(config.module_rules["rs_pipe"].clk_port, "clk")
+        self.assertEqual(config.module_rules["rs_pipe"].rst_port, "rst")
         self.assertFalse(config.module_rules["rs_plain"].has_rs_cfg_en)
         self.assertEqual(config.position_mappings, {"tile_core": "top.u_tile"})
 
@@ -197,6 +199,20 @@ class ConfigTests(unittest.TestCase):
                 "must not include RS_CRG_EN",
             ),
             (
+                "empty_clk_port",
+                lambda raw: raw["module_rules"]["rs_pipe"].__setitem__(
+                    "clk_port", ""
+                ),
+                "must be a non-empty string",
+            ),
+            (
+                "non_string_rst_port",
+                lambda raw: raw["module_rules"]["rs_pipe"].__setitem__(
+                    "rst_port", 1
+                ),
+                "must be a non-empty string",
+            ),
+            (
                 "unknown_rule_key",
                 lambda raw: raw["module_rules"]["rs_pipe"].__setitem__(
                     "mode", "nonzero"
@@ -212,6 +228,24 @@ class ConfigTests(unittest.TestCase):
                 path.write_text(json.dumps(raw), encoding="utf-8")
                 with self.assertRaisesRegex(ConfigError, message):
                     load_config(path)
+
+    def test_legacy_module_ports_inherit_rtl_ports_and_export_explicitly(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        raw["rtl"]["clk_port"] = "legacy_clock"
+        raw["rtl"]["rst_port"] = "legacy_reset"
+        for rule in raw["module_rules"].values():
+            rule.pop("clk_port")
+            rule.pop("rst_port")
+
+        config = config_from_dict(raw)
+        exported = config_to_dict(config)
+
+        for rule in config.module_rules.values():
+            self.assertEqual(rule.clk_port, "legacy_clock")
+            self.assertEqual(rule.rst_port, "legacy_reset")
+        for rule in exported["module_rules"].values():
+            self.assertEqual(rule["clk_port"], "legacy_clock")
+            self.assertEqual(rule["rst_port"], "legacy_reset")
 
     def test_rs_cfg_en_remains_valid_as_an_ordinary_step_parameter(self) -> None:
         raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))

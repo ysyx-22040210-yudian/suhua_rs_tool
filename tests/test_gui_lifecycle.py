@@ -82,6 +82,8 @@ class GuiLifecycleTests(unittest.TestCase):
                 f"rs_pipe_{offset}",
                 True,
                 ("rs_mode", "pipe_enable"),
+                f"clock_{offset}",
+                f"reset_{offset}",
             ),
             f"rs_plain_{offset}": ModuleRule(f"rs_plain_{offset}", False),
         }
@@ -633,6 +635,8 @@ class GuiLifecycleTests(unittest.TestCase):
                 "name": "pipe",
                 "has_rs_cfg_en": True,
                 "step_parameters": ["rs_mode"],
+                "clk_port": "clock_i",
+                "rst_port": "reset_ni",
             },
             "step_check": {"effective_step": 1},
             "matched_instances": [
@@ -659,12 +663,29 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(evidence["step_check"]["effective_step"], 1)
         self.assertEqual(evidence["spec"]["position_alias"], "core_pipe")
         self.assertEqual(evidence["spec"]["position"], "tb.dut.u_core.u_pipe")
+        self.assertEqual(evidence["module_rule"]["clk_port"], "clock_i")
+        self.assertEqual(evidence["module_rule"]["rst_port"], "reset_ni")
 
     def test_module_rule_form_parses_multiple_parameters(self) -> None:
-        rule = _module_rule_from_form(" rs_pipe ", True, "rs_mode， pipe_enable")
+        rule = _module_rule_from_form(
+            " rs_pipe ",
+            True,
+            "rs_mode， pipe_enable",
+            " clock_i ",
+            " reset_ni ",
+        )
         self.assertEqual(rule.name, "rs_pipe")
         self.assertTrue(rule.has_rs_cfg_en)
         self.assertEqual(rule.step_parameters, ("rs_mode", "pipe_enable"))
+        self.assertEqual(rule.clk_port, "clock_i")
+        self.assertEqual(rule.rst_port, "reset_ni")
+        default_ports = _module_rule_from_form("rs_plain", False, "", "  ", "")
+        self.assertEqual(default_ports.clk_port, "clk")
+        self.assertEqual(default_ports.rst_port, "rst_n")
+        with self.assertRaisesRegex(GuiInputError, "clk 端口名"):
+            _module_rule_from_form("rs_pipe", False, "", "bad clk", "rst_n")
+        with self.assertRaisesRegex(GuiInputError, "rst 端口名"):
+            _module_rule_from_form("rs_pipe", False, "", "clk", "bad rst")
         with self.assertRaisesRegex(GuiInputError, "不能重复"):
             _parse_step_parameters("rs_mode,rs_mode")
         with self.assertRaisesRegex(GuiInputError, "不能同时"):
