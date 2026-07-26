@@ -16,6 +16,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [完整测试指南](docs/TESTING.md)
+- [clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md)
 - [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)
 - [任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）](docs/TEST_RESULTS_COLUMN_MAPPING_2026-07-25.md)
 - [完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_FULL_INSTANCE_2026-07-25.md)
@@ -379,9 +380,11 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[逐模块 clk/rst 端口与 CRG 暂停判定验证记录（2026-07-26）](docs/TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 固定到 GitHub 功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`：Windows 233 项回归中 189 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 233 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、Verdi GUI、在线自定义 `clock_i/reset_ni`、错误 `CRG_source` 仍 PASS、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过。
+[clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到 GitHub 功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`：CentOS/Python 3.8 的 236 项测试全部通过且无 skip；GitHub fresh clone、partial/clean elaborated KDB、mapped Verdi/Tk GUI、专项在线 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和八日志门禁全部通过。`CLK_ONLY_RS` 的 formal ports 精确为 `clk/d/q`，`clk` 已连接且 rst 缺失时 finding 只包含 `RST_PORT_MISSING`。
 
 下列记录属于更早功能版本，仅用于历史对照：
+
+[逐模块 clk/rst 端口与 CRG 暂停判定验证记录（2026-07-26）](docs/TEST_RESULTS_MODULE_PORTS_2026-07-26.md) 固定到 GitHub 功能提交 `2e90d6636accee3d5450a1feac64dc2f36edc608`：Windows 233 项回归中 189 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 233 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、Verdi GUI、在线自定义 `clock_i/reset_ni`、错误 `CRG_source` 仍 PASS、在线正反例、默认规则、离线 100 轮和 10,000 行负载均通过。
 
 [RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CRG_EN_2026-07-26.md) 固定到 GitHub 提交 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`：Windows 223 项回归中 179 项通过、44 项平台限定用例按预期跳过；CentOS/Python 3.8 的 223 项全部通过且无 skip；partial/clean KDB、Verdi GUI、逐实例 `RS_CRG_EN` 证据、在线正负例、默认规则、离线 100 轮和 10,000 行负载均通过。
 
