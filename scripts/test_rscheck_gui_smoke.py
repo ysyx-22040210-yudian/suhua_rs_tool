@@ -25,6 +25,7 @@ _ONLINE_OPTIONS_WITH_VALUE = frozenset(
         "--collector",
         "--column",
         "--config",
+        "--crg-trace-max-depth",
         "--csv-report",
         "--data-start-row",
         "--elab-db",
@@ -53,6 +54,42 @@ _RS_CFG_DONTCARE_TEXT = "任意非标准文本"
 _RS_CFG_NA_TEXT = "NA"
 _CRG_SOURCE_ALIAS = "core_clock_source"
 _CRG_SOURCE_FULL_PATH = "top.u_soc.u_crg_core"
+
+
+def _clock_trace_fields(
+    clock_port: str,
+    modules: Sequence[tuple[str, str]],
+    *,
+    max_depth: int = 16,
+    status: str = "complete",
+    diagnostics: Sequence[str] = (),
+) -> dict[str, object]:
+    path: list[str] = []
+    traced_modules = []
+    for depth, (instance, module) in enumerate(modules, start=1):
+        path.append(instance)
+        traced_modules.append(
+            {
+                "instance": instance,
+                "module": module,
+                "depth": depth,
+                "path": list(path),
+            }
+        )
+    return {
+        "clk_sources": [
+            {"instance": instance, "module": module}
+            for instance, module in modules
+        ],
+        "clock_trace": {
+            "clock_port": clock_port,
+            "max_depth": max_depth,
+            "excluded_inputs": ["clk", "rst_n"],
+            "status": status,
+            "modules": traced_modules,
+            "diagnostics": list(diagnostics),
+        },
+    }
 
 
 def _window_identifier(root: object) -> str:
@@ -172,6 +209,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="prove an Excel CRG_source alias resolves to its RTL full path",
     )
+    parser.add_argument(
+        "--crg-depth-limit",
+        action="store_true",
+        help="run the online three-level CRG path with a maximum depth of two",
+    )
     parser.add_argument("--validate-only", action="store_true")
     return parser
 
@@ -196,7 +238,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                     1,
                     "clk_rs",
                     "rst_n",
-                    "crg_core",
+                    f"{position}.u_crg",
                     "假门控",
                 )
             )
@@ -224,18 +266,15 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                                 "type": "npiNet",
                             },
                         },
-                        "clk_sources": [
-                            {
-                                "instance": f"{position}.u_crg",
-                                "module": "crg_core",
-                            }
-                        ],
+                        **_clock_trace_fields(
+                            "clk", [(f"{position}.u_crg", "crg_core")]
+                        ),
                     }
                 ],
             }
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
-            {"schema_version": 2, "positions": positions, "warnings": []},
+            {"schema_version": 3, "positions": positions, "warnings": []},
             stream,
             ensure_ascii=True,
         )
@@ -260,7 +299,7 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                 2,
                 "clk_default",
                 "rst_n",
-                "crg_default",
+                f"{position}.u_crg",
                 "假门控",
             )
         )
@@ -289,18 +328,15 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                         "type": "npiNet",
                     },
                 },
-                "clk_sources": [
-                    {
-                        "instance": f"{position}.u_crg",
-                        "module": "crg_default",
-                    }
-                ],
+                **_clock_trace_fields(
+                    "clk", [(f"{position}.u_crg", "crg_default")]
+                ),
             }
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "positions": {
                     position: {
                         "found": True,
@@ -332,14 +368,14 @@ def _write_rs_cfg_dontcare_inputs(output: Path) -> tuple[Path, Path]:
                 1,
                 "clk_dontcare",
                 "rst_n",
-                "crg_dontcare",
+                f"{position}.u_crg",
                 _RS_CFG_DONTCARE_TEXT,
             )
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "positions": {
                     position: {
                         "found": True,
@@ -364,12 +400,10 @@ def _write_rs_cfg_dontcare_inputs(output: Path) -> tuple[Path, Path]:
                                         "type": "npiNet",
                                     },
                                 },
-                                "clk_sources": [
-                                    {
-                                        "instance": f"{position}.u_crg",
-                                        "module": "crg_dontcare",
-                                    }
-                                ],
+                                **_clock_trace_fields(
+                                    "clk",
+                                    [(f"{position}.u_crg", "crg_dontcare")],
+                                ),
                             }
                         ],
                     }
@@ -399,14 +433,14 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
                 1,
                 "clk_na",
                 "rst_n",
-                "crg_na",
+                f"{position}.u_crg",
                 _RS_CFG_NA_TEXT,
             )
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "positions": {
                     position: {
                         "found": True,
@@ -432,12 +466,9 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
                                         "type": "npiNet",
                                     },
                                 },
-                                "clk_sources": [
-                                    {
-                                        "instance": f"{position}.u_crg",
-                                        "module": "crg_na",
-                                    }
-                                ],
+                                **_clock_trace_fields(
+                                    "clk", [(f"{position}.u_crg", "crg_na")]
+                                ),
                             }
                         ],
                     }
@@ -474,7 +505,7 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "positions": {
                     position: {
                         "found": True,
@@ -500,12 +531,17 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
                                         "type": "npiNet",
                                     },
                                 },
-                                "clk_sources": [
-                                    {
-                                        "instance": _CRG_SOURCE_FULL_PATH,
-                                        "module": "crg_core",
-                                    }
-                                ],
+                                **_clock_trace_fields(
+                                    "clk",
+                                    [
+                                        ("top.u_crg_mapping.u_occ", "clk_occ"),
+                                        (
+                                            "top.u_crg_mapping.u_clk_mux",
+                                            "clk_mux",
+                                        ),
+                                        (_CRG_SOURCE_FULL_PATH, "crg_core"),
+                                    ],
+                                ),
                             }
                         ],
                     }
@@ -553,7 +589,7 @@ def _write_clk_without_rst_spec(output: Path) -> Path:
                 1,
                 "clk_rs",
                 "rst_n",
-                "not_checked",
+                "crg_core",
                 "假门控",
             )
         )
@@ -582,6 +618,23 @@ def main() -> int:
     online = bool(args.collector or args.elab_db)
     if online and not (args.collector and args.elab_db):
         raise SystemExit("--collector and --elab-db must be provided together")
+    if args.crg_depth_limit and (
+        not online
+        or args.validate_only
+        or args.negative
+        or args.expect_partial_load
+        or args.default_rule
+        or args.custom_port
+        or args.clk_without_rst
+        or args.rs_cfg_dontcare
+        or args.rs_cfg_na
+        or args.crg_source_mapping
+        or args.generated_rows
+    ):
+        raise SystemExit(
+            "--crg-depth-limit requires a positive online full check and is "
+            "mutually exclusive with all other special modes"
+        )
     if args.rs_cfg_dontcare and (
         args.negative
         or args.expect_partial_load
@@ -815,6 +868,11 @@ def main() -> int:
         raise SystemExit("sample config must disable strict header validation by default")
     if app.header_check_var.get():
         raise SystemExit("GUI loaded strict header validation as enabled by default")
+    expected_trace_depth = source_config.get("rtl", {}).get(
+        "crg_trace_max_depth"
+    )
+    if expected_trace_depth != 16 or app.crg_trace_max_depth_var.get() != "16":
+        raise SystemExit("GUI did not load CRG trace maximum depth 16")
 
     app.position_alias_var.set("gui_smoke_position")
     app.position_path_var.set("top.u_gui_smoke")
@@ -1032,6 +1090,7 @@ def main() -> int:
     app.header_row_var.set("4")
     app.data_start_row_var.set("6")
     app.header_check_var.set(True)
+    app.crg_trace_max_depth_var.set("32")
     for index, name in enumerate(FIELD_NAMES, start=20):
         app.column_vars[name].set(str(index))
     app._module_rules["gui_unsaved_rule"] = ModuleRule(
@@ -1074,7 +1133,9 @@ def main() -> int:
             "GUI config export root sections mismatch: "
             f"{sorted(exported_config)!r}"
         )
-    if exported_config.get("rtl") != source_config.get("rtl"):
+    expected_exported_rtl = dict(source_config.get("rtl", {}))
+    expected_exported_rtl["crg_trace_max_depth"] = 32
+    if exported_config.get("rtl") != expected_exported_rtl:
         raise SystemExit("GUI config export did not preserve the complete RTL config")
     if exported_config.get("excel") != {
         "sheet": "PortableSmoke",
@@ -1134,6 +1195,8 @@ def main() -> int:
         raise SystemExit("GUI config import did not clear database dirty state")
     if app.sheet_var.get() != "PortableSmoke":
         raise SystemExit("GUI config import did not restore Excel settings")
+    if app.crg_trace_max_depth_var.get() != "32":
+        raise SystemExit("GUI config import did not restore CRG trace maximum depth")
     if "gui_unsaved_rule" not in app._module_rules:
         raise SystemExit("GUI config import did not restore the module rule database")
     imported_rule = app._module_rules["gui_unsaved_rule"]
@@ -1148,7 +1211,11 @@ def main() -> int:
         raise SystemExit(
             "GUI config import did not restore the complete CRG_source database"
         )
-    if app._loaded_config is None or app._loaded_config.rtl != rtl_before_export:
+    if (
+        app._loaded_config is None
+        or app._loaded_config.rtl
+        != gui_module.replace(rtl_before_export, crg_trace_max_depth=32)
+    ):
         raise SystemExit("GUI config import did not restore the RTL configuration")
 
     app.config_var.set(str(config_path))
@@ -1163,6 +1230,8 @@ def main() -> int:
             "GUI smoke failed to restore the clean original CRG_source database"
         )
     config_io_verified = True
+    if args.crg_depth_limit:
+        app.crg_trace_max_depth_var.set("2")
     expected_rows = (
         1
         if args.negative
@@ -1395,10 +1464,26 @@ def main() -> int:
                 else "5/5"
             )
             if (
-                len(first_values) < 9
-                or str(first_values[5]) != expected_group
-                or str(first_values[7]) != expected_instances
-                or str(first_values[8]) != expected_step_cell
+                len(first_values) < 11
+                or str(first_values[6]) != expected_group
+                or str(first_values[8]) != expected_instances
+                or str(first_values[9]) != expected_step_cell
+                or (
+                    not args.validate_only
+                    and str(first_values[5])
+                    != (
+                        "WARNING"
+                        if args.custom_port or args.crg_depth_limit
+                        else "PASS"
+                    )
+                )
+                or (
+                    args.crg_depth_limit
+                    and (
+                        str(first_values[0]) != "WARNING"
+                        or str(first_values[10]) != "0E/6W"
+                    )
+                )
                 or (
                     args.crg_source_mapping
                     and str(first_values[4])
@@ -1411,9 +1496,9 @@ def main() -> int:
                         or args.crg_source_mapping
                     )
                     and (
-                        len(first_values) < 10
+                        len(first_values) < 11
                         or str(first_values[0]) != "PASS"
-                        or str(first_values[6])
+                        or str(first_values[7])
                         != (
                             _RS_CFG_DONTCARE_TEXT
                             if args.rs_cfg_dontcare
@@ -1421,7 +1506,7 @@ def main() -> int:
                             if args.rs_cfg_na
                             else "假门控"
                         )
-                        or str(first_values[9]) != "0E/0W"
+                        or str(first_values[10]) != "0E/0W"
                     )
                 )
             ):
@@ -1445,19 +1530,19 @@ def main() -> int:
                 print(f"GUI_SMOKE_FAIL: {exc}", file=sys.stderr)
                 root.destroy()
                 return
-            if raw_report.get("schema_version") != 3:
+            if raw_report.get("schema_version") != 4:
                 failed = True
                 print(
-                    "GUI_SMOKE_FAIL: report schema is not v3: "
+                    "GUI_SMOKE_FAIL: report schema is not v4: "
                     f"{raw_report.get('schema_version')!r}",
                     file=sys.stderr,
                 )
                 root.destroy()
                 return
-            if raw_inventory.get("schema_version") != 2:
+            if raw_inventory.get("schema_version") != 3:
                 failed = True
                 print(
-                    "GUI_SMOKE_FAIL: inventory schema is not v2: "
+                    "GUI_SMOKE_FAIL: inventory schema is not v3: "
                     f"{raw_inventory.get('schema_version')!r}",
                     file=sys.stderr,
                 )
@@ -1483,14 +1568,14 @@ def main() -> int:
                     return
                 global_values = app.result_tree.item("global", "values")
                 if (
-                    len(global_values) < 10
-                    or str(global_values[0]) != "PASS"
+                    len(global_values) < 11
+                    or str(global_values[0]) != "WARNING"
                     or str(global_values[2]) != "GLOBAL"
-                    or str(global_values[9]) != "0E/1W"
+                    or str(global_values[10]) != "0E/1W"
                 ):
                     failed = True
                     print(
-                        "GUI_SMOKE_FAIL: GLOBAL warning row is not displayed as PASS",
+                        "GUI_SMOKE_FAIL: GLOBAL warning row is not displayed as WARNING",
                         file=sys.stderr,
                     )
                     root.destroy()
@@ -1597,6 +1682,22 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                try:
+                    csv_crg_evidence = (
+                        json.loads(csv_rows[0].get("crg_trace_evidence", ""))
+                        if len(csv_rows) == 1
+                        else None
+                    )
+                except json.JSONDecodeError:
+                    csv_crg_evidence = None
+                csv_crg_evaluation = (
+                    csv_crg_evidence[0]
+                    if isinstance(csv_crg_evidence, list)
+                    and len(csv_crg_evidence) == 1
+                    and isinstance(csv_crg_evidence[0], dict)
+                    else {}
+                )
+                csv_matched_crg = csv_crg_evaluation.get("matched")
                 if (
                     not isinstance(report_rows, list)
                     or len(report_rows) != 1
@@ -1628,6 +1729,20 @@ def main() -> int:
                     else {}
                 )
                 report_spec = report_row.get("spec", {})
+                crg_check = report_row.get("crg_source_check", {})
+                crg_instances = (
+                    crg_check.get("instances", [])
+                    if isinstance(crg_check, dict)
+                    else []
+                )
+                crg_evaluation = (
+                    crg_instances[0]
+                    if isinstance(crg_instances, list)
+                    and len(crg_instances) == 1
+                    and isinstance(crg_instances[0], dict)
+                    else {}
+                )
+                matched_crg = crg_evaluation.get("matched")
                 try:
                     with csv_report_path.open(
                         encoding="utf-8-sig", newline=""
@@ -1647,15 +1762,137 @@ def main() -> int:
                     or not isinstance(report_spec, dict)
                     or report_spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH
                     or report_spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                    or not isinstance(crg_check, dict)
+                    or crg_check.get("status") != "pass"
+                    or crg_check.get("expected") != _CRG_SOURCE_FULL_PATH
+                    or crg_evaluation.get("status") != "matched"
+                    or not isinstance(matched_crg, dict)
+                    or matched_crg.get("instance") != _CRG_SOURCE_FULL_PATH
+                    or matched_crg.get("depth") != 3
+                    or matched_crg.get("path")
+                    != [
+                        "top.u_crg_mapping.u_occ",
+                        "top.u_crg_mapping.u_clk_mux",
+                        _CRG_SOURCE_FULL_PATH,
+                    ]
                     or report_row.get("findings") != []
                     or len(csv_rows) != 1
                     or csv_rows[0].get("CRG_source") != _CRG_SOURCE_FULL_PATH
                     or csv_rows[0].get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                    or csv_rows[0].get("crg_trace_status") != "pass"
+                    or csv_rows[0].get("crg_trace_max_depth") != "16"
+                    or csv_crg_evaluation.get("status") != "matched"
+                    or not isinstance(csv_matched_crg, dict)
+                    or csv_matched_crg.get("path")
+                    != [
+                        "top.u_crg_mapping.u_occ",
+                        "top.u_crg_mapping.u_clk_mux",
+                        _CRG_SOURCE_FULL_PATH,
+                    ]
                 ):
                     failed = True
                     print(
                         "GUI_SMOKE_FAIL: serialized CRG_source mapping evidence "
                         "is incomplete",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+            if args.crg_depth_limit:
+                report_rows = raw_report.get("rows")
+                first_row = (
+                    report_rows[0]
+                    if isinstance(report_rows, list)
+                    and len(report_rows) == 2
+                    and isinstance(report_rows[0], dict)
+                    else {}
+                )
+                second_row = (
+                    report_rows[1]
+                    if isinstance(report_rows, list)
+                    and len(report_rows) == 2
+                    and isinstance(report_rows[1], dict)
+                    else {}
+                )
+                crg_check = first_row.get("crg_source_check", {})
+                evaluations = (
+                    crg_check.get("instances", [])
+                    if isinstance(crg_check, dict)
+                    else []
+                )
+                depth_findings = [
+                    finding
+                    for finding in first_row.get("findings", [])
+                    if isinstance(finding, dict)
+                    and finding.get("code") == "CRG_TRACE_DEPTH_LIMIT"
+                ]
+                try:
+                    with csv_report_path.open(
+                        encoding="utf-8-sig", newline=""
+                    ) as stream:
+                        depth_csv_rows = list(csv.DictReader(stream))
+                    depth_csv_evidence = [
+                        json.loads(row.get("crg_trace_evidence", ""))
+                        for row in depth_csv_rows
+                    ]
+                except (OSError, json.JSONDecodeError) as exc:
+                    failed = True
+                    print(
+                        f"GUI_SMOKE_FAIL: cannot read CRG depth CSV evidence: {exc}",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                warning_csv_rows = [
+                    (row, evidence)
+                    for row, evidence in zip(depth_csv_rows, depth_csv_evidence)
+                    if row.get("crg_trace_status") == "warning"
+                ]
+                pass_csv_rows = [
+                    (row, evidence)
+                    for row, evidence in zip(depth_csv_rows, depth_csv_evidence)
+                    if row.get("crg_trace_status") == "pass"
+                ]
+                if (
+                    crg_check.get("status") != "warning"
+                    or len(evaluations) != 6
+                    or any(
+                        not isinstance(evaluation, dict)
+                        or evaluation.get("status") != "depth_limited"
+                        or evaluation.get("max_depth") != 2
+                        for evaluation in evaluations
+                    )
+                    or len(depth_findings) != 6
+                    or any(
+                        finding.get("severity") != "warning"
+                        for finding in depth_findings
+                    )
+                    or second_row.get("crg_source_check", {}).get("status")
+                    != "pass"
+                    or len(depth_csv_rows) != 7
+                    or len(warning_csv_rows) != 6
+                    or len(pass_csv_rows) != 1
+                    or any(
+                        row.get("crg_trace_max_depth") != "2"
+                        or not isinstance(evidence, list)
+                        or len(evidence) != 6
+                        or any(
+                            not isinstance(item, dict)
+                            or item.get("status") != "depth_limited"
+                            or item.get("max_depth") != 2
+                            for item in evidence
+                        )
+                        for row, evidence in warning_csv_rows
+                    )
+                    or pass_csv_rows[0][0].get("crg_trace_max_depth") != "2"
+                    or not isinstance(pass_csv_rows[0][1], list)
+                    or len(pass_csv_rows[0][1]) != 1
+                    or not isinstance(pass_csv_rows[0][1][0], dict)
+                    or pass_csv_rows[0][1][0].get("status") != "matched"
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: CRG depth-limit evidence mismatch",
                         file=sys.stderr,
                     )
                     root.destroy()
@@ -1876,6 +2113,8 @@ def main() -> int:
                     or len(instances) != 1
                     or instances[0].get("full_name")
                     != "top.u_crg_mapping.CRG_MAP_RS"
+                    or not isinstance(record.get("crg_source_check"), dict)
+                    or record["crg_source_check"].get("status") != "pass"
                     or record.get("findings") != []
                 ):
                     failed = True
@@ -1885,6 +2124,39 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                if args.crg_depth_limit:
+                    trace_findings = [
+                        finding
+                        for finding in record.get("findings", [])
+                        if isinstance(finding, dict)
+                        and finding.get("code") == "CRG_TRACE_DEPTH_LIMIT"
+                    ]
+                    expected_trace_findings = (
+                        6 if spec.get("RS_inst") == "AAAA_BBB" else 0
+                    )
+                    expected_trace_status = (
+                        "warning"
+                        if spec.get("RS_inst") == "AAAA_BBB"
+                        else "pass"
+                    )
+                    if (
+                        len(trace_findings) != expected_trace_findings
+                        or not isinstance(record.get("crg_source_check"), dict)
+                        or record["crg_source_check"].get("status")
+                        != expected_trace_status
+                    ):
+                        failed = True
+                        print(
+                            "GUI_SMOKE_FAIL: rendered CRG depth-limit evidence mismatch",
+                            file=sys.stderr,
+                        )
+                        root.destroy()
+                        return
+                custom_findings = [
+                    finding
+                    for finding in record.get("findings", [])
+                    if isinstance(finding, dict)
+                ]
                 if args.custom_port and (
                     spec.get("RS_module") != "rs_custom"
                     or spec.get("RS_inst") != "CUSTOM_RS"
@@ -1896,7 +2168,12 @@ def main() -> int:
                     or len(instances) != 1
                     or set(instances[0].get("ports", {}))
                     != {"clock_i", "reset_ni", "d", "q"}
-                    or record.get("findings")
+                    or len(custom_findings) != 1
+                    or custom_findings[0].get("severity") != "warning"
+                    or custom_findings[0].get("code")
+                    != "CRG_SOURCE_NOT_FOUND"
+                    or not isinstance(record.get("crg_source_check"), dict)
+                    or record["crg_source_check"].get("status") != "warning"
                 ):
                     failed = True
                     print(
@@ -1975,6 +2252,7 @@ def main() -> int:
             evidence_spec = evidence.get("spec")
             evidence_instances = evidence.get("matched_instances")
             evidence_step = evidence.get("step_check")
+            evidence_crg_check = evidence.get("crg_source_check")
             evidence_rule = evidence.get("module_rule")
             evidence_configured_rule = original_module_rules.get(
                 evidence_spec.get("RS_module") if isinstance(evidence_spec, dict) else "",
@@ -1984,12 +2262,26 @@ def main() -> int:
                 evidence_configured_rule = {}
             evidence_clk_port = evidence_configured_rule.get("clk_port", "clk")
             evidence_rst_port = evidence_configured_rule.get("rst_port", "rst_n")
+            evidence_crg_instances = (
+                evidence_crg_check.get("instances", [])
+                if isinstance(evidence_crg_check, dict)
+                else []
+            )
+            evidence_crg_evaluation = (
+                evidence_crg_instances[0]
+                if isinstance(evidence_crg_instances, list)
+                and len(evidence_crg_instances) == 1
+                and isinstance(evidence_crg_instances[0], dict)
+                else {}
+            )
+            evidence_matched_crg = evidence_crg_evaluation.get("matched")
             if (
                 not isinstance(evidence_spec, dict)
                 or evidence_spec.get("RS_CFG_EN") != expected_label
                 or not isinstance(evidence_instances, list)
                 or not evidence_instances
                 or not isinstance(evidence_step, dict)
+                or not isinstance(evidence_crg_check, dict)
                 or not isinstance(evidence_rule, dict)
                 or evidence_rule.get("clk_port") != evidence_clk_port
                 or evidence_rule.get("rst_port") != evidence_rst_port
@@ -2047,12 +2339,37 @@ def main() -> int:
             if args.crg_source_mapping and (
                 evidence_spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH
                 or evidence_spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                or evidence_crg_check.get("status") != "pass"
+                or not isinstance(evidence_matched_crg, dict)
+                or evidence_matched_crg.get("path")
+                != [
+                    "top.u_crg_mapping.u_occ",
+                    "top.u_crg_mapping.u_clk_mux",
+                    _CRG_SOURCE_FULL_PATH,
+                ]
                 or "finding" in evidence
                 or app.finding_tree.get_children()
             ):
                 failed = True
                 print(
                     "GUI_SMOKE_FAIL: GUI CRG_source mapping evidence mismatch",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
+            if args.crg_depth_limit and (
+                evidence_crg_check.get("status") != "warning"
+                or len(evidence_crg_instances) != 6
+                or any(
+                    not isinstance(evaluation, dict)
+                    or evaluation.get("status") != "depth_limited"
+                    or evaluation.get("max_depth") != 2
+                    for evaluation in evidence_crg_instances
+                )
+            ):
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: GUI CRG depth-limit evidence mismatch",
                     file=sys.stderr,
                 )
                 root.destroy()
@@ -2097,7 +2414,13 @@ def main() -> int:
             )
             root.destroy()
             return
-        expected_warning_text = "警告 1" if args.expect_partial_load else "警告 0"
+        expected_warning_text = (
+            "警告 6"
+            if args.crg_depth_limit
+            else "警告 1"
+            if args.expect_partial_load or args.custom_port
+            else "警告 0"
+        )
         if app.summary_warnings_var.get() != expected_warning_text:
             failed = True
             print(f"GUI_SMOKE_FAIL: {app.summary_warnings_var.get()}", file=sys.stderr)
@@ -2154,7 +2477,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'rs-cfg-na' if args.rs_cfg_na else 'crg-source-mapping' if args.crg_source_mapping else 'partial-load' if args.expect_partial_load else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'rs-cfg-na' if args.rs_cfg_na else 'crg-source-mapping' if args.crg_source_mapping else 'crg-depth-limit' if args.crg_depth_limit else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -2166,11 +2489,13 @@ def main() -> int:
             f"{' clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' if args.clk_without_rst else ''}"
             f"{' has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none parsed-rs-cfg-en=任意非标准文本' if args.rs_cfg_dontcare else ''}"
             f"{' rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' if args.rs_cfg_na else ''}"
-            f"{' crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none' if args.crg_source_mapping else ''}"
+            f"{' crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=pass trace-depth=3 findings=none' if args.crg_source_mapping else ''}"
+            f"{' crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND' if args.custom_port else ''}"
+            f"{' crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6' if args.crg_depth_limit else ''}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
             f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules module-rule-ports=preserved crg-source-db=crud-complete dirty-copy=export-preserved/import-cleared' if config_io_verified else ''}"
             " rules-layout=980x680-fit"
-            f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
+            f"{' schemas=report-v4/inventory-v3' if not args.validate_only else ''}",
             flush=True,
         )
         visible_tabs = {

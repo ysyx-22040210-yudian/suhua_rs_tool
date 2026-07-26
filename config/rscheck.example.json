@@ -30,7 +30,8 @@
     "index_base": 0,
     "require_contiguous_indices": false,
     "allow_leaf_signal_match": false,
-    "crg_match": "module"
+    "crg_match": "module",
+    "crg_trace_max_depth": 16
   },
   "module_rules": {
     "rs_pipe": {

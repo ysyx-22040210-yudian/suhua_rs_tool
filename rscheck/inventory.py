@@ -23,9 +23,9 @@ def load_inventory(path: str | Path) -> Inventory:
     if not isinstance(raw, Mapping):
         raise InventoryError("inventory root must be a JSON object")
     schema_version = raw.get("schema_version")
-    if type(schema_version) is not int or schema_version != 2:
+    if type(schema_version) is not int or schema_version not in {2, 3}:
         raise InventoryError(
-            f"unsupported inventory schema_version {schema_version!r}; expected 2"
+            f"unsupported inventory schema_version {schema_version!r}; expected 2 or 3"
         )
 
     raw_positions = raw.get("positions")
@@ -45,7 +45,9 @@ def load_inventory(path: str | Path) -> Inventory:
                 raise InventoryError(
                     f"position {position!r} instance {index} must be a JSON object"
                 )
-            instance = ActualInstance.from_mapping(raw_instance)
+            instance = ActualInstance.from_mapping(
+                raw_instance, schema_version=schema_version
+            )
             if not instance.name or not instance.full_name:
                 raise InventoryError(
                     f"position {position!r} instance {index} requires name and full_name"
@@ -76,7 +78,9 @@ def load_inventory(path: str | Path) -> Inventory:
         )
 
     if "warnings" not in raw:
-        raise InventoryError("inventory 'warnings' is required by schema_version 2")
+        raise InventoryError(
+            f"inventory 'warnings' is required by schema_version {schema_version}"
+        )
     raw_warnings = raw.get("warnings")
     if not isinstance(raw_warnings, list):
         raise InventoryError("inventory 'warnings' must be an array")
@@ -87,35 +91,23 @@ def load_inventory(path: str | Path) -> Inventory:
         positions=positions,
         warnings=tuple(str(item) for item in raw_warnings),
         notices=tuple(str(item) for item in raw_notices),
+        schema_version=schema_version,
     )
 
 
 def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
+    if inventory.schema_version not in {2, 3}:
+        raise InventoryError(
+            f"unsupported inventory schema_version {inventory.schema_version!r}; "
+            "expected 2 or 3"
+        )
     return {
-        "schema_version": 2,
+        "schema_version": inventory.schema_version,
         "positions": {
             position: {
                 "found": value.found,
                 "instances": [
-                    {
-                        "name": instance.name,
-                        "full_name": instance.full_name,
-                        "module": instance.module,
-                        "file": instance.file,
-                        "line": instance.line,
-                        "parameters": dict(instance.parameters),
-                        "ports": {
-                            name: {
-                                "connection": port.connection,
-                                "type": port.object_type,
-                            }
-                            for name, port in instance.ports.items()
-                        },
-                        "clk_sources": [
-                            {"instance": source.instance, "module": source.module}
-                            for source in instance.clk_sources
-                        ],
-                    }
+                    _instance_to_dict(instance, inventory.schema_version)
                     for instance in value.instances
                 ],
             }
@@ -124,3 +116,32 @@ def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
         "warnings": list(inventory.warnings),
         "notices": list(inventory.notices),
     }
+
+
+def _instance_to_dict(instance: ActualInstance, schema_version: int) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "name": instance.name,
+        "full_name": instance.full_name,
+        "module": instance.module,
+        "file": instance.file,
+        "line": instance.line,
+        "parameters": dict(instance.parameters),
+        "ports": {
+            name: {
+                "connection": port.connection,
+                "type": port.object_type,
+            }
+            for name, port in instance.ports.items()
+        },
+        "clk_sources": [
+            {"instance": source.instance, "module": source.module}
+            for source in instance.clk_sources
+        ],
+    }
+    if schema_version == 3:
+        result["clock_trace"] = (
+            instance.clock_trace.as_dict()
+            if instance.clock_trace is not None
+            else None
+        )
+    return result

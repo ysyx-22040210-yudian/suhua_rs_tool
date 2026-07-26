@@ -27,6 +27,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.excel.columns["RS_CFG_EN"], 9)
         self.assertFalse(config.excel.validate_headers)
         self.assertEqual(config.rtl.crg_match, "module")
+        self.assertEqual(config.rtl.crg_trace_max_depth, 16)
         self.assertFalse(config.rtl.require_contiguous_indices)
         self.assertTrue(config.module_rules["rs_pipe"].has_rs_cfg_en)
         self.assertEqual(config.module_rules["rs_pipe"].step_parameters, ("rs_mode",))
@@ -206,6 +207,39 @@ class ConfigTests(unittest.TestCase):
             path.write_text(json.dumps(raw), encoding="utf-8")
             with self.assertRaisesRegex(ConfigError, "true or false"):
                 load_config(path)
+
+    def test_crg_trace_max_depth_defaults_and_round_trips(self) -> None:
+        raw = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        raw["rtl"].pop("crg_trace_max_depth", None)
+
+        defaulted = config_from_dict(raw)
+        self.assertEqual(defaulted.rtl.crg_trace_max_depth, 16)
+        self.assertEqual(config_to_dict(defaulted)["rtl"]["crg_trace_max_depth"], 16)
+
+        for value, expected in ((1, 1), (16, 16), (256, 256), ("32", 32)):
+            with self.subTest(value=value):
+                candidate = json.loads(json.dumps(raw))
+                candidate["rtl"]["crg_trace_max_depth"] = value
+                config = config_from_dict(candidate)
+                self.assertEqual(config.rtl.crg_trace_max_depth, expected)
+                self.assertEqual(
+                    config_to_dict(config)["rtl"]["crg_trace_max_depth"], expected
+                )
+
+    def test_crg_trace_max_depth_rejects_invalid_values(self) -> None:
+        original = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        for value in (0, -1, 257, True, 1.5, "1.5", "\u0661"):
+            with self.subTest(value=value):
+                raw = json.loads(json.dumps(original))
+                raw["rtl"]["crg_trace_max_depth"] = value
+                with self.assertRaisesRegex(
+                    ConfigError, "positive integer|must be >= 1|must be <= 256"
+                ):
+                    config_from_dict(raw)
 
     def test_unknown_config_key_is_rejected(self) -> None:
         raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))

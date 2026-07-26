@@ -72,6 +72,7 @@ def _evidence_payload(
         "spec": spec,
         "module_rule": record.get("module_rule"),
         "step_check": record.get("step_check"),
+        "crg_source_check": record.get("crg_source_check"),
         "matched_instances": record.get("matched_instances", []),
     }
     if isinstance(spec, Mapping):
@@ -174,6 +175,16 @@ def _crg_source_display(spec: Mapping[str, Any]) -> str:
     if isinstance(alias, str) and alias:
         return f"{alias} -> {crg_source}"
     return crg_source
+
+
+def _crg_trace_display(record: Mapping[str, Any]) -> str:
+    check = record.get("crg_source_check")
+    if not isinstance(check, Mapping):
+        return "N/A"
+    status = check.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return "N/A"
+    return status.strip().upper()
 
 
 def _resolved_config_path(value: str | Path) -> str:
@@ -299,6 +310,7 @@ class RsCheckApp:
         self.header_row_var = tk.StringVar(value="1")
         self.data_start_row_var = tk.StringVar(value="2")
         self.header_check_var = tk.BooleanVar(value=False)
+        self.crg_trace_max_depth_var = tk.StringVar(value="16")
         self.column_vars = {
             name: tk.StringVar(value=value) for name, value in default_columns().items()
         }
@@ -463,6 +475,7 @@ class RsCheckApp:
         self.source_group = ttk.LabelFrame(tab, text="RTL 数据来源", padding=10)
         self.source_group.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
         self.source_group.columnconfigure(0, weight=1)
+        self.source_group.rowconfigure(1, weight=1)
         mode_bar = ttk.Frame(self.source_group)
         mode_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ttk.Radiobutton(
@@ -533,6 +546,17 @@ class RsCheckApp:
                 self.inventory_var, (("Inventory JSON", "*.json"), ("所有文件", "*.*"))
             ),
         )
+
+        trace_options = ttk.Frame(self.source_group)
+        trace_options.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(trace_options, text="CRG Trace 最大层数").pack(side="left")
+        tk.Spinbox(
+            trace_options,
+            from_=1,
+            to=256,
+            textvariable=self.crg_trace_max_depth_var,
+            width=8,
+        ).pack(side="left", padx=(8, 0))
 
         output_group = ttk.LabelFrame(tab, text="报告输出", padding=10)
         output_group.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -889,6 +913,7 @@ class RsCheckApp:
             "interface",
             "position",
             "crg_source",
+            "crg_trace",
             "rs_inst",
             "rs_cfg_en",
             "physical_instances",
@@ -907,6 +932,7 @@ class RsCheckApp:
             "interface": "Interface",
             "position": "Position",
             "crg_source": "CRG Source",
+            "crg_trace": "CRG Trace",
             "rs_inst": "RS_inst",
             "rs_cfg_en": "RS_CFG_EN",
             "physical_instances": "匹配实例",
@@ -919,6 +945,7 @@ class RsCheckApp:
             "interface": 85,
             "position": 520,
             "crg_source": 520,
+            "crg_trace": 90,
             "rs_inst": 120,
             "rs_cfg_en": 90,
             "physical_instances": 75,
@@ -1235,6 +1262,7 @@ class RsCheckApp:
         self.header_row_var.set(str(config.excel.header_row))
         self.data_start_row_var.set(str(config.excel.data_start_row))
         self.header_check_var.set(config.excel.validate_headers)
+        self.crg_trace_max_depth_var.set(str(config.rtl.crg_trace_max_depth))
         for name in FIELD_NAMES:
             self.column_vars[name].set(str(config.excel.columns[name]))
         self._loaded_config = config
@@ -1281,6 +1309,9 @@ class RsCheckApp:
         raw["columns"] = {
             name: self.column_vars[name].get().strip() for name in FIELD_NAMES
         }
+        raw["rtl"]["crg_trace_max_depth"] = (
+            self.crg_trace_max_depth_var.get().strip()
+        )
         return config_from_dict(raw)
 
     def _excel_form_differs_from_loaded_config(self) -> bool:
@@ -1298,6 +1329,11 @@ class RsCheckApp:
             return True
         if bool(self.header_check_var.get()) != loaded.validate_headers:
             return True
+        if (
+            self.crg_trace_max_depth_var.get().strip()
+            != str(self._loaded_config.rtl.crg_trace_max_depth)
+        ):
+            return True
         return any(
             self.column_vars[name].get().strip() != str(loaded.columns[name])
             for name in FIELD_NAMES
@@ -1307,7 +1343,7 @@ class RsCheckApp:
         return bool(
             messagebox.askyesno(
                 "未保存配置",
-                "Excel 设置或列号映射有未保存修改，确定放弃吗？",
+                "Excel、列号或 CRG Trace 设置有未保存修改，确定放弃吗？",
                 parent=self.root,
             )
         )
@@ -1839,6 +1875,7 @@ class RsCheckApp:
             header_row=self.header_row_var.get(),
             data_start_row=self.data_start_row_var.get(),
             validate_headers=self.header_check_var.get(),
+            crg_trace_max_depth=self.crg_trace_max_depth_var.get(),
             source_mode=self.source_mode_var.get(),
             collector_path=self.collector_var.get(),
             elab_db_path=self.elab_db_var.get(),
@@ -2189,6 +2226,7 @@ class RsCheckApp:
                     spec.get("Intf_type", ""),
                     position_text,
                     crg_source_text,
+                    "N/A",
                     spec.get("RS_inst", ""),
                     spec.get("RS_CFG_EN", ""),
                     "-",
@@ -2251,7 +2289,7 @@ class RsCheckApp:
             isinstance(item, Mapping) and item.get("severity") == "warning" for item in findings
         )
         passed = bool(record.get("passed", not errors))
-        status = "PASS" if passed else "FAIL"
+        status = "WARNING" if passed and warnings else ("PASS" if passed else "FAIL")
         tag = "warning" if passed and warnings else ("pass" if passed else "fail")
         step_check = record.get("step_check", {})
         if not isinstance(step_check, Mapping):
@@ -2275,6 +2313,7 @@ class RsCheckApp:
                 spec.get("Intf_type", ""),
                 position_text,
                 crg_source_text,
+                _crg_trace_display(record),
                 spec.get("RS_inst", ""),
                 spec.get("RS_CFG_EN", ""),
                 physical_instances,

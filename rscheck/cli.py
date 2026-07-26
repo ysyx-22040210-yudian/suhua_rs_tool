@@ -15,7 +15,13 @@ from .config import (
 )
 from .excel_reader import read_spec_rows
 from .inventory import load_inventory
-from .model import ConfigError, FIELD_NAMES, RsCheckError, ToolConfig
+from .model import (
+    MAX_CRG_TRACE_DEPTH,
+    ConfigError,
+    FIELD_NAMES,
+    RsCheckError,
+    ToolConfig,
+)
 from .npi_runner import collect_inventory
 from .reporting import format_console_report, write_csv_report, write_json_report
 
@@ -73,7 +79,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="run checks with an existing inventory or the NPI collector",
     )
     source = check.add_mutually_exclusive_group(required=True)
-    source.add_argument("--inventory", help="existing schema_version=2 NPI inventory JSON")
+    source.add_argument(
+        "--inventory", help="existing schema_version=2 or 3 NPI inventory JSON"
+    )
     source.add_argument("--collector", help="NPI collector executable")
     check.add_argument(
         "--elab-db",
@@ -95,6 +103,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "directory containing libNPI.so; defaults to "
             "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
+        ),
+    )
+    check.add_argument(
+        "--crg-trace-max-depth",
+        type=int,
+        help=(
+            "override the maximum upstream CRG module trace depth "
+            f"(1..{MAX_CRG_TRACE_DEPTH})"
         ),
     )
 
@@ -268,6 +284,19 @@ def _check_command(
 ) -> int:
     if args.npi_timeout is not None and args.npi_timeout < 1:
         raise ConfigError("--npi-timeout must be >= 1")
+    if args.crg_trace_max_depth is not None:
+        if not 1 <= args.crg_trace_max_depth <= MAX_CRG_TRACE_DEPTH:
+            raise ConfigError(
+                "--crg-trace-max-depth must be between 1 and "
+                f"{MAX_CRG_TRACE_DEPTH}"
+            )
+        config = replace(
+            config,
+            rtl=replace(
+                config.rtl,
+                crg_trace_max_depth=args.crg_trace_max_depth,
+            ),
+        )
     specs = read_spec_rows(
         args.excel,
         config.excel,
@@ -289,6 +318,7 @@ def _check_command(
             args.collector,
             specs,
             config.rtl,
+            config.module_rules,
             elab_db=args.elab_db,
             timeout_seconds=args.npi_timeout,
             keep_inventory=args.keep_inventory,

@@ -10,7 +10,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from rscheck.model import InventoryError, RtlConfig, SpecRow
+from rscheck.model import InventoryError, ModuleRule, RtlConfig, SpecRow
 from rscheck.npi_runner import _collector_environment, collect_inventory
 
 
@@ -18,7 +18,7 @@ class NpiCollectorContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
 
-    def test_collector_merges_language_and_l1_formal_ports(self) -> None:
+    def test_collector_has_bounded_module_hop_clock_tracing(self) -> None:
         source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
             encoding="utf-8"
         )
@@ -28,9 +28,34 @@ class NpiCollectorContractTests(unittest.TestCase):
             "npi_mod_inst_get_port(&mutable_full_name[0], fallback_ports)", source
         )
         self.assertNotIn("name == clk_port_", source)
-        self.assertNotIn("trace_clock_sources", source)
-        self.assertNotIn("npi_nl_iterate(npiNlDriver", source)
-        self.assertIn('\\"clk_sources\\": []', source)
+        self.assertIn('argument == "--trace-rules"', source)
+        self.assertIn('argument == "--trace-max-depth"', source)
+        self.assertIn("kDefaultTraceMaxDepth = 16", source)
+        self.assertIn("kMaximumTraceMaxDepth = 256", source)
+        self.assertIn("kMaxTraceObjectVisits = 100000", source)
+        self.assertIn("npi_nl_iterate(npiNlDriver, object)", source)
+        self.assertIn("npi_nl_iterate(npiNlConnectivity, object)", source)
+        self.assertIn(
+            "walk_netlist_drivers(connected, module_depth, stack_depth + 1",
+            source,
+        )
+        self.assertIn("connected_type == npiNlConcatNet", source)
+        self.assertIn("connected_type == npiNlSliceNet", source)
+        self.assertIn("connected_type == npiNlPseudoNet", source)
+        self.assertIn("NPI Netlist module port has unknown direction", source)
+        self.assertIn("npiNlInstPort, instance, current", source)
+        self.assertIn('name == "clk" || name == "rst_n"', source)
+        self.assertIn("intermediate port(s) with unknown direction", source)
+        self.assertIn("mark_trace_unresolved(state, message.str())", source)
+        self.assertIn("depth >= state->trace.max_depth", source)
+        self.assertIn('state.trace.status = "depth_limited"', source)
+        self.assertIn('state.trace.status = "unresolved"', source)
+        self.assertIn('\\"schema_version\\": 3', source)
+        self.assertIn('\\"clock_trace\\": ', source)
+        self.assertIn(
+            '\\"excluded_inputs\\": [\\"clk\\", \\"rst_n\\"]', source
+        )
+        self.assertIn("result.clk_sources = result.clock_trace.modules", source)
 
     def test_makefile_requires_and_links_verdi_npi_l1(self) -> None:
         makefile = (self.project_root / "npi" / "Makefile").read_text(
@@ -173,15 +198,18 @@ class NpiRunnerTests(unittest.TestCase):
             collector.write_text("", encoding="utf-8")
             elab_db = root / "custom_kdb_name"
             elab_db.mkdir()
+            observed_trace_rules = []
 
             def completed(command, **kwargs):
                 self.assertEqual(Path(command[2]).read_text("utf-8"), "top.u\n")
                 self.assertEqual(Path(kwargs["cwd"]), Path(command[2]).parent)
+                trace_rules = Path(command[command.index("--trace-rules") + 1])
+                observed_trace_rules.append(trace_rules.read_text("utf-8"))
                 output = Path(command[command.index("--output") + 1])
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 2,
+                            "schema_version": 3,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },
@@ -204,8 +232,12 @@ class NpiRunnerTests(unittest.TestCase):
             self.assertEqual(command[0], str(collector.resolve()))
             self.assertEqual(command[1], "--positions")
             self.assertEqual(command[3], "--output")
+            self.assertEqual(observed_trace_rules, ["rs_pipe\tclk\n"])
             self.assertEqual(
-                command[5:],
+                command[command.index("--trace-max-depth") + 1], "16"
+            )
+            self.assertEqual(
+                command[command.index("--clk-port") :],
                 [
                     "--clk-port",
                     "clk",
@@ -217,6 +249,106 @@ class NpiRunnerTests(unittest.TestCase):
             )
             self.assertNotIn("--", command)
             self.assertFalse(inventory.positions["top.u"].found)
+
+    def test_trace_rules_use_module_specific_clock_port_and_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+            observed = {}
+
+            def completed(command, **kwargs):
+                rules_path = Path(command[command.index("--trace-rules") + 1])
+                observed["rules"] = rules_path.read_text("utf-8")
+                observed["depth"] = command[
+                    command.index("--trace-max-depth") + 1
+                ]
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 3,
+                            "positions": {
+                                "top.u": {"found": False, "instances": []}
+                            },
+                            "warnings": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            rule = ModuleRule(
+                name="rs_pipe",
+                has_rs_cfg_en=True,
+                clk_port="pipe_clock",
+                rst_port="pipe_reset_n",
+            )
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                collect_inventory(
+                    collector,
+                    [self._spec(), self._spec()],
+                    RtlConfig(crg_trace_max_depth=31),
+                    {"rs_pipe": rule},
+                    elab_db=elab_db,
+                )
+
+            self.assertEqual(observed, {"rules": "rs_pipe\tpipe_clock\n", "depth": "31"})
+
+    def test_live_collector_legacy_inventory_schema_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+
+            def completed(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "positions": {
+                                "top.u": {"found": False, "instances": []}
+                            },
+                            "warnings": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                with self.assertRaisesRegex(
+                    InventoryError, "legacy inventory schema_version 2"
+                ):
+                    collect_inventory(
+                        collector,
+                        [self._spec()],
+                        RtlConfig(),
+                        elab_db=elab_db,
+                    )
+
+    def test_trace_depth_is_defensively_bounded_for_direct_callers(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+            for depth in (0, 257, True):
+                with self.subTest(depth=depth), self.assertRaisesRegex(
+                    InventoryError, "between 1 and 256"
+                ):
+                    collect_inventory(
+                        collector,
+                        [self._spec()],
+                        RtlConfig(crg_trace_max_depth=depth),
+                        elab_db=elab_db,
+                    )
 
     def test_non_utf8_collector_output_is_safely_decoded(self) -> None:
         for stream_name in ("stdout", "stderr"):
@@ -297,7 +429,7 @@ class NpiRunnerTests(unittest.TestCase):
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 2,
+                            "schema_version": 3,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },

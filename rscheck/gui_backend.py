@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, Union
 
 from .checker import parameter_value_state
-from .model import FIELD_NAMES
+from .model import (
+    CRG_TRACE_EXCLUDED_INPUTS,
+    CRG_TRACE_STATUSES,
+    FIELD_NAMES,
+    MAX_CRG_TRACE_DEPTH,
+)
 
 
 LIVE_SOURCE = "live"
@@ -70,6 +75,7 @@ class GuiRunRequest:
     header_row: str = ""
     data_start_row: str = ""
     validate_headers: bool = False
+    crg_trace_max_depth: str = ""
     source_mode: str = LIVE_SOURCE
     collector_path: str = ""
     elab_db_path: str = ""
@@ -193,6 +199,19 @@ def _positive_integer(value: str, label: str, *, optional: bool = False) -> str:
     return str(int(result))
 
 
+def _bounded_positive_integer(
+    value: str,
+    label: str,
+    *,
+    maximum: int,
+    optional: bool = False,
+) -> str:
+    result = _positive_integer(value, label, optional=optional)
+    if result and int(result) > maximum:
+        raise GuiInputError(f"{label} must be between 1 and {maximum}")
+    return result
+
+
 def _common_arguments(request: GuiRunRequest) -> list[str]:
     excel_path = _required(request.excel_path, "Excel path")
     config_path = _required(request.config_path, "configuration path")
@@ -258,6 +277,14 @@ def build_check_command(
 ) -> list[str]:
     python = python_executable or sys.executable
     command = [python, "-m", "rscheck", "check", *_common_arguments(request)]
+    crg_trace_max_depth = _bounded_positive_integer(
+        request.crg_trace_max_depth,
+        "CRG trace maximum depth",
+        maximum=256,
+        optional=True,
+    )
+    if crg_trace_max_depth:
+        command.extend(["--crg-trace-max-depth", crg_trace_max_depth])
 
     if request.source_mode == LIVE_SOURCE:
         collector = _required(request.collector_path, "NPI collector path")
@@ -571,6 +598,278 @@ def _validate_v3_row(
         )
 
 
+def _validate_trace_node(
+    value: Any,
+    name: str,
+    *,
+    max_depth: int,
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise GuiReportError(f"{name} must be an object")
+    instance = value.get("instance")
+    module = value.get("module")
+    depth = value.get("depth")
+    path = value.get("path")
+    if not isinstance(instance, str) or not instance:
+        raise GuiReportError(f"{name}.instance must be a non-empty string")
+    if not isinstance(module, str) or not module:
+        raise GuiReportError(f"{name}.module must be a non-empty string")
+    if type(depth) is not int or not 1 <= depth <= max_depth:
+        raise GuiReportError(
+            f"{name}.depth must be an integer between 1 and {max_depth}"
+        )
+    if not isinstance(path, list) or not all(
+        isinstance(item, str) and item for item in path
+    ):
+        raise GuiReportError(f"{name}.path must be an array of non-empty strings")
+    if len(path) != depth or path[-1] != instance:
+        raise GuiReportError(
+            f"{name}.path length/final instance is inconsistent with depth"
+        )
+    return value
+
+
+def _validate_report_clock_trace(value: Any, name: str) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise GuiReportError(f"{name} must be an object or null")
+    clock_port = value.get("clock_port")
+    max_depth = value.get("max_depth")
+    excluded_inputs = value.get("excluded_inputs")
+    status = value.get("status")
+    modules = value.get("modules")
+    diagnostics = value.get("diagnostics")
+    if not isinstance(clock_port, str) or not clock_port.strip():
+        raise GuiReportError(f"{name}.clock_port must be a non-empty string")
+    if type(max_depth) is not int or not 1 <= max_depth <= MAX_CRG_TRACE_DEPTH:
+        raise GuiReportError(
+            f"{name}.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
+        )
+    if excluded_inputs != list(CRG_TRACE_EXCLUDED_INPUTS):
+        raise GuiReportError(
+            f"{name}.excluded_inputs must be exactly {list(CRG_TRACE_EXCLUDED_INPUTS)!r}"
+        )
+    if status not in CRG_TRACE_STATUSES:
+        raise GuiReportError(f"{name}.status is invalid")
+    if not isinstance(modules, list):
+        raise GuiReportError(f"{name}.modules must be an array")
+    for index, module in enumerate(modules, start=1):
+        _validate_trace_node(
+            module,
+            f"{name}.modules item {index}",
+            max_depth=max_depth,
+        )
+    if not isinstance(diagnostics, list) or not all(
+        isinstance(item, str) for item in diagnostics
+    ):
+        raise GuiReportError(f"{name}.diagnostics must be an array of strings")
+    return value
+
+
+def _validate_v4_crg_source_check(
+    row: Mapping[str, Any],
+    spec: Mapping[str, Any],
+    matched_instances: Sequence[Mapping[str, Any]],
+    row_findings: Sequence[Mapping[str, Any]],
+    row_number: int,
+) -> None:
+    check_name = f"report row {row_number}.crg_source_check"
+    check = row.get("crg_source_check")
+    if not isinstance(check, Mapping):
+        raise GuiReportError(f"{check_name} must be an object")
+    expected = check.get("expected")
+    spec_expected = str(spec.get("CRG_source", "")).strip(".")
+    if not isinstance(expected, str) or not expected:
+        raise GuiReportError(f"{check_name}.expected must be a non-empty string")
+    if expected != spec_expected:
+        raise GuiReportError(f"{check_name}.expected does not match spec.CRG_source")
+    status = check.get("status")
+    if status not in {"not_run", "pass", "warning"}:
+        raise GuiReportError(f"{check_name}.status is invalid")
+    evaluations = _mapping_array(check.get("instances"), f"{check_name}.instances")
+    if len(evaluations) != len(matched_instances):
+        raise GuiReportError(f"{check_name}.instances does not match instances")
+
+    evaluation_statuses: list[str] = []
+    for index, (evaluation, instance) in enumerate(
+        zip(evaluations, matched_instances), start=1
+    ):
+        name = f"{check_name}.instances item {index}"
+        full_name = instance.get("full_name")
+        if evaluation.get("instance") != full_name:
+            raise GuiReportError(f"{name}.instance does not match")
+        clock_port = evaluation.get("clock_port")
+        if not isinstance(clock_port, str) or not clock_port.strip():
+            raise GuiReportError(f"{name}.clock_port must be a non-empty string")
+        module_rule = row.get("module_rule")
+        if isinstance(module_rule, Mapping) and "clk_port" in module_rule:
+            if clock_port != module_rule["clk_port"]:
+                raise GuiReportError(f"{name}.clock_port does not match module_rule")
+        if evaluation.get("expected") != expected:
+            raise GuiReportError(f"{name}.expected does not match CRG_source")
+        max_depth = evaluation.get("max_depth")
+        if type(max_depth) is not int or not 1 <= max_depth <= MAX_CRG_TRACE_DEPTH:
+            raise GuiReportError(
+                f"{name}.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
+            )
+        evaluation_status = evaluation.get("status")
+        if evaluation_status not in {
+            "matched",
+            "not_found",
+            "depth_limited",
+            "unavailable",
+        }:
+            raise GuiReportError(f"{name}.status is invalid")
+        trace_status = evaluation.get("trace_status")
+        if trace_status not in {*CRG_TRACE_STATUSES, "legacy", "unavailable"}:
+            raise GuiReportError(f"{name}.trace_status is invalid")
+        diagnostics = evaluation.get("diagnostics")
+        if not isinstance(diagnostics, list) or not all(
+            isinstance(item, str) for item in diagnostics
+        ):
+            raise GuiReportError(f"{name}.diagnostics must be an array of strings")
+
+        trace = _validate_report_clock_trace(
+            instance.get("clock_trace"),
+            f"report row {row_number} instance {index}.clock_trace",
+        )
+        if trace is not None and trace_status != trace.get("status"):
+            raise GuiReportError(f"{name}.trace_status does not match clock_trace")
+        if trace is None and trace_status not in {"legacy", "unavailable"}:
+            raise GuiReportError(
+                f"{name}.trace_status requires instance clock_trace evidence"
+            )
+
+        matched = evaluation.get("matched")
+        matched_node: Mapping[str, Any] | None = None
+        if matched is not None:
+            matched_node = _validate_trace_node(
+                matched,
+                f"{name}.matched",
+                max_depth=max_depth,
+            )
+            if str(matched_node.get("instance", "")).strip(".") != expected:
+                raise GuiReportError(
+                    f"{name}.matched.instance does not match CRG_source"
+                )
+
+        derived_matched: Mapping[str, Any] | None = None
+        if trace is None:
+            legacy_sources = instance.get("clk_sources")
+            legacy_source = next(
+                (
+                    source
+                    for source in legacy_sources
+                    if isinstance(source, Mapping)
+                    and str(source.get("instance", "")).strip(".") == expected
+                    and isinstance(source.get("module"), str)
+                    and bool(source.get("module"))
+                ),
+                None,
+            ) if isinstance(legacy_sources, list) else None
+            if trace_status == "legacy" and legacy_source is not None:
+                derived_status = "matched"
+                derived_matched = {
+                    "instance": expected,
+                    "module": legacy_source["module"],
+                    "depth": 1,
+                    "path": [expected],
+                }
+            else:
+                derived_status = "unavailable"
+        elif trace.get("clock_port") != clock_port:
+            derived_status = "unavailable"
+        else:
+            reachable_modules = [
+                module
+                for module in trace.get("modules", [])
+                if module["depth"] <= max_depth
+            ]
+            matching_modules = sorted(
+                (
+                    module
+                    for module in reachable_modules
+                    if str(module.get("instance", "")).strip(".") == expected
+                ),
+                key=lambda module: (
+                    module["depth"],
+                    module["instance"],
+                    module["module"],
+                    tuple(module["path"]),
+                ),
+            )
+            if matching_modules:
+                derived_status = "matched"
+                derived_matched = matching_modules[0]
+            elif trace.get("status") == "unresolved":
+                derived_status = "unavailable"
+            elif trace.get("status") == "depth_limited" or any(
+                module["depth"] > max_depth
+                for module in trace.get("modules", [])
+            ):
+                derived_status = "depth_limited"
+            else:
+                derived_status = "not_found"
+
+        if evaluation_status != derived_status:
+            raise GuiReportError(f"{name}.status does not match clock trace evidence")
+        if matched_node != derived_matched:
+            raise GuiReportError(f"{name}.matched does not match clock trace evidence")
+
+        if trace is not None:
+            expected_diagnostics = list(trace.get("diagnostics", []))
+            if trace.get("clock_port") != clock_port:
+                expected_diagnostics.insert(
+                    0,
+                    f"inventory traced formal port {trace.get('clock_port')!r}, "
+                    f"but module rule requires {clock_port!r}",
+                )
+            if diagnostics != expected_diagnostics:
+                raise GuiReportError(
+                    f"{name}.diagnostics does not match clock trace evidence"
+                )
+        elif trace_status == "legacy" and diagnostics:
+            raise GuiReportError(f"{name}.legacy diagnostics must be empty")
+        evaluation_statuses.append(evaluation_status)
+
+    expected_status = (
+        "not_run"
+        if not evaluation_statuses
+        else "pass"
+        if all(item == "matched" for item in evaluation_statuses)
+        else "warning"
+    )
+    if status != expected_status:
+        raise GuiReportError(f"{check_name}.status does not match instance evaluations")
+
+    warning_codes = {
+        "not_found": "CRG_SOURCE_NOT_FOUND",
+        "depth_limited": "CRG_TRACE_DEPTH_LIMIT",
+        "unavailable": "CRG_TRACE_UNAVAILABLE",
+    }
+    expected_findings = sorted(
+        (warning_codes[evaluation["status"]], evaluation["instance"])
+        for evaluation in evaluations
+        if evaluation["status"] != "matched"
+    )
+    if any(
+        finding.get("severity") != "warning"
+        for finding in row_findings
+        if finding.get("code") in set(warning_codes.values())
+    ):
+        raise GuiReportError(f"{check_name} findings must have warning severity")
+    actual_findings = sorted(
+        (str(finding.get("code")), str(finding.get("instance")))
+        for finding in row_findings
+        if finding.get("code") in set(warning_codes.values())
+    )
+    if actual_findings != expected_findings:
+        raise GuiReportError(
+            f"{check_name}.instances do not match CRG warning findings"
+        )
+
+
 def load_report(path: str | Path) -> LoadedReport:
     report_path = Path(path)
     try:
@@ -586,7 +885,7 @@ def load_report(path: str | Path) -> LoadedReport:
     if not isinstance(value, Mapping):
         raise GuiReportError("JSON report root must be an object")
     schema_version = value.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {2, 3}:
+    if type(schema_version) is not int or schema_version not in {2, 3, 4}:
         raise GuiReportError("unsupported JSON report schema_version")
     summary = value.get("summary")
     if not isinstance(summary, Mapping):
@@ -657,7 +956,7 @@ def load_report(path: str | Path) -> LoadedReport:
                         f"report row {index + 1} instance {instance_index} "
                         f"parameter {name!r} must be a string or null"
                     )
-        if schema_version == 3:
+        if schema_version in {3, 4}:
             _validate_v3_row(row, spec, matched_instances, index + 1)
         row_findings = _mapping_array(
             row.get("findings"), f"report row {index + 1}.findings"
@@ -665,6 +964,10 @@ def load_report(path: str | Path) -> LoadedReport:
         _validate_finding_severities(
             row_findings, f"report row {index + 1}.findings"
         )
+        if schema_version == 4:
+            _validate_v4_crg_source_check(
+                row, spec, matched_instances, row_findings, index + 1
+            )
         row_has_error = any(item.get("severity") == "error" for item in row_findings)
         if row["passed"] != (not row_has_error):
             raise GuiReportError(

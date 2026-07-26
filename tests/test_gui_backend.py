@@ -46,6 +46,7 @@ class GuiBackendTests(unittest.TestCase):
             header_row="1",
             data_start_row="2",
             validate_headers=False,
+            crg_trace_max_depth="16",
             source_mode=LIVE_SOURCE,
             collector_path=str(ROOT / "npi" / "build" / "rs_npi_collector"),
             elab_db_path=str(ROOT / "output" / "design with spaces" / "kdb.elab++"),
@@ -132,6 +133,10 @@ class GuiBackendTests(unittest.TestCase):
         self.assertEqual(command[:4], ["python-under-test", "-m", "rscheck", "check"])
         self.assertEqual(command.count("--collector"), 1)
         self.assertEqual(command.count("--elab-db"), 1)
+        self.assertEqual(command.count("--crg-trace-max-depth"), 1)
+        self.assertEqual(
+            command[command.index("--crg-trace-max-depth") + 1], "16"
+        )
         self.assertIn(str(ROOT / "output" / "design with spaces" / "kdb.elab++"), command)
         self.assertNotIn("--inventory", command)
         for forbidden in ("-f", "-sv", "-lib", "-top", "--"):
@@ -187,6 +192,18 @@ class GuiBackendTests(unittest.TestCase):
             build_check_command(
                 self._request(elab_db_path=str(ROOT / "output" / "work.lib++") + "//")
             )
+
+    def test_crg_trace_max_depth_is_bounded(self) -> None:
+        for value in ("0", "257", "-1", "1.5", "²"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                GuiInputError, "CRG trace maximum depth"
+            ):
+                build_check_command(self._request(crg_trace_max_depth=value))
+
+        command = build_check_command(self._request(crg_trace_max_depth=" 32 "))
+        self.assertEqual(
+            command[command.index("--crg-trace-max-depth") + 1], "32"
+        )
 
     def test_inventory_mode_is_mutually_exclusive_in_command(self) -> None:
         command = build_check_command(
@@ -418,7 +435,7 @@ class GuiBackendTests(unittest.TestCase):
                 load_report(path)
             report["summary"]["warnings"] = 0
 
-            for unsupported_version in (1, 2.0, True, "2", 4):
+            for unsupported_version in (1, 2.0, True, "2", 5):
                 with self.subTest(schema_version=unsupported_version):
                     report["schema_version"] = unsupported_version
                     path.write_text(json.dumps(report), encoding="utf-8")
@@ -681,6 +698,263 @@ class GuiBackendTests(unittest.TestCase):
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(GuiReportError, "effective_step"):
                 load_report(path)
+
+    def test_report_schema_v4_crg_trace_evidence_is_checked(self) -> None:
+        spec = {
+            "row": 2,
+            **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+            "crg_source_alias": "core_crg",
+        }
+        spec["step"] = 1
+        spec["CRG_source"] = "top.u_crg"
+        contribution = {
+            "instance": "top.u.PIPE_S0",
+            "contribution": 1,
+            "parameters": {},
+        }
+        matched_node = {
+            "instance": "top.u_crg",
+            "module": "crg_core",
+            "depth": 3,
+            "path": ["top.u_occ", "top.u_mux", "top.u_crg"],
+        }
+        clock_trace = {
+            "clock_port": "clk",
+            "max_depth": 16,
+            "excluded_inputs": ["clk", "rst_n"],
+            "status": "complete",
+            "modules": [
+                {
+                    "instance": "top.u_occ",
+                    "module": "clk_occ",
+                    "depth": 1,
+                    "path": ["top.u_occ"],
+                },
+                {
+                    "instance": "top.u_mux",
+                    "module": "clk_mux",
+                    "depth": 2,
+                    "path": ["top.u_occ", "top.u_mux"],
+                },
+                matched_node,
+            ],
+            "diagnostics": [],
+        }
+        evaluation = {
+            "instance": "top.u.PIPE_S0",
+            "clock_port": "clk",
+            "expected": "top.u_crg",
+            "max_depth": 16,
+            "status": "matched",
+            "trace_status": "complete",
+            "matched": matched_node,
+            "diagnostics": [],
+        }
+        report = {
+            "schema_version": 4,
+            "summary": {
+                "passed": True,
+                "rows": 1,
+                "passed_rows": 1,
+                "failed_rows": 0,
+                "errors": 0,
+                "warnings": 0,
+            },
+            "global_findings": [],
+            "rows": [
+                {
+                    "spec": spec,
+                    "passed": True,
+                    "module_rule": {
+                        "name": spec["RS_module"],
+                        "has_rs_cfg_en": False,
+                        "step_parameters": [],
+                        "clk_port": "clk",
+                        "rst_port": "rst_n",
+                    },
+                    "step_check": {
+                        "expected": 1,
+                        "physical_instances": 1,
+                        "effective_step": 1,
+                        "contributions": [contribution],
+                    },
+                    "crg_source_check": {
+                        "expected": "top.u_crg",
+                        "status": "pass",
+                        "instances": [evaluation],
+                    },
+                    "matched_instances": [
+                        {
+                            "name": "PIPE_S0",
+                            "full_name": "top.u.PIPE_S0",
+                            "module": spec["RS_module"],
+                            "file": "pipe.sv",
+                            "line": 1,
+                            "parameters": {},
+                            "ports": {},
+                            "clk_sources": [],
+                            "clock_trace": clock_trace,
+                            "step_evaluation": contribution,
+                        }
+                    ],
+                    "findings": [],
+                }
+            ],
+        }
+
+        def assert_rejected(path: Path, mutator, message: str) -> None:
+            candidate = copy.deepcopy(report)
+            mutator(candidate)
+            path.write_text(json.dumps(candidate), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, message):
+                load_report(path)
+
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "report-v4.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            loaded = load_report(path)
+            self.assertEqual(
+                loaded.rows[0]["crg_source_check"]["instances"][0]["matched"][
+                    "path"
+                ],
+                ["top.u_occ", "top.u_mux", "top.u_crg"],
+            )
+
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"].__setitem__(
+                    "expected", "top.u_other"
+                ),
+                "expected does not match",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"].__setitem__(
+                    "status", "warning"
+                ),
+                "status does not match",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"][
+                    "instances"
+                ][0].__setitem__("max_depth", True),
+                "max_depth",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"][
+                    "instances"
+                ][0]["matched"].__setitem__("path", ["top.u_crg"]),
+                "path length",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["matched_instances"][0][
+                    "clock_trace"
+                ].__setitem__("modules", []),
+                "status does not match clock trace evidence",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"][
+                    "instances"
+                ][0].__setitem__("trace_status", "depth_limited"),
+                "does not match clock_trace",
+            )
+            assert_rejected(
+                path,
+                lambda candidate: candidate["rows"][0]["crg_source_check"].__setitem__(
+                    "instances", []
+                ),
+                "does not match instances",
+            )
+            def falsify_not_found(candidate) -> None:
+                row = candidate["rows"][0]
+                row["crg_source_check"]["status"] = "warning"
+                candidate_evaluation = row["crg_source_check"]["instances"][0]
+                candidate_evaluation["status"] = "not_found"
+                candidate_evaluation["matched"] = None
+
+            assert_rejected(
+                path,
+                falsify_not_found,
+                "status does not match clock trace evidence",
+            )
+
+            warning_report = copy.deepcopy(report)
+            warning_row = warning_report["rows"][0]
+            warning_check = warning_row["crg_source_check"]
+            warning_check["status"] = "warning"
+            warning_evaluation = warning_check["instances"][0]
+            warning_evaluation["status"] = "depth_limited"
+            warning_evaluation["trace_status"] = "depth_limited"
+            warning_evaluation["matched"] = None
+            warning_trace = warning_row["matched_instances"][0]["clock_trace"]
+            warning_trace["status"] = "depth_limited"
+            warning_trace["modules"] = warning_trace["modules"][:2]
+            warning_row["findings"] = [
+                {
+                    "severity": "warning",
+                    "code": "CRG_TRACE_DEPTH_LIMIT",
+                    "instance": "top.u.PIPE_S0",
+                }
+            ]
+            warning_report["summary"]["warnings"] = 1
+            path.write_text(json.dumps(warning_report), encoding="utf-8")
+            warning_loaded = load_report(path)
+            self.assertTrue(warning_loaded.rows[0]["passed"])
+            self.assertEqual(
+                warning_loaded.rows[0]["crg_source_check"]["status"], "warning"
+            )
+
+            missing_finding = copy.deepcopy(warning_report)
+            missing_finding["rows"][0]["findings"] = []
+            missing_finding["summary"]["warnings"] = 0
+            path.write_text(json.dumps(missing_finding), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "CRG warning findings"):
+                load_report(path)
+
+            error_finding = copy.deepcopy(warning_report)
+            error_finding["rows"][0]["findings"][0]["severity"] = "error"
+            error_finding["rows"][0]["passed"] = False
+            error_finding["summary"].update(
+                {
+                    "passed": False,
+                    "passed_rows": 0,
+                    "failed_rows": 1,
+                    "errors": 1,
+                    "warnings": 0,
+                }
+            )
+            path.write_text(json.dumps(error_finding), encoding="utf-8")
+            with self.assertRaisesRegex(GuiReportError, "warning severity"):
+                load_report(path)
+
+            legacy_report = copy.deepcopy(report)
+            legacy_instance = legacy_report["rows"][0]["matched_instances"][0]
+            legacy_instance["clock_trace"] = None
+            legacy_instance["clk_sources"] = [
+                {"instance": "top.u_crg", "module": "crg_core"}
+            ]
+            legacy_evaluation = legacy_report["rows"][0]["crg_source_check"][
+                "instances"
+            ][0]
+            legacy_evaluation["trace_status"] = "legacy"
+            legacy_evaluation["matched"] = {
+                "instance": "top.u_crg",
+                "module": "crg_core",
+                "depth": 1,
+                "path": ["top.u_crg"],
+            }
+            path.write_text(json.dumps(legacy_report), encoding="utf-8")
+            legacy_loaded = load_report(path)
+            self.assertEqual(
+                legacy_loaded.rows[0]["crg_source_check"]["instances"][0][
+                    "trace_status"
+                ],
+                "legacy",
+            )
 
     def test_cli_gui_subcommand_dispatches_without_loading_a_config(self) -> None:
         with patch("rscheck.gui.main", return_value=0) as gui_main:

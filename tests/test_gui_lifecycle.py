@@ -16,6 +16,7 @@ from rscheck.gui import (
     WorkerOutcome,
     _crg_source_display,
     _crg_source_mapping_from_form,
+    _crg_trace_display,
     _evidence_payload,
     _module_rule_from_form,
     _parse_step_parameters,
@@ -110,6 +111,7 @@ class GuiLifecycleTests(unittest.TestCase):
                 require_contiguous_indices=True,
                 allow_leaf_signal_match=True,
                 crg_match="module_or_instance",
+                crg_trace_max_depth=16 + offset,
             ),
             module_rules=rules,
             position_mappings={
@@ -133,6 +135,9 @@ class GuiLifecycleTests(unittest.TestCase):
         app.header_row_var = _FakeVar(str(config.excel.header_row))
         app.data_start_row_var = _FakeVar(str(config.excel.data_start_row))
         app.header_check_var = _FakeVar(config.excel.validate_headers)
+        app.crg_trace_max_depth_var = _FakeVar(
+            str(config.rtl.crg_trace_max_depth)
+        )
         app.column_vars = {
             name: _FakeVar(str(config.excel.columns[name])) for name in FIELD_NAMES
         }
@@ -170,6 +175,7 @@ class GuiLifecycleTests(unittest.TestCase):
             app.header_row_var.get(),
             app.data_start_row_var.get(),
             app.header_check_var.get(),
+            app.crg_trace_max_depth_var.get(),
             {name: app.column_vars[name].get() for name in FIELD_NAMES},
         )
 
@@ -704,6 +710,27 @@ class GuiLifecycleTests(unittest.TestCase):
                 "rst_port": "reset_ni",
             },
             "step_check": {"effective_step": 1},
+            "crg_source_check": {
+                "expected": "tb.dut.u_crg",
+                "status": "pass",
+                "instances": [
+                    {
+                        "instance": "top.u.PIPE_C0",
+                        "clock_port": "clock_i",
+                        "expected": "tb.dut.u_crg",
+                        "max_depth": 16,
+                        "status": "matched",
+                        "trace_status": "complete",
+                        "matched": {
+                            "instance": "tb.dut.u_crg",
+                            "module": "crg_core",
+                            "depth": 2,
+                            "path": ["tb.dut.u_occ", "tb.dut.u_crg"],
+                        },
+                        "diagnostics": [],
+                    }
+                ],
+            },
             "matched_instances": [
                 {
                     "full_name": "top.u.PIPE_C0",
@@ -733,6 +760,21 @@ class GuiLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(evidence["module_rule"]["clk_port"], "clock_i")
         self.assertEqual(evidence["module_rule"]["rst_port"], "reset_ni")
+        self.assertEqual(
+            evidence["crg_source_check"]["instances"][0]["matched"]["path"],
+            ["tb.dut.u_occ", "tb.dut.u_crg"],
+        )
+
+    def test_crg_trace_display_distinguishes_new_and_legacy_reports(self) -> None:
+        self.assertEqual(
+            _crg_trace_display({"crg_source_check": {"status": "pass"}}),
+            "PASS",
+        )
+        self.assertEqual(
+            _crg_trace_display({"crg_source_check": {"status": "warning"}}),
+            "WARNING",
+        )
+        self.assertEqual(_crg_trace_display({}), "N/A")
 
     def test_module_rule_form_parses_multiple_parameters(self) -> None:
         rule = _module_rule_from_form(

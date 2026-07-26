@@ -38,14 +38,15 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertNotIn(
-            "contract=elab-only schemas=report-v3/inventory-v2",
+            "contract=elab-only schemas=report-v4/inventory-v3",
             source,
         )
         self.assertGreaterEqual(source.count("grep -Fq 'contract=elab-only'"), 2)
         self.assertGreaterEqual(
-            source.count("grep -Fq 'schemas=report-v3/inventory-v2'"),
+            source.count("grep -Fq 'schemas=report-v4/inventory-v3'"),
             4,
         )
+        self.assertNotIn("report-v3/inventory-v2", source)
 
     def test_vm_flow_requires_arbitrary_header_column_mapping_evidence(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -124,10 +125,13 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("partial clk-only high connection mismatch", source)
         self.assertIn("partial clk-only unexpectedly has an rst formal port", source)
         self.assertIn("partial clk-present/rst-absent evidence OK", source)
-        self.assertIn("clock-source tracing must be disabled", source)
         self.assertIn("partial NPI formal-port L0/L1 inventory evidence OK", source)
+        self.assertNotIn("clock-source tracing must be disabled", source)
         self.assertIn("custom module clk/rst formal-port rule evidence OK", source)
-        self.assertIn("CRG_source evidence retained without PASS/FAIL validation", source)
+        self.assertIn(
+            "custom clock_i trace warning evidence OK: CRG_SOURCE_NOT_FOUND",
+            source,
+        )
         self.assertIn("online_gui_custom_port.log", source)
         self.assertIn("mode=online case=custom-port", source)
         self.assertIn("rule-ports=clock_i/reset_ni", source)
@@ -138,6 +142,91 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("clk-port-evidence=present", source)
         self.assertIn("finding-codes=RST_PORT_MISSING", source)
         self.assertIn("GUI_CLK_WITHOUT_RST_ITERATIONS", source)
+
+    def test_vm_flow_requires_bounded_recursive_crg_trace_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "printf 'rs_pipe\\tclk\\nrs_custom\\tclock_i\\n"
+            "rs_clk_only\\tclk\\n'",
+            source,
+        )
+        self.assertIn("partial_load_trace_rules.tsv", source)
+        self.assertIn("clean_load_trace_rules.tsv", source)
+        self.assertGreaterEqual(source.count("--trace-rules"), 2)
+        self.assertGreaterEqual(source.count("--trace-max-depth 16"), 2)
+        self.assertIn('or trace.get("excluded_inputs") != ["clk", "rst_n"]', source)
+        self.assertIn('occ = "top.u_tile.u_occ"', source)
+        self.assertIn('mux = "top.u_tile.u_clk_mux"', source)
+        self.assertIn('core = "top.u_tile.u_crg"', source)
+        self.assertIn('aux = "top.u_tile.u_aux_crg"', source)
+        self.assertIn('assert_trace("CUSTOM_RS", "clock_i"', source)
+        self.assertIn("--crg-trace-max-depth 3", source)
+        self.assertIn(
+            "CRG recursion evidence OK: depth=3, branched path accepts exact "
+            "full-path match",
+            source,
+        )
+        self.assertIn('report.get("schema_version") != 4', source)
+        self.assertIn('inventory.get("schema_version") != 3', source)
+
+        self.assertIn(
+            'GUI_CRG_TRACE_DEPTH_ITERATIONS="${GUI_CRG_TRACE_DEPTH_ITERATIONS:-20}"',
+            source,
+        )
+        self.assertIn("online_gui_crg_trace_depth_limit.log", source)
+        self.assertIn("--crg-depth-limit", source)
+        self.assertIn("--crg-depth-limit", gui_smoke)
+        depth_marker = (
+            "crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6"
+        )
+        self.assertIn(depth_marker, source)
+        self.assertIn(depth_marker, gui_smoke)
+        self.assertIn(
+            "warnings=警告 6 mode=online case=crg-depth-limit",
+            source,
+        )
+
+        custom_marker = (
+            "crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND"
+        )
+        self.assertIn(custom_marker, source)
+        self.assertIn(custom_marker, gui_smoke)
+        self.assertIn(
+            "warnings=警告 1 mode=online case=custom-port",
+            source,
+        )
+        self.assertIn(
+            "clk-present/rst-missing CRG trace evidence OK: pass with no warning",
+            source,
+        )
+        self.assertIn(
+            "online GUI clk-present/rst-missing case emitted a CRG trace warning",
+            source,
+        )
+
+        unified_log_gate = source.split("for gui_log in \\", 1)[1].split(
+            "done", 1
+        )[0]
+        log_list = unified_log_gate.split("; do", 1)[0]
+        log_entries = [
+            line
+            for line in log_list.splitlines()
+            if line.strip().startswith('"$')
+        ]
+        self.assertEqual(len(log_entries), 12)
+        self.assertIn('"$CRG_TRACE_DEPTH_LOG"', unified_log_gate)
+        self.assertIn(
+            "grep -Fq 'schemas=report-v4/inventory-v3' \"$gui_log\"",
+            unified_log_gate,
+        )
+        gui_logs_line = next(
+            line for line in source.splitlines() if line.startswith('echo "GUI_LOGS=')
+        )
+        self.assertIn("$CRG_TRACE_DEPTH_LOG", gui_logs_line)
+        gui_log_vars = gui_logs_line.split("=", 1)[1].rstrip('"').split(",")
+        self.assertEqual(len(gui_log_vars), 12)
 
     def test_vm_flow_requires_rs_cfg_dontcare_gui_evidence(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -215,7 +304,8 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("offline_gui_crg_source_mapping.log", source)
         marker = (
             "crg-source-map=core_clock_source->top.u_soc.u_crg_core "
-            "gui-json-csv=alias+full crg-source-check=not-judged findings=none"
+            "gui-json-csv=alias+full crg-source-check=pass "
+            "trace-depth=3 findings=none"
         )
         self.assertIn(marker, source)
         self.assertIn(marker, gui_smoke)

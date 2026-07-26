@@ -8,6 +8,21 @@ from typing import Any
 from .model import CheckReport, Finding, OutputError, RowResult
 
 
+def _crg_source_check(row: RowResult) -> dict[str, Any]:
+    status = "not_run"
+    if row.crg_evaluations:
+        status = (
+            "pass"
+            if all(item.status == "matched" for item in row.crg_evaluations)
+            else "warning"
+        )
+    return {
+        "expected": row.spec.crg_source,
+        "status": status,
+        "instances": [item.as_dict() for item in row.crg_evaluations],
+    }
+
+
 def _row_to_dict(row: RowResult) -> dict[str, Any]:
     evaluations = {item.instance: item for item in row.step_evaluations}
     matched_instances = []
@@ -32,6 +47,11 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
                     {"instance": source.instance, "module": source.module}
                     for source in instance.clk_sources
                 ],
+                "clock_trace": (
+                    instance.clock_trace.as_dict()
+                    if instance.clock_trace is not None
+                    else None
+                ),
                 "step_evaluation": evaluation.as_dict() if evaluation else None,
             }
         )
@@ -45,6 +65,7 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
             "effective_step": row.effective_step,
             "contributions": [item.as_dict() for item in row.step_evaluations],
         },
+        "crg_source_check": _crg_source_check(row),
         "matched_instances": matched_instances,
         "findings": [item.as_dict() for item in row.findings],
     }
@@ -52,7 +73,7 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
 
 def report_to_dict(report: CheckReport) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "summary": {
             "passed": report.passed,
             "rows": len(report.rows),
@@ -97,6 +118,25 @@ def _step_csv_fields(row: RowResult | None) -> dict[str, Any]:
     }
 
 
+def _crg_csv_fields(row: RowResult | None) -> dict[str, Any]:
+    if row is None:
+        return {
+            "crg_trace_status": "",
+            "crg_trace_max_depth": "",
+            "crg_trace_evidence": "",
+        }
+    crg_check = _crg_source_check(row)
+    return {
+        "crg_trace_status": crg_check["status"],
+        "crg_trace_max_depth": (
+            row.crg_evaluations[0].max_depth if row.crg_evaluations else ""
+        ),
+        "crg_trace_evidence": json.dumps(
+            crg_check["instances"], ensure_ascii=False
+        ),
+    }
+
+
 def _finding_row(
     finding: Finding, passed: bool, row: RowResult | None = None
 ) -> dict[str, Any]:
@@ -119,6 +159,7 @@ def _finding_row(
         if finding.actual is not None
         else "",
         **_step_csv_fields(row),
+        **_crg_csv_fields(row),
     }
 
 
@@ -135,6 +176,9 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "position_alias",
         "CRG_source",
         "crg_source_alias",
+        "crg_trace_status",
+        "crg_trace_max_depth",
+        "crg_trace_evidence",
         "RS_module",
         "RS_inst",
         "RS_CFG_EN",
@@ -167,6 +211,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "RS_inst": row.spec.rs_inst,
                             "RS_CFG_EN": row.spec.rs_cfg_en,
                             **_step_csv_fields(row),
+                            **_crg_csv_fields(row),
                             "instance": ", ".join(item.full_name for item in row.instances),
                             "code": "",
                             "message": "all checks passed",
@@ -201,12 +246,21 @@ def format_console_report(report: CheckReport) -> str:
             crg_source = (
                 f"{row.spec.crg_source_alias} -> {row.spec.crg_source}"
             )
+        crg_trace_status = str(_crg_source_check(row)["status"]).upper()
+        row_status = (
+            "FAIL"
+            if not row.passed
+            else "WARNING"
+            if any(item.severity == "warning" for item in row.findings)
+            else "PASS"
+        )
         lines.append(
-            f"[{'PASS' if row.passed else 'FAIL'}] row {row.spec.row_number} "
+            f"[{row_status}] row {row.spec.row_number} "
             f"{row.spec.intf_type} | {position} / {row.spec.rs_inst} "
             f"physical={len(row.instances)} effective={effective_step} "
             f"expected={row.spec.step} "
             f"CRG_source={crg_source} "
+            f"CRG_trace={crg_trace_status} "
             f"RS_CFG_EN={row.spec.rs_cfg_en or '<blank>'}"
         )
         for finding in row.findings:

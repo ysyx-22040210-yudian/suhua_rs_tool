@@ -32,18 +32,22 @@ class CheckerTests(unittest.TestCase):
     def setUp(self) -> None:
         from rscheck.model import ExcelConfig
 
+        config = load_config(ROOT / "config" / "rscheck.example.json")
         self.specs = read_spec_rows(
             ROOT / "tests" / "fixtures" / "specs.csv",
             ExcelConfig(sheet=1, columns=COLUMNS),
+            crg_source_mappings=config.crg_source_mappings,
         )
         self.inventory = load_inventory(ROOT / "tests" / "fixtures" / "inventory.json")
-        config = load_config(ROOT / "config" / "rscheck.example.json")
         self.rtl = config.rtl
         self.rules = config.module_rules
 
     def _mutated_inventory(self, mutate) -> object:
         raw = json.loads((ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8"))
         mutate(raw)
+        return self._load_raw_inventory(raw)
+
+    def _load_raw_inventory(self, raw) -> object:
         temp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
         try:
             json.dump(raw, temp)
@@ -51,6 +55,37 @@ class CheckerTests(unittest.TestCase):
             return load_inventory(temp.name)
         finally:
             Path(temp.name).unlink(missing_ok=True)
+
+    def _v3_inventory(self, mutate=lambda raw: None) -> object:
+        raw = json.loads(
+            (ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8")
+        )
+        raw["schema_version"] = 3
+        for position in raw["positions"].values():
+            for instance in position["instances"]:
+                modules = [
+                    {
+                        "instance": source["instance"],
+                        "module": source["module"],
+                        "depth": 1,
+                        "path": [source["instance"]],
+                    }
+                    for source in instance.get("clk_sources", [])
+                ]
+                instance["clock_trace"] = (
+                    {
+                        "clock_port": "clk",
+                        "max_depth": 16,
+                        "excluded_inputs": ["clk", "rst_n"],
+                        "status": "complete",
+                        "modules": modules,
+                        "diagnostics": [],
+                    }
+                    if modules
+                    else None
+                )
+        mutate(raw)
+        return self._load_raw_inventory(raw)
 
     def _default_rule_inventory(self, mutate=lambda raw: None) -> object:
         def use_default_ports(raw) -> None:
@@ -66,6 +101,8 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, self.inventory, self.rtl, self.rules)
         self.assertTrue(report.passed)
         self.assertEqual(report.error_count, 0)
+        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(self.inventory.schema_version, 2)
         self.assertEqual(report.rows[0].effective_step, 5)
         self.assertEqual(len(report.rows[0].instances), 6)
         self.assertEqual(
@@ -643,13 +680,98 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(instance["parameters"]["RS_CRG_EN"], "0")
         self.assertEqual(instance["parameters"]["WIDTH"], "1")
 
+    def test_inventory_v3_clock_trace_round_trip(self) -> None:
+        inventory = self._v3_inventory()
+
+        raw = inventory_to_dict(inventory)
+        trace = raw["positions"]["top.u_tile"]["instances"][0]["clock_trace"]
+
+        self.assertEqual(raw["schema_version"], 3)
+        self.assertEqual(inventory.schema_version, 3)
+        self.assertEqual(trace["clock_port"], "clk")
+        self.assertEqual(trace["max_depth"], 16)
+        self.assertEqual(trace["excluded_inputs"], ["clk", "rst_n"])
+        self.assertEqual(trace["status"], "complete")
+        self.assertEqual(trace["modules"][0]["depth"], 1)
+        self.assertEqual(self._load_raw_inventory(raw), inventory)
+
+    def test_inventory_v3_clock_trace_is_strictly_validated(self) -> None:
+        def first_instance(raw):
+            return raw["positions"]["top.u_tile"]["instances"][0]
+
+        mutations = (
+            (
+                "missing_trace",
+                lambda raw: first_instance(raw).pop("clock_trace"),
+                "clock_trace.*required",
+            ),
+            (
+                "bad_excluded_inputs",
+                lambda raw: first_instance(raw)["clock_trace"].__setitem__(
+                    "excluded_inputs", ["rst_n", "clk"]
+                ),
+                "excluded_inputs.*exactly",
+            ),
+            (
+                "bad_status",
+                lambda raw: first_instance(raw)["clock_trace"].__setitem__(
+                    "status", "partial"
+                ),
+                "status.*one of",
+            ),
+            (
+                "zero_max_depth",
+                lambda raw: first_instance(raw)["clock_trace"].__setitem__(
+                    "max_depth", 0
+                ),
+                "max_depth.*between",
+            ),
+            (
+                "boolean_max_depth",
+                lambda raw: first_instance(raw)["clock_trace"].__setitem__(
+                    "max_depth", True
+                ),
+                "max_depth.*between",
+            ),
+            (
+                "path_depth_mismatch",
+                lambda raw: first_instance(raw)["clock_trace"]["modules"][0].__setitem__(
+                    "depth", 2
+                ),
+                "path.*inconsistent",
+            ),
+            (
+                "bad_diagnostics",
+                lambda raw: first_instance(raw)["clock_trace"].__setitem__(
+                    "diagnostics", "bad"
+                ),
+                "diagnostics.*array",
+            ),
+        )
+        for name, mutate, message in mutations:
+            with self.subTest(name=name), self.assertRaisesRegex(
+                InventoryError, message
+            ):
+                self._v3_inventory(mutate)
+
+    def test_inventory_v2_rejects_clock_trace_extension(self) -> None:
+        def mutate(raw) -> None:
+            raw["positions"]["top.u_tile"]["instances"][0]["clock_trace"] = None
+
+        with self.assertRaisesRegex(
+            InventoryError, "clock_trace.*not allowed by schema_version 2"
+        ):
+            self._mutated_inventory(mutate)
+
     def test_old_inventory_schema_is_rejected(self) -> None:
         for schema_version in (1, 2.0, True, "2"):
             with self.subTest(schema_version=schema_version):
                 def mutate(raw) -> None:
                     raw["schema_version"] = schema_version
 
-                with self.assertRaisesRegex(InventoryError, "schema_version.*expected 2"):
+                with self.assertRaisesRegex(
+                    InventoryError, "schema_version.*expected 2 or 3"
+                ):
                     self._mutated_inventory(mutate)
 
     def test_missing_inventory_warnings_is_rejected(self) -> None:
@@ -932,16 +1054,18 @@ class CheckerTests(unittest.TestCase):
         self.assertNotIn("CLK_PORT_MISSING", {finding.code for finding in findings})
         self.assertNotIn("CLK_UNCONNECTED", {finding.code for finding in findings})
 
-    def test_crg_source_mismatch_is_not_judged(self) -> None:
+    def test_legacy_v2_crg_source_mismatch_is_warning_only(self) -> None:
         wrong = replace(self.specs[0], crg_source="wrong_crg")
         report = check_specs([wrong], self.inventory, self.rtl, self.rules)
         self.assertTrue(report.passed)
         self.assertEqual(report.rows[0].spec.crg_source, "wrong_crg")
-        self.assertNotIn(
-            "CRG_SOURCE_MISMATCH", {item.code for item in report.rows[0].findings}
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"CRG_TRACE_UNAVAILABLE"},
         )
+        self.assertEqual(report.warning_count, 6)
 
-    def test_unresolved_crg_source_is_not_judged(self) -> None:
+    def test_legacy_v2_empty_clock_sources_are_unavailable_warnings(self) -> None:
         def mutate(raw) -> None:
             for instance in raw["positions"]["top.u_tile"]["instances"]:
                 if instance["name"].startswith("AAAA_BBB"):
@@ -955,9 +1079,226 @@ class CheckerTests(unittest.TestCase):
         self.assertTrue(
             all(not instance.clk_sources for instance in report.rows[0].instances)
         )
-        self.assertNotIn(
-            "CRG_SOURCE_UNRESOLVED",
+        self.assertEqual(
             {item.code for item in report.rows[0].findings},
+            {"CRG_TRACE_UNAVAILABLE"},
+        )
+
+    def test_v3_recursive_trace_matches_exact_full_path(self) -> None:
+        target = self.specs[0].crg_source
+
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if not instance["name"].startswith("AAAA_BBB"):
+                    continue
+                instance["clock_trace"]["modules"] = [
+                    {
+                        "instance": "top.u_tile.u_occ",
+                        "module": "occ",
+                        "depth": 1,
+                        "path": ["top.u_tile.u_occ"],
+                    },
+                    {
+                        "instance": target,
+                        "module": "crg_core",
+                        "depth": 2,
+                        "path": ["top.u_tile.u_occ", target],
+                    },
+                ]
+
+        report = check_specs(
+            [self.specs[0]], self._v3_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.warning_count, 0)
+        self.assertTrue(
+            all(item.status == "matched" for item in report.rows[0].crg_evaluations)
+        )
+        self.assertTrue(
+            all(item.matched.depth == 2 for item in report.rows[0].crg_evaluations)
+        )
+
+        raw_report = report_to_dict(report)
+        crg_check = raw_report["rows"][0]["crg_source_check"]
+        self.assertEqual(raw_report["schema_version"], 4)
+        self.assertEqual(crg_check["expected"], target)
+        self.assertEqual(crg_check["status"], "pass")
+        self.assertEqual(crg_check["instances"][0]["status"], "matched")
+        self.assertEqual(crg_check["instances"][0]["matched"]["depth"], 2)
+        self.assertEqual(
+            raw_report["rows"][0]["matched_instances"][0]["clock_trace"][
+                "excluded_inputs"
+            ],
+            ["clk", "rst_n"],
+        )
+
+    def test_v3_crg_match_is_exact_not_leaf_or_module_name(self) -> None:
+        for target in ("u_crg", "crg_core", "top.u_tile.u_cr"):
+            with self.subTest(target=target):
+                spec = replace(self.specs[0], crg_source=target)
+                report = check_specs(
+                    [spec], self._v3_inventory(), self.rtl, self.rules
+                )
+                self.assertTrue(report.passed)
+                self.assertEqual(
+                    {item.code for item in report.rows[0].findings},
+                    {"CRG_SOURCE_NOT_FOUND"},
+                )
+
+    def test_v3_trace_status_selects_warning_code(self) -> None:
+        for status, expected_code in (
+            ("complete", "CRG_SOURCE_NOT_FOUND"),
+            ("depth_limited", "CRG_TRACE_DEPTH_LIMIT"),
+            ("unresolved", "CRG_TRACE_UNAVAILABLE"),
+        ):
+            with self.subTest(status=status):
+                def mutate(raw) -> None:
+                    for instance in raw["positions"]["top.u_tile"]["instances"]:
+                        if instance["name"].startswith("AAAA_BBB"):
+                            instance["clock_trace"]["status"] = status
+                            instance["clock_trace"]["modules"] = []
+
+                report = check_specs(
+                    [self.specs[0]], self._v3_inventory(mutate), self.rtl, self.rules
+                )
+                self.assertTrue(report.passed)
+                self.assertEqual(
+                    {item.code for item in report.rows[0].findings},
+                    {expected_code},
+                )
+
+    def test_v3_target_match_wins_over_depth_limited_status(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if instance["name"].startswith("AAAA_BBB"):
+                    instance["clock_trace"]["status"] = "depth_limited"
+                    instance["clock_trace"]["diagnostics"] = [
+                        "another branch reached the configured limit"
+                    ]
+
+        report = check_specs(
+            [self.specs[0]], self._v3_inventory(mutate), self.rtl, self.rules
+        )
+
+        self.assertEqual(report.warning_count, 0)
+        self.assertTrue(
+            all(item.status == "matched" for item in report.rows[0].crg_evaluations)
+        )
+
+    def test_v3_configured_depth_includes_boundary_and_blocks_deeper_match(self) -> None:
+        target = self.specs[0].crg_source
+
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if not instance["name"].startswith("AAAA_BBB"):
+                    continue
+                instance["clock_trace"]["modules"] = [
+                    {
+                        "instance": "top.u_tile.u_a",
+                        "module": "a",
+                        "depth": 1,
+                        "path": ["top.u_tile.u_a"],
+                    },
+                    {
+                        "instance": "top.u_tile.u_b",
+                        "module": "b",
+                        "depth": 2,
+                        "path": ["top.u_tile.u_a", "top.u_tile.u_b"],
+                    },
+                    {
+                        "instance": target,
+                        "module": "crg_core",
+                        "depth": 3,
+                        "path": [
+                            "top.u_tile.u_a",
+                            "top.u_tile.u_b",
+                            target,
+                        ],
+                    },
+                ]
+
+        inventory = self._v3_inventory(mutate)
+        limited = check_specs(
+            [self.specs[0]],
+            inventory,
+            replace(self.rtl, crg_trace_max_depth=2),
+            self.rules,
+        )
+        boundary = check_specs(
+            [self.specs[0]],
+            inventory,
+            replace(self.rtl, crg_trace_max_depth=3),
+            self.rules,
+        )
+
+        self.assertEqual(
+            {item.code for item in limited.rows[0].findings},
+            {"CRG_TRACE_DEPTH_LIMIT"},
+        )
+        self.assertEqual(boundary.warning_count, 0)
+        self.assertTrue(
+            all(item.matched.depth == 3 for item in boundary.rows[0].crg_evaluations)
+        )
+
+    def test_checker_rejects_out_of_range_trace_depth_from_direct_callers(self) -> None:
+        for depth in (0, 257, True):
+            with self.subTest(depth=depth), self.assertRaisesRegex(
+                ConfigError, "between 1 and 256"
+            ):
+                check_specs(
+                    [self.specs[0]],
+                    self.inventory,
+                    replace(self.rtl, crg_trace_max_depth=depth),
+                    self.rules,
+                )
+
+    def test_v3_custom_module_clock_port_selects_matching_trace(self) -> None:
+        def mutate(raw) -> None:
+            for instance in raw["positions"]["top.u_tile"]["instances"]:
+                if not instance["name"].startswith("AAAA_BBB"):
+                    continue
+                instance["ports"]["pipe_clock"] = instance["ports"].pop("clk")
+                instance["ports"]["pipe_reset_n"] = instance["ports"].pop("rst")
+                instance["clock_trace"]["clock_port"] = "pipe_clock"
+
+        rule = replace(
+            self.rules["rs_pipe"],
+            clk_port="pipe_clock",
+            rst_port="pipe_reset_n",
+        )
+        report = check_specs(
+            [self.specs[0]],
+            self._v3_inventory(mutate),
+            self.rtl,
+            {"rs_pipe": rule},
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.warning_count, 0)
+        self.assertTrue(
+            all(item.clock_port == "pipe_clock" for item in report.rows[0].crg_evaluations)
+        )
+
+    def test_v3_trace_for_wrong_formal_port_is_unavailable(self) -> None:
+        rule = replace(self.rules["rs_pipe"], clk_port="pipe_clock")
+
+        report = check_specs(
+            [self.specs[0]],
+            self._v3_inventory(),
+            self.rtl,
+            {"rs_pipe": rule},
+        )
+
+        self.assertEqual(
+            {item.code for item in report.rows[0].findings},
+            {"CLK_PORT_MISSING", "CRG_TRACE_UNAVAILABLE"},
+        )
+        self.assertTrue(
+            all(
+                "module rule requires 'pipe_clock'" in item.diagnostics[0]
+                for item in report.rows[0].crg_evaluations
+            )
         )
 
     def test_crg_collector_warnings_are_not_judged(self) -> None:

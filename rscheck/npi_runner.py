@@ -6,10 +6,18 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .inventory import load_inventory
-from .model import Inventory, InventoryError, RtlConfig, SpecRow
+from .model import (
+    MAX_CRG_TRACE_DEPTH,
+    Inventory,
+    InventoryError,
+    ModuleRule,
+    RtlConfig,
+    SpecRow,
+    resolve_module_rule,
+)
 
 
 def _verdi_npi_library_dir(environment: dict[str, str]) -> Path | None:
@@ -89,6 +97,7 @@ def collect_inventory(
     collector: str | Path,
     specs: Iterable[SpecRow],
     config: RtlConfig,
+    module_rules: Mapping[str, ModuleRule] | None = None,
     *,
     elab_db: str | Path,
     timeout_seconds: int | None = None,
@@ -109,19 +118,54 @@ def collect_inventory(
         raise InventoryError(
             "work.lib++ is a compiled Verdi library, not an elaborated KDB"
         )
-    positions = sorted({spec.position for spec in specs})
+    if (
+        type(config.crg_trace_max_depth) is not int
+        or not 1 <= config.crg_trace_max_depth <= MAX_CRG_TRACE_DEPTH
+    ):
+        raise InventoryError(
+            "CRG trace max depth must be between 1 and "
+            f"{MAX_CRG_TRACE_DEPTH}"
+        )
+    spec_list = list(specs)
+    positions = sorted({spec.position for spec in spec_list})
+    configured_rules = module_rules or {}
+    trace_rules = {
+        spec.rs_module: resolve_module_rule(spec.rs_module, configured_rules)
+        for spec in spec_list
+    }
+    for rule in trace_rules.values():
+        for label, value in (
+            ("module name", rule.name),
+            ("clock port", rule.clk_port),
+        ):
+            if any(character in value for character in "\t\r\n"):
+                raise InventoryError(
+                    f"trace rule {label} must not contain TAB or newline characters"
+                )
     try:
         with tempfile.TemporaryDirectory(prefix="rtl-rs-check-") as temp_name:
             temp_dir = Path(temp_name)
             positions_path = temp_dir / "positions.txt"
+            trace_rules_path = temp_dir / "trace_rules.tsv"
             output_path = temp_dir / "inventory.json"
             positions_path.write_text("\n".join(positions) + "\n", encoding="utf-8")
+            trace_rules_path.write_text(
+                "".join(
+                    f"{rule.name}\t{rule.clk_port}\n"
+                    for _, rule in sorted(trace_rules.items())
+                ),
+                encoding="utf-8",
+            )
             command = [
                 str(collector_path),
                 "--positions",
                 str(positions_path),
                 "--output",
                 str(output_path),
+                "--trace-rules",
+                str(trace_rules_path),
+                "--trace-max-depth",
+                str(config.crg_trace_max_depth),
                 "--clk-port",
                 config.clk_port,
                 "--rst-port",
@@ -157,6 +201,12 @@ def collect_inventory(
             if not output_path.is_file():
                 raise InventoryError("NPI collector succeeded but did not create its inventory")
             inventory = load_inventory(output_path)
+            if inventory.schema_version != 3:
+                raise InventoryError(
+                    "NPI collector returned legacy inventory schema_version "
+                    f"{inventory.schema_version}; rebuild rs_npi_collector for "
+                    "recursive CRG tracing"
+                )
             if inventory.notices:
                 detail = _collector_diagnostics(completed, temp_dir)
                 if detail:

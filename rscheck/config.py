@@ -9,8 +9,10 @@ from typing import Any, Mapping
 
 from .model import (
     ConfigError,
+    DEFAULT_CRG_TRACE_MAX_DEPTH,
     ExcelConfig,
     FIELD_NAMES,
+    MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     RtlConfig,
     ToolConfig,
@@ -38,6 +40,13 @@ def _positive_int(value: Any, name: str) -> int:
     result = int(value)
     if result < 1:
         raise ConfigError(f"'{name}' must be >= 1")
+    return result
+
+
+def _bounded_positive_int(value: Any, name: str, maximum: int) -> int:
+    result = _positive_int(value, name)
+    if result > maximum:
+        raise ConfigError(f"'{name}' must be <= {maximum}")
     return result
 
 
@@ -268,6 +277,7 @@ def config_from_dict(raw: Any) -> ToolConfig:
             "require_contiguous_indices",
             "allow_leaf_signal_match",
             "crg_match",
+            "crg_trace_max_depth",
         },
         "rtl",
     )
@@ -343,6 +353,11 @@ def config_from_dict(raw: Any) -> ToolConfig:
             "rtl.allow_leaf_signal_match",
         ),
         crg_match=crg_match,
+        crg_trace_max_depth=_bounded_positive_int(
+            rtl_raw.get("crg_trace_max_depth", DEFAULT_CRG_TRACE_MAX_DEPTH),
+            "rtl.crg_trace_max_depth",
+            MAX_CRG_TRACE_DEPTH,
+        ),
     )
     module_rules = _module_rules(
         root.get("module_rules"),
@@ -376,6 +391,7 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
             "require_contiguous_indices": config.rtl.require_contiguous_indices,
             "allow_leaf_signal_match": config.rtl.allow_leaf_signal_match,
             "crg_match": config.rtl.crg_match,
+            "crg_trace_max_depth": config.rtl.crg_trace_max_depth,
         },
         "position_mappings": {
             alias: position

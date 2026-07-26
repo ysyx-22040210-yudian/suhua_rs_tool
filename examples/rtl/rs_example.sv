@@ -12,6 +12,27 @@ module crg_aux (
     assign clk_out = ref_clk;
 endmodule
 
+module clk_mux (
+    input  logic functional_in,
+    input  logic test_in,
+    input  logic select_in,
+    output logic clk_out
+);
+    assign clk_out = select_in ? test_in : functional_in;
+endmodule
+
+module clk_occ (
+    input  logic source_in,
+    input  logic enable_in,
+    input  logic clk,
+    input  logic rst_n,
+    output logic clk_out
+);
+    // clk/rst_n are intentionally excluded from CRG cone expansion. source_in
+    // and enable_in remain the structural upstream inputs requested by users.
+    assign clk_out = rst_n && enable_in ? source_in : 1'b0;
+endmodule
+
 module rs_pipe #(
     parameter logic RS_CRG_EN = 1'b1,
     parameter logic WIDTH = 1'b1,
@@ -70,7 +91,9 @@ module tile (
     output logic ctrl_out
 );
     logic clk_rs;
+    logic clk_core;
     logic clk_aux;
+    logic clk_muxed;
     logic stage_0;
     logic stage_1;
     logic stage_2;
@@ -81,12 +104,29 @@ module tile (
 
     crg_core u_crg (
         .ref_clk (ref_clk),
-        .clk_out (clk_rs)
+        .clk_out (clk_core)
     );
 
     crg_aux u_aux_crg (
         .ref_clk (ref_clk),
         .clk_out (clk_aux)
+    );
+
+    // The positive CRG trace is deliberately multi-level and branched:
+    // RS -> u_occ -> u_clk_mux -> {u_crg, u_aux_crg}.
+    clk_mux u_clk_mux (
+        .functional_in (clk_core),
+        .test_in       (clk_aux),
+        .select_in     (data_in),
+        .clk_out       (clk_muxed)
+    );
+
+    clk_occ u_occ (
+        .source_in (clk_muxed),
+        .enable_in (1'b1),
+        .clk       (ref_clk),
+        .rst_n     (rst_n),
+        .clk_out   (clk_rs)
     );
 
     rs_pipe #(

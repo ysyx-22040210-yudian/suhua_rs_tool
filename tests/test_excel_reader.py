@@ -332,12 +332,17 @@ class ExcelReaderTests(unittest.TestCase):
                 if descendant.tag.rsplit("}", 1)[-1] in {"t", "v"}
             )
 
-        self.assertIn("当前不参与 PASS/FAIL 判定", guide_values["F13"])
         self.assertIn("config.crg_source_mappings", guide_values["F13"])
         self.assertIn("完整 RTL 路径", guide_values["F13"])
-        self.assertIn("不产生 CRG finding", guide_values["G13"])
+        self.assertIn("RS clk formal", guide_values["F13"])
+        self.assertIn("所有 input 有界递归追踪", guide_values["F13"])
+        self.assertIn("精确排除 clk、rst_n", guide_values["F13"])
+        self.assertIn("完整实例层次路径", guide_values["F13"])
         self.assertIn("GUI CRG Source映射库", guide_values["G13"])
         self.assertIn("未命中时按完整路径使用", guide_values["G13"])
+        self.assertIn("rtl.crg_trace_max_depth", guide_values["G13"])
+        self.assertIn("产生 CRG warning", guide_values["G13"])
+        self.assertIn("不改变该行其他检查的 PASS/FAIL", guide_values["G13"])
         self.assertEqual(guide_values["C14"], "可选 / 文本")
         self.assertEqual(
             guide_values["D14"], "RS_CRG_EN 门控参数的兼容标签字段"

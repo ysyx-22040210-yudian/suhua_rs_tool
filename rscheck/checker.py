@@ -6,15 +6,19 @@ from typing import Iterable, Mapping
 from .model import (
     ActualInstance,
     CheckReport,
+    ClockTraceNode,
     ConfigError,
+    CrgTraceEvaluation,
     Finding,
     InstanceStepEvaluation,
     Inventory,
+    MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     ParameterEvaluation,
     RowResult,
     RtlConfig,
     SpecRow,
+    resolve_module_rule,
 )
 
 
@@ -366,6 +370,126 @@ def _check_ports(
     return findings
 
 
+def _evaluate_crg_trace(
+    spec: SpecRow,
+    instance: ActualInstance,
+    config: RtlConfig,
+    rule: ModuleRule,
+    inventory_schema_version: int,
+) -> tuple[CrgTraceEvaluation, Finding | None]:
+    expected = spec.crg_source.strip(".")
+    matched: ClockTraceNode | None = None
+    trace_status = "unavailable"
+    diagnostics: tuple[str, ...] = ()
+    modules: tuple[ClockTraceNode, ...] = ()
+    status = "unavailable"
+
+    if inventory_schema_version == 2:
+        for source in instance.clk_sources:
+            source_name = source.instance.strip(".")
+            if source_name == expected and source.module:
+                matched = ClockTraceNode(
+                    instance=source_name,
+                    module=source.module,
+                    depth=1,
+                    path=(source_name,),
+                )
+                break
+        trace_status = "legacy"
+    elif instance.clock_trace is None:
+        diagnostics = ("schema_version 3 instance has no requested clock trace",)
+    elif instance.clock_trace.clock_port != rule.clk_port:
+        trace_status = instance.clock_trace.status
+        diagnostics = (
+            f"inventory traced formal port {instance.clock_trace.clock_port!r}, "
+            f"but module rule requires {rule.clk_port!r}",
+            *instance.clock_trace.diagnostics,
+        )
+    else:
+        trace = instance.clock_trace
+        trace_status = trace.status
+        diagnostics = trace.diagnostics
+        modules = tuple(
+            module
+            for module in trace.modules
+            if module.depth <= config.crg_trace_max_depth
+        )
+        matched = next(
+            (
+                module
+                for module in sorted(
+                    modules,
+                    key=lambda item: (item.depth, item.instance, item.module, item.path),
+                )
+                if module.instance.strip(".") == expected
+            ),
+            None,
+        )
+        if matched is None:
+            configured_limit_truncated = any(
+                module.depth > config.crg_trace_max_depth
+                for module in trace.modules
+            )
+            if trace.status == "unresolved":
+                status = "unavailable"
+            elif (
+                trace.status == "depth_limited"
+                or configured_limit_truncated
+            ):
+                status = "depth_limited"
+            else:
+                status = "not_found"
+
+    if matched is not None:
+        status = "matched"
+
+    evaluation = CrgTraceEvaluation(
+        instance=instance.full_name,
+        clock_port=rule.clk_port,
+        expected=expected,
+        max_depth=config.crg_trace_max_depth,
+        status=status,
+        trace_status=trace_status,
+        matched=matched,
+        diagnostics=diagnostics,
+    )
+    if status == "matched":
+        return evaluation, None
+
+    if status == "not_found":
+        code = "CRG_SOURCE_NOT_FOUND"
+        message = (
+            f"{instance.full_name}: CRG_source was not found in the complete "
+            "upstream clock trace"
+        )
+    elif status == "depth_limited":
+        code = "CRG_TRACE_DEPTH_LIMIT"
+        message = (
+            f"{instance.full_name}: CRG_source was not found before the "
+            f"configured trace depth {config.crg_trace_max_depth}"
+        )
+    else:
+        code = "CRG_TRACE_UNAVAILABLE"
+        message = (
+            f"{instance.full_name}: upstream clock trace evidence is unavailable"
+        )
+    return evaluation, _row_finding(
+        spec,
+        code,
+        message,
+        severity="warning",
+        instance=instance.full_name,
+        expected=expected,
+        actual={
+            "clock_port": rule.clk_port,
+            "configured_max_depth": config.crg_trace_max_depth,
+            "trace_status": trace_status,
+            "reachable_modules": [module.as_dict() for module in modules],
+            "diagnostics": list(diagnostics),
+        },
+    )
+
+
 def _check_row(
     spec: SpecRow,
     inventory: Inventory,
@@ -374,15 +498,7 @@ def _check_row(
     suffix: re.Pattern[str],
 ) -> RowResult:
     findings: list[Finding] = []
-    rule = module_rules.get(spec.rs_module)
-    if rule is None:
-        rule = ModuleRule(
-            name=spec.rs_module,
-            has_rs_cfg_en=True,
-            step_parameters=(),
-            clk_port="clk",
-            rst_port="rst_n",
-        )
+    rule = resolve_module_rule(spec.rs_module, module_rules)
     findings.extend(_check_rs_cfg_en_label(spec, rule))
 
     position = inventory.positions.get(spec.position)
@@ -460,6 +576,7 @@ def _check_row(
             )
 
     step_evaluations: list[InstanceStepEvaluation] = []
+    crg_evaluations: list[CrgTraceEvaluation] = []
     for instance in matched_instances:
         module_matches = instance.module == spec.rs_module
         if not module_matches:
@@ -486,6 +603,16 @@ def _check_row(
             step_evaluations.append(evaluation)
             findings.extend(step_findings)
             findings.extend(_check_ports(spec, instance, config, rule))
+        crg_evaluation, crg_finding = _evaluate_crg_trace(
+            spec,
+            instance,
+            config,
+            rule,
+            inventory.schema_version,
+        )
+        crg_evaluations.append(crg_evaluation)
+        if crg_finding is not None:
+            findings.append(crg_finding)
 
     if matched_instances:
         contributions = [item.contribution for item in step_evaluations]
@@ -537,6 +664,7 @@ def _check_row(
         findings=tuple(findings),
         module_rule=rule,
         step_evaluations=tuple(step_evaluations),
+        crg_evaluations=tuple(crg_evaluations),
     )
 
 
@@ -547,6 +675,14 @@ def check_specs(
     module_rules: Mapping[str, ModuleRule],
 ) -> CheckReport:
     spec_list = list(specs)
+    if (
+        type(config.crg_trace_max_depth) is not int
+        or not 1 <= config.crg_trace_max_depth <= MAX_CRG_TRACE_DEPTH
+    ):
+        raise ConfigError(
+            "rtl.crg_trace_max_depth must be an integer between 1 and "
+            f"{MAX_CRG_TRACE_DEPTH}"
+        )
     try:
         suffix = re.compile(rf"^(?:{config.suffix_regex})$")
     except re.error as exc:

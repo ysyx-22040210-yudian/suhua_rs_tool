@@ -85,6 +85,7 @@ GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
 GUI_RS_CFG_DONTCARE_ITERATIONS="${GUI_RS_CFG_DONTCARE_ITERATIONS:-20}"
 GUI_RS_CFG_NA_ITERATIONS="${GUI_RS_CFG_NA_ITERATIONS:-20}"
 GUI_CRG_SOURCE_MAPPING_ITERATIONS="${GUI_CRG_SOURCE_MAPPING_ITERATIONS:-20}"
+GUI_CRG_TRACE_DEPTH_ITERATIONS="${GUI_CRG_TRACE_DEPTH_ITERATIONS:-20}"
 GUI_STRESS_ITERATIONS="${GUI_STRESS_ITERATIONS:-100}"
 GUI_LOAD_ROWS="${GUI_LOAD_ROWS:-10000}"
 GUI_VISIBLE_SECONDS="${GUI_VISIBLE_SECONDS:-2}"
@@ -257,6 +258,111 @@ assert_no_unexpected_collector_logs() {
   [ "$failed" -eq 0 ] || fail "unexpected collector/NPI fatal or error log found"
 }
 
+write_sample_trace_rules() {
+  local output_path=$1
+  printf 'rs_pipe\tclk\nrs_custom\tclock_i\nrs_clk_only\tclk\n' >"$output_path"
+}
+
+assert_sample_clock_traces() {
+  local inventory_path=$1
+  local inventory_label=$2
+  "$PYTHON_BIN" - "$inventory_path" "$inventory_label" <<'PY'
+import json
+import sys
+
+inventory_path, inventory_label = sys.argv[1:]
+with open(inventory_path, "r", encoding="utf-8") as stream:
+    inventory = json.load(stream)
+
+if inventory.get("schema_version") != 3:
+    raise SystemExit(
+        "{} inventory schema is not v3: {!r}".format(
+            inventory_label, inventory.get("schema_version")
+        )
+    )
+position = inventory.get("positions", {}).get("top.u_tile", {})
+if position.get("found") is not True:
+    raise SystemExit("{} inventory did not find top.u_tile".format(inventory_label))
+instances = {
+    instance.get("name"): instance
+    for instance in position.get("instances", [])
+    if isinstance(instance, dict)
+}
+
+occ = "top.u_tile.u_occ"
+mux = "top.u_tile.u_clk_mux"
+core = "top.u_tile.u_crg"
+aux = "top.u_tile.u_aux_crg"
+branched_nodes = {
+    (occ, "clk_occ", 1, (occ,)),
+    (mux, "clk_mux", 2, (occ, mux)),
+    (core, "crg_core", 3, (occ, mux, core)),
+    (aux, "crg_aux", 3, (occ, mux, aux)),
+}
+direct_aux_nodes = {(aux, "crg_aux", 1, (aux,))}
+
+
+def assert_trace(instance_name, clock_port, expected_nodes, expected_status):
+    instance = instances.get(instance_name)
+    if not isinstance(instance, dict):
+        raise SystemExit(
+            "{} inventory is missing instance {}".format(
+                inventory_label, instance_name
+            )
+        )
+    trace = instance.get("clock_trace")
+    if not isinstance(trace, dict):
+        raise SystemExit(
+            "{} {} has no clock_trace object: {!r}".format(
+                inventory_label, instance_name, trace
+            )
+        )
+    actual_nodes = {
+        (
+            node.get("instance"),
+            node.get("module"),
+            node.get("depth"),
+            tuple(node.get("path", [])),
+        )
+        for node in trace.get("modules", [])
+        if isinstance(node, dict)
+    }
+    expected_sources = {(node[0], node[1]) for node in expected_nodes}
+    actual_sources = {
+        (source.get("instance"), source.get("module"))
+        for source in instance.get("clk_sources", [])
+        if isinstance(source, dict)
+    }
+    if (
+        trace.get("clock_port") != clock_port
+        or trace.get("max_depth") != 16
+        or trace.get("excluded_inputs") != ["clk", "rst_n"]
+        or trace.get("status") != expected_status
+        or trace.get("diagnostics") != []
+        or actual_nodes != expected_nodes
+        or actual_sources != expected_sources
+    ):
+        raise SystemExit(
+            "{} {} clock trace mismatch: {!r}".format(
+                inventory_label, instance_name, trace
+            )
+        )
+
+
+for name in ["AAAA_BBB_C{}".format(index) for index in range(6)]:
+    assert_trace(name, "clk", branched_nodes, "complete")
+assert_trace("CUSTOM_RS", "clock_i", branched_nodes, "complete")
+assert_trace("CLK_ONLY_RS", "clk", branched_nodes, "complete")
+assert_trace("CTRL_RS_D0", "clk", direct_aux_nodes, "complete")
+print(
+    "{} NPI clock trace evidence OK: "
+    "RS->u_occ->u_clk_mux->{{u_crg,u_aux_crg}}, custom clock_i, witness-depth=3".format(
+        inventory_label
+    )
+)
+PY
+}
+
 assert_verdi_still_ready() {
   local -a pids=()
   mapfile -t pids < <(verdi_pids_for_elab_db)
@@ -316,6 +422,7 @@ for numeric_setting in \
   "$GUI_RS_CFG_DONTCARE_ITERATIONS" \
   "$GUI_RS_CFG_NA_ITERATIONS" \
   "$GUI_CRG_SOURCE_MAPPING_ITERATIONS" \
+  "$GUI_CRG_TRACE_DEPTH_ITERATIONS" \
   "$GUI_STRESS_ITERATIONS" \
   "$GUI_LOAD_ROWS" \
   "$GUI_VISIBLE_SECONDS"; do
@@ -334,6 +441,8 @@ done
   fail "GUI_RS_CFG_NA_ITERATIONS must be greater than zero"
 [ "$GUI_CRG_SOURCE_MAPPING_ITERATIONS" -gt 0 ] ||
   fail "GUI_CRG_SOURCE_MAPPING_ITERATIONS must be greater than zero"
+[ "$GUI_CRG_TRACE_DEPTH_ITERATIONS" -gt 0 ] ||
+  fail "GUI_CRG_TRACE_DEPTH_ITERATIONS must be greater than zero"
 [ "$GUI_STRESS_ITERATIONS" -gt 0 ] || fail "GUI_STRESS_ITERATIONS must be greater than zero"
 [ "$GUI_LOAD_ROWS" -gt 0 ] || fail "GUI_LOAD_ROWS must be greater than zero"
 
@@ -491,6 +600,7 @@ fi
 PARTIAL_ELAB_ROOT="$TEST_ROOT/partial_load_elab"
 PARTIAL_ELAB_DB="$PARTIAL_ELAB_ROOT/partial.elab++"
 PARTIAL_POSITIONS="$TEST_ROOT/partial_load_positions.txt"
+PARTIAL_TRACE_RULES="$TEST_ROOT/partial_load_trace_rules.tsv"
 PARTIAL_INVENTORY="$TEST_ROOT/partial_load_inventory.json"
 PARTIAL_REPORT="$TEST_ROOT/partial_load_report.json"
 PARTIAL_STDOUT="$TEST_ROOT/partial_load.stdout"
@@ -505,12 +615,15 @@ cd "$PARTIAL_ELAB_ROOT"
 "$ELABCOM_BIN" -top top -elab "$PARTIAL_ELAB_DB"
 [ -d "$PARTIAL_ELAB_DB" ] || fail "partial-load elabcom did not create a KDB"
 printf 'top.u_tile\n' >"$PARTIAL_POSITIONS"
+write_sample_trace_rules "$PARTIAL_TRACE_RULES"
 
 set +e
 LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$COLLECTOR" \
     --positions "$PARTIAL_POSITIONS" \
     --output "$PARTIAL_INVENTORY" \
+    --trace-rules "$PARTIAL_TRACE_RULES" \
+    --trace-max-depth 16 \
     --clk-port clk \
     --rst-port rst \
     --elab-db "$PARTIAL_ELAB_DB" \
@@ -522,6 +635,7 @@ cat "$PARTIAL_STDERR"
 [ "$PARTIAL_COLLECTOR_RC" -eq 0 ] ||
   fail "collector rejected a partial KDB whose top remains queryable"
 grep -Fq 'warning[NPI_LOAD_PARTIAL]' "$PARTIAL_STDERR"
+assert_sample_clock_traces "$PARTIAL_INVENTORY" "partial-load"
 
 "$PYTHON_BIN" - "$PARTIAL_INVENTORY" <<'PY'
 import json
@@ -571,14 +685,8 @@ for instance in position.get("instances", []):
                 instance.get("full_name"), ports
             )
         )
-    if instance.get("clk_sources") != []:
-        raise SystemExit(
-            "clock-source tracing must be disabled for {}: {!r}".format(
-                instance.get("full_name"), instance.get("clk_sources")
-            )
-        )
 print("partial NPI load evidence OK: load reported errors but requested RTL remained queryable")
-print("partial NPI formal-port L0/L1 inventory evidence OK; clock-source tracing disabled")
+print("partial NPI formal-port L0/L1 inventory evidence OK")
 print("partial clk-present/rst-absent evidence OK: CLK_ONLY_RS ports=clk,d,q")
 PY
 
@@ -602,6 +710,8 @@ import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as stream:
     report = json.load(stream)
+if report.get("schema_version") != 4:
+    raise SystemExit("partial-load report schema is not v4")
 if report.get("summary") != {
     "passed": True,
     "rows": 2,
@@ -614,6 +724,11 @@ if report.get("summary") != {
 findings = report.get("global_findings", [])
 if len(findings) != 1 or findings[0].get("code") != "NPI_LOAD_PARTIAL":
     raise SystemExit("partial-load report warning is missing: {!r}".format(findings))
+if any(
+    row.get("crg_source_check", {}).get("status") != "pass"
+    for row in report.get("rows", [])
+):
+    raise SystemExit("partial-load CRG recursion did not pass")
 PY
 
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -632,7 +747,7 @@ grep -Fq \
   "$PARTIAL_GUI_LOG"
 grep -Fq 'notice=NPI_LOAD_PARTIAL' "$PARTIAL_GUI_LOG"
 grep -Fq 'contract=elab-only' "$PARTIAL_GUI_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$PARTIAL_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$PARTIAL_GUI_LOG"
 assert_no_collector_errors "$PARTIAL_GUI_LOG"
 
 ELAB_ROOT="$TEST_ROOT/example_elab"
@@ -700,10 +815,29 @@ echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
 printf '%s\n' "$VERDI_WINDOWS"
 
 cd "$PROJECT_ROOT"
+CLEAN_POSITIONS="$TEST_ROOT/clean_load_positions.txt"
+CLEAN_TRACE_RULES="$TEST_ROOT/clean_load_trace_rules.tsv"
+CLEAN_INVENTORY="$TEST_ROOT/clean_load_inventory.json"
+CLEAN_COLLECTOR_LOG="$TEST_ROOT/clean_load_collector.log"
 POS_INVENTORY="$TEST_ROOT/positive_inventory.json"
 POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
 POS_LOG="$TEST_ROOT/positive_console.log"
+
+printf 'top.u_tile\n' >"$CLEAN_POSITIONS"
+write_sample_trace_rules "$CLEAN_TRACE_RULES"
+LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$COLLECTOR" \
+    --positions "$CLEAN_POSITIONS" \
+    --output "$CLEAN_INVENTORY" \
+    --trace-rules "$CLEAN_TRACE_RULES" \
+    --trace-max-depth 16 \
+    --clk-port clk \
+    --rst-port rst \
+    --elab-db "$ELAB_DB" \
+    2>&1 | tee "$CLEAN_COLLECTOR_LOG"
+assert_no_collector_errors "$CLEAN_COLLECTOR_LOG"
+assert_sample_clock_traces "$CLEAN_INVENTORY" "clean-load"
 
 "$PYTHON_BIN" - \
   "$PROJECT_ROOT/examples/specs.csv" \
@@ -765,6 +899,7 @@ PY
   --elab-db "$ELAB_DB" \
   --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout "$NPI_TIMEOUT" \
+  --crg-trace-max-depth 3 \
   --keep-inventory "$POS_INVENTORY" \
   --json-report "$POS_REPORT" \
   --csv-report "$POS_CSV" \
@@ -774,6 +909,7 @@ PY
 [ -s "$POS_REPORT" ] || fail "positive JSON report was not written"
 [ -s "$POS_CSV" ] || fail "positive CSV report was not written"
 grep -Fq 'RESULT: PASS | rows=2 errors=0 warnings=0' "$POS_LOG"
+grep -Fq 'CRG_trace=PASS' "$POS_LOG"
 assert_no_collector_errors "$POS_LOG"
 
 "$PYTHON_BIN" - "$POS_REPORT" "$POS_INVENTORY" "$POS_CSV" <<'PY'
@@ -788,9 +924,9 @@ with open(sys.argv[2], "r", encoding="utf-8") as stream:
 with open(sys.argv[3], "r", encoding="utf-8-sig", newline="") as stream:
     csv_rows = list(csv.DictReader(stream))
 
-if report.get("schema_version") != 3:
+if report.get("schema_version") != 4:
     raise SystemExit("unexpected report schema: {!r}".format(report.get("schema_version")))
-if inventory.get("schema_version") != 2:
+if inventory.get("schema_version") != 3:
     raise SystemExit(
         "unexpected inventory schema: {!r}".format(inventory.get("schema_version"))
     )
@@ -844,12 +980,6 @@ for instance in instances.values():
                 instance.get("full_name"), ports
             )
         )
-    if instance.get("clk_sources") != []:
-        raise SystemExit(
-            "clock-source tracing must be disabled for {}: {!r}".format(
-                instance.get("full_name"), instance.get("clk_sources")
-            )
-        )
 expected_group_names = ["AAAA_BBB_C{}".format(index) for index in range(6)]
 actual_group_names = sorted(
     name for name in instances if name.startswith("AAAA_BBB_C")
@@ -860,6 +990,50 @@ if actual_group_names != expected_group_names:
             expected_group_names, actual_group_names
         )
     )
+
+occ = "top.u_tile.u_occ"
+mux = "top.u_tile.u_clk_mux"
+core = "top.u_tile.u_crg"
+aux = "top.u_tile.u_aux_crg"
+branched_nodes = {
+    (occ, "clk_occ", 1, (occ,)),
+    (mux, "clk_mux", 2, (occ, mux)),
+    (core, "crg_core", 3, (occ, mux, core)),
+    (aux, "crg_aux", 3, (occ, mux, aux)),
+}
+for name in expected_group_names:
+    trace = instances[name].get("clock_trace")
+    actual_nodes = {
+        (
+            node.get("instance"),
+            node.get("module"),
+            node.get("depth"),
+            tuple(node.get("path", [])),
+        )
+        for node in trace.get("modules", [])
+        if isinstance(node, dict)
+    } if isinstance(trace, dict) else set()
+    if (
+        not isinstance(trace, dict)
+        or trace.get("clock_port") != "clk"
+        or trace.get("max_depth") != 3
+        or trace.get("excluded_inputs") != ["clk", "rst_n"]
+        or trace.get("status") != "depth_limited"
+        or trace.get("diagnostics") != []
+        or actual_nodes != branched_nodes
+    ):
+        raise SystemExit("{} has incomplete branched clock trace: {!r}".format(name, trace))
+
+control_trace = instances["CTRL_RS_D0"].get("clock_trace")
+if (
+    not isinstance(control_trace, dict)
+    or control_trace.get("clock_port") != "clk"
+    or control_trace.get("max_depth") != 3
+    or control_trace.get("status") != "complete"
+    or control_trace.get("modules")
+    != [{"instance": aux, "module": "crg_aux", "depth": 1, "path": [aux]}]
+):
+    raise SystemExit("CTRL_RS_D0 direct CRG trace mismatch: {!r}".format(control_trace))
 
 expected_rs_modes = {
     name: ("0" if name == "AAAA_BBB_C2" else "1")
@@ -987,9 +1161,80 @@ if not isinstance(control_step, dict) or (
     control_step.get("effective_step"),
 ) != (1, 1, 1):
     raise SystemExit("unexpected CTRL_RS_D0 step evidence: {!r}".format(control_step))
+
+
+def assert_crg_report(row, expected, expected_instances, matched_module, depth, path, trace_status):
+    check = row.get("crg_source_check")
+    evaluations = check.get("instances", []) if isinstance(check, dict) else []
+    if (
+        not isinstance(check, dict)
+        or check.get("expected") != expected
+        or check.get("status") != "pass"
+        or len(evaluations) != len(expected_instances)
+        or {item.get("instance") for item in evaluations} != expected_instances
+        or any(
+            not isinstance(item, dict)
+            or item.get("clock_port") != "clk"
+            or item.get("expected") != expected
+            or item.get("max_depth") != 3
+            or item.get("status") != "matched"
+            or item.get("trace_status") != trace_status
+            or item.get("diagnostics") != []
+            or item.get("matched")
+            != {
+                "instance": expected,
+                "module": matched_module,
+                "depth": depth,
+                "path": path,
+            }
+            for item in evaluations
+        )
+    ):
+        raise SystemExit("CRG_source report evidence mismatch: {!r}".format(check))
+
+
+assert_crg_report(
+    group_row,
+    core,
+    {"top.u_tile.{}".format(name) for name in expected_group_names},
+    "crg_core",
+    3,
+    [occ, mux, core],
+    "depth_limited",
+)
+assert_crg_report(
+    control_row,
+    aux,
+    {"top.u_tile.CTRL_RS_D0"},
+    "crg_aux",
+    1,
+    [aux],
+    "complete",
+)
+if any(row.get("findings") != [] for row in report["rows"]):
+    raise SystemExit("positive CRG trace unexpectedly emitted findings")
+
+csv_by_group = {row.get("RS_inst"): row for row in csv_rows}
+if set(csv_by_group) != {"AAAA_BBB", "CTRL_RS_D0"}:
+    raise SystemExit("unexpected positive CSV rows: {!r}".format(csv_rows))
+for group, expected_evaluations in (("AAAA_BBB", 6), ("CTRL_RS_D0", 1)):
+    csv_row = csv_by_group[group]
+    try:
+        evidence = json.loads(csv_row.get("crg_trace_evidence", ""))
+    except json.JSONDecodeError as exc:
+        raise SystemExit("invalid CRG trace CSV evidence: {}".format(exc))
+    if (
+        csv_row.get("crg_trace_status") != "pass"
+        or csv_row.get("crg_trace_max_depth") != "3"
+        or not isinstance(evidence, list)
+        or len(evidence) != expected_evaluations
+        or any(item.get("status") != "matched" for item in evidence)
+    ):
+        raise SystemExit("positive CSV CRG trace mismatch: {!r}".format(csv_row))
 print("positive summary OK:", summary)
 print("position mapping evidence OK: tile_core -> top.u_tile; NPI full paths only")
 print("dynamic step inventory/report evidence OK")
+print("CRG recursion evidence OK: depth=3, branched path accepts exact full-path match")
 PY
 
 CUSTOM_PORT_SPEC="$TEST_ROOT/custom_port_specs.csv"
@@ -1041,10 +1286,11 @@ PY
 "$PYTHON_BIN" -m rscheck check \
   --excel "$CUSTOM_PORT_SPEC" \
   --config "$CUSTOM_PORT_CONFIG" \
-  --inventory "$POS_INVENTORY" \
+  --inventory "$CLEAN_INVENTORY" \
   --json-report "$CUSTOM_PORT_REPORT" \
   2>&1 | tee "$CUSTOM_PORT_LOG"
-grep -Fq 'RESULT: PASS | rows=1 errors=0 warnings=0' "$CUSTOM_PORT_LOG"
+grep -Fq 'RESULT: PASS | rows=1 errors=0 warnings=1' "$CUSTOM_PORT_LOG"
+grep -Fq '[WARNING] row' "$CUSTOM_PORT_LOG"
 
 "$PYTHON_BIN" - "$CUSTOM_PORT_REPORT" <<'PY'
 import json
@@ -1071,15 +1317,31 @@ if len(instances) != 1 or instances[0].get("name") != "CUSTOM_RS":
 ports = instances[0].get("ports", {})
 if set(ports) != {"clock_i", "reset_ni", "d", "q"}:
     raise SystemExit("custom formal ports are incomplete: {!r}".format(ports))
+findings = row.get("findings", [])
 codes = {
     finding.get("code")
-    for finding in row.get("findings", [])
+    for finding in findings
     if isinstance(finding, dict)
 }
-if any(code.startswith("CRG_SOURCE_") for code in codes if isinstance(code, str)):
-    raise SystemExit("CRG_source unexpectedly affected the result: {!r}".format(codes))
+crg_check = row.get("crg_source_check", {})
+evaluations = crg_check.get("instances", []) if isinstance(crg_check, dict) else []
+if (
+    report.get("schema_version") != 4
+    or report.get("summary", {}).get("warnings") != 1
+    or codes != {"CRG_SOURCE_NOT_FOUND"}
+    or len(findings) != 1
+    or findings[0].get("severity") != "warning"
+    or crg_check.get("status") != "warning"
+    or len(evaluations) != 1
+    or evaluations[0].get("clock_port") != "clock_i"
+    or evaluations[0].get("status") != "not_found"
+    or evaluations[0].get("trace_status") != "complete"
+    or evaluations[0].get("max_depth") != 16
+    or evaluations[0].get("matched") is not None
+):
+    raise SystemExit("custom CRG warning evidence mismatch: {!r}".format(row))
 print("custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni")
-print("CRG_source evidence retained without PASS/FAIL validation")
+print("custom clock_i trace warning evidence OK: CRG_SOURCE_NOT_FOUND")
 PY
 
 CLK_ONLY_SPEC="$TEST_ROOT/clk_present_rst_missing_specs.csv"
@@ -1119,7 +1381,7 @@ with open(sys.argv[3], "w", encoding="utf-8", newline="") as stream:
             1,
             "clk_rs",
             "rst_n",
-            "not_checked",
+            "crg_core",
             "假门控",
         ]
     )
@@ -1131,7 +1393,7 @@ PY
 if "$PYTHON_BIN" -m rscheck check \
   --excel "$CLK_ONLY_SPEC" \
   --config "$CLK_ONLY_CONFIG" \
-  --inventory "$POS_INVENTORY" \
+  --inventory "$CLEAN_INVENTORY" \
   --json-report "$CLK_ONLY_REPORT" \
   2>&1 | tee "$CLK_ONLY_LOG"; then
   CLK_ONLY_CHECK_RC=0
@@ -1177,6 +1439,17 @@ findings = row.get("findings", [])
 codes = [item.get("code") for item in findings if isinstance(item, dict)]
 if codes != ["RST_PORT_MISSING"]:
     raise SystemExit("expected only RST_PORT_MISSING, got {!r}".format(codes))
+crg_check = row.get("crg_source_check", {})
+evaluations = crg_check.get("instances", []) if isinstance(crg_check, dict) else []
+if (
+    crg_check.get("status") != "pass"
+    or crg_check.get("expected") != "top.u_tile.u_crg"
+    or len(evaluations) != 1
+    or evaluations[0].get("status") != "matched"
+    or evaluations[0].get("matched", {}).get("path")
+    != ["top.u_tile.u_occ", "top.u_tile.u_clk_mux", "top.u_tile.u_crg"]
+):
+    raise SystemExit("clk-only CRG trace must pass independently: {!r}".format(crg_check))
 instances = row.get("matched_instances", [])
 if len(instances) != 1 or instances[0].get("name") != "CLK_ONLY_RS":
     raise SystemExit("clk-only instance match failed: {!r}".format(instances))
@@ -1196,6 +1469,7 @@ if (
     raise SystemExit("clk-only step evidence mismatch: {!r}".format(step_check))
 print("clk-present/rst-missing CLI evidence OK: ports=clk,d,q")
 print("finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent")
+print("clk-present/rst-missing CRG trace evidence OK: pass with no warning")
 PY
 
 ONLINE_GUI_LOG="$TEST_ROOT/online_gui_positive.log"
@@ -1213,11 +1487,33 @@ grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=$GUI_ONLINE_ITERATIONS" \
   "$ONLINE_GUI_LOG"
 grep -Fq 'contract=elab-only' "$ONLINE_GUI_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$ONLINE_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$ONLINE_GUI_LOG"
 grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$ONLINE_GUI_LOG"
 assert_no_collector_errors "$ONLINE_GUI_LOG"
+
+CRG_TRACE_DEPTH_LOG="$TEST_ROOT/online_gui_crg_trace_depth_limit.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout "$NPI_TIMEOUT" \
+  --crg-depth-limit \
+  --iterations "$GUI_CRG_TRACE_DEPTH_ITERATIONS" \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$CRG_TRACE_DEPTH_LOG"
+grep -Fq \
+  "state=PASS rows=行数 2 errors=错误 0 warnings=警告 6 mode=online case=crg-depth-limit iterations=$GUI_CRG_TRACE_DEPTH_ITERATIONS" \
+  "$CRG_TRACE_DEPTH_LOG"
+grep -Fq 'contract=elab-only' "$CRG_TRACE_DEPTH_LOG"
+grep -Fq \
+  'crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6' \
+  "$CRG_TRACE_DEPTH_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$CRG_TRACE_DEPTH_LOG"
+assert_no_collector_errors "$CRG_TRACE_DEPTH_LOG"
 
 CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1232,11 +1528,14 @@ CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
   --visible-seconds "$GUI_VISIBLE_SECONDS" \
   2>&1 | tee "$CUSTOM_PORT_GUI_LOG"
 grep -Fq \
-  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=online case=custom-port iterations=1' \
+  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 1 mode=online case=custom-port iterations=1' \
   "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'contract=elab-only' "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'rule-ports=clock_i/reset_ni' "$CUSTOM_PORT_GUI_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$CUSTOM_PORT_GUI_LOG"
+grep -Fq \
+  'crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND' \
+  "$CUSTOM_PORT_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$CUSTOM_PORT_GUI_LOG"
 assert_no_collector_errors "$CUSTOM_PORT_GUI_LOG"
 
 CLK_WITHOUT_RST_GUI_LOG="$TEST_ROOT/online_gui_clk_present_rst_missing.log"
@@ -1259,9 +1558,12 @@ grep -Fq 'rule-ports=clk/rst_n' "$CLK_WITHOUT_RST_GUI_LOG"
 grep -Fq \
   'clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' \
   "$CLK_WITHOUT_RST_GUI_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$CLK_WITHOUT_RST_GUI_LOG"
 if grep -Fq 'CLK_PORT_MISSING' "$CLK_WITHOUT_RST_GUI_LOG"; then
   fail "online GUI incorrectly reported the existing clk as missing"
+fi
+if grep -Eq 'CRG_(SOURCE_NOT_FOUND|TRACE_DEPTH_LIMIT|TRACE_UNAVAILABLE)' "$CLK_WITHOUT_RST_GUI_LOG"; then
+  fail "online GUI clk-present/rst-missing case emitted a CRG trace warning"
 fi
 assert_no_collector_errors "$CLK_WITHOUT_RST_GUI_LOG"
 
@@ -1281,7 +1583,7 @@ grep -Eq \
   'state=FAIL rows=行数 1 errors=错误 [1-9][0-9]* warnings=警告 0 mode=online case=negative iterations=1' \
   "$ONLINE_NEGATIVE_LOG"
 grep -Fq 'contract=elab-only' "$ONLINE_NEGATIVE_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$ONLINE_NEGATIVE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$ONLINE_NEGATIVE_LOG"
 assert_no_collector_errors "$ONLINE_NEGATIVE_LOG"
 
 DEFAULT_RULE_LOG="$TEST_ROOT/offline_gui_default_rule.log"
@@ -1298,7 +1600,7 @@ grep -Fq \
 grep -Fq \
   'rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' \
   "$DEFAULT_RULE_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$DEFAULT_RULE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$DEFAULT_RULE_LOG"
 
 RS_CFG_DONTCARE_LOG="$TEST_ROOT/offline_gui_rs_cfg_dontcare.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1314,7 +1616,7 @@ grep -Fq \
 grep -Fq \
   'has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none' \
   "$RS_CFG_DONTCARE_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$RS_CFG_DONTCARE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$RS_CFG_DONTCARE_LOG"
 
 RS_CFG_NA_LOG="$TEST_ROOT/offline_gui_rs_cfg_na.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1330,7 +1632,7 @@ grep -Fq \
 grep -Fq \
   'rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' \
   "$RS_CFG_NA_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$RS_CFG_NA_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$RS_CFG_NA_LOG"
 if grep -Eq 'RS_CFG_EN_[A-Z_]+' "$RS_CFG_NA_LOG"; then
   fail "offline GUI RS_CFG_EN=NA case emitted an RS_CFG_EN_* finding"
 fi
@@ -1347,9 +1649,9 @@ grep -Fq \
   "state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=crg-source-mapping iterations=$GUI_CRG_SOURCE_MAPPING_ITERATIONS" \
   "$CRG_SOURCE_MAPPING_LOG"
 grep -Fq \
-  'crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none' \
+  'crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=pass trace-depth=3 findings=none' \
   "$CRG_SOURCE_MAPPING_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$CRG_SOURCE_MAPPING_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$CRG_SOURCE_MAPPING_LOG"
 if grep -Eq 'CRG_SOURCE_[A-Z_]+' "$CRG_SOURCE_MAPPING_LOG"; then
   fail "offline GUI CRG_source mapping case emitted a CRG_SOURCE_* finding"
 fi
@@ -1364,7 +1666,7 @@ OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=$GUI_STRESS_ITERATIONS" \
   "$OFFLINE_STRESS_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_STRESS_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$OFFLINE_STRESS_LOG"
 grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$OFFLINE_STRESS_LOG"
@@ -1381,10 +1683,11 @@ OFFLINE_LOAD_LOG="$TEST_ROOT/offline_gui_10000_rows.log"
 grep -Fq \
   "state=PASS rows=行数 $GUI_LOAD_ROWS errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1" \
   "$OFFLINE_LOAD_LOG"
-grep -Fq 'schemas=report-v3/inventory-v2' "$OFFLINE_LOAD_LOG"
+grep -Fq 'schemas=report-v4/inventory-v3' "$OFFLINE_LOAD_LOG"
 
 for gui_log in \
   "$ONLINE_GUI_LOG" \
+  "$CRG_TRACE_DEPTH_LOG" \
   "$CUSTOM_PORT_GUI_LOG" \
   "$CLK_WITHOUT_RST_GUI_LOG" \
   "$PARTIAL_GUI_LOG" \
@@ -1402,7 +1705,7 @@ for gui_log in \
   grep -Fq 'module-rule-ports=preserved' "$gui_log"
   grep -Fq 'crg-source-db=crud-complete' "$gui_log"
   grep -Fq 'dirty-copy=export-preserved/import-cleared' "$gui_log"
-  grep -Fq 'schemas=report-v3/inventory-v2' "$gui_log"
+  grep -Fq 'schemas=report-v4/inventory-v3' "$gui_log"
 done
 
 assert_no_unexpected_collector_logs
@@ -1415,7 +1718,7 @@ echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$CRG_SOURCE_MAPPING_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CRG_TRACE_DEPTH_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$CRG_SOURCE_MAPPING_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then

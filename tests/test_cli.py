@@ -54,10 +54,11 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             self.assertIn("RESULT: PASS", output.getvalue())
+            self.assertIn("CRG_trace=PASS", output.getvalue())
             self.assertTrue(json_report.is_file())
             self.assertTrue(csv_report.is_file())
             report = json.loads(json_report.read_text("utf-8"))
-            self.assertEqual(report["schema_version"], 3)
+            self.assertEqual(report["schema_version"], 4)
             self.assertTrue(report["summary"]["passed"])
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "假门控")
             self.assertEqual(
@@ -66,6 +67,13 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(report["rows"][0]["step_check"]["physical_instances"], 6)
             self.assertEqual(report["rows"][0]["step_check"]["effective_step"], 5)
+            self.assertEqual(report["rows"][0]["crg_source_check"]["status"], "pass")
+            self.assertEqual(
+                report["rows"][0]["crg_source_check"]["instances"][0][
+                    "trace_status"
+                ],
+                "legacy",
+            )
             self.assertEqual(
                 [
                     item["contribution"]
@@ -79,6 +87,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "假门控")
             self.assertEqual(csv_rows[0]["physical_instances"], "6")
             self.assertEqual(csv_rows[0]["effective_step"], "5")
+            self.assertEqual(csv_rows[0]["crg_trace_status"], "pass")
+            self.assertEqual(csv_rows[0]["crg_trace_max_depth"], "16")
 
     def test_module_without_rs_crg_en_ignores_excel_value_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -136,13 +146,21 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertIn("RESULT: PASS", output.getvalue())
+            self.assertIn("[WARNING] row", output.getvalue())
+            self.assertIn("CRG_trace=WARNING", output.getvalue())
             report = json.loads(json_report.read_text("utf-8"))
             self.assertTrue(report["summary"]["passed"])
-            self.assertEqual(report["rows"][0]["findings"], [])
+            self.assertEqual(
+                {item["code"] for item in report["rows"][0]["findings"]},
+                {"CRG_TRACE_UNAVAILABLE"},
+            )
+            self.assertEqual(
+                report["rows"][0]["crg_source_check"]["status"], "warning"
+            )
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "用户任意填写")
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
                 csv_rows = list(csv.DictReader(stream))
-            self.assertEqual(csv_rows[0]["status"], "PASS")
+            self.assertEqual(csv_rows[0]["status"], "WARNING")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "用户任意填写")
 
     def test_na_skips_rs_crg_en_checks_and_is_preserved_end_to_end(self) -> None:
@@ -195,12 +213,15 @@ class CliTests(unittest.TestCase):
             self.assertIn("RESULT: PASS", output.getvalue())
             report = json.loads(json_report.read_text("utf-8"))
             self.assertTrue(report["summary"]["passed"])
-            self.assertEqual(report["rows"][0]["findings"], [])
+            self.assertEqual(
+                {item["code"] for item in report["rows"][0]["findings"]},
+                {"CRG_TRACE_UNAVAILABLE"},
+            )
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "NA")
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
                 csv_rows = list(csv.DictReader(stream))
-            self.assertEqual(len(csv_rows), 1)
-            self.assertEqual(csv_rows[0]["status"], "PASS")
+            self.assertEqual(len(csv_rows), 6)
+            self.assertEqual(csv_rows[0]["status"], "WARNING")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "NA")
 
     def test_offline_mismatch_reports_effective_step_and_label(self) -> None:
@@ -810,7 +831,11 @@ class CliTests(unittest.TestCase):
             (ROOT / "tests" / "fixtures" / "inventory.json").read_text("utf-8")
         )
         mutations = (
-            ("old_schema", lambda raw: raw.__setitem__("schema_version", 1), "expected 2"),
+            (
+                "old_schema",
+                lambda raw: raw.__setitem__("schema_version", 1),
+                "expected 2 or 3",
+            ),
             (
                 "missing_parameters",
                 lambda raw: raw["positions"]["top.u_tile"]["instances"][0].pop(
@@ -849,6 +874,62 @@ class CliTests(unittest.TestCase):
                     )
         self.assertEqual(code, 0)
         self.assertEqual(collect.call_args[1]["elab_db"], str(elab_db))
+        self.assertEqual(collect.call_args.args[2].crg_trace_max_depth, 16)
+        self.assertIn("rs_pipe", collect.call_args.args[3])
+
+    def test_crg_trace_depth_override_reaches_collector_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            elab_db = directory / "kdb"
+            elab_db.mkdir()
+            report_path = directory / "report.json"
+            inventory = load_inventory(
+                ROOT / "tests" / "fixtures" / "inventory.json"
+            )
+            with patch(
+                "rscheck.cli.collect_inventory", return_value=inventory
+            ) as collect, redirect_stdout(StringIO()):
+                code = main(
+                    self._check_args()
+                    + [
+                        "--collector",
+                        "collector",
+                        "--elab-db",
+                        str(elab_db),
+                        "--crg-trace-max-depth",
+                        "23",
+                        "--json-report",
+                        str(report_path),
+                    ]
+                )
+
+            report = json.loads(report_path.read_text("utf-8"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(collect.call_args.args[2].crg_trace_max_depth, 23)
+        self.assertTrue(
+            all(
+                item["max_depth"] == 23
+                for item in report["rows"][0]["crg_source_check"]["instances"]
+            )
+        )
+
+    def test_crg_trace_depth_override_is_bounded(self) -> None:
+        for depth in (0, 257):
+            with self.subTest(depth=depth):
+                error = StringIO()
+                with redirect_stderr(error):
+                    code = main(
+                        self._check_args()
+                        + [
+                            "--inventory",
+                            str(ROOT / "tests" / "fixtures" / "inventory.json"),
+                            "--crg-trace-max-depth",
+                            str(depth),
+                        ]
+                    )
+                self.assertEqual(code, 2)
+                self.assertIn("between 1 and 256", error.getvalue())
 
     def test_collector_receives_resolved_position_full_path(self) -> None:
         with tempfile.TemporaryDirectory() as name:
