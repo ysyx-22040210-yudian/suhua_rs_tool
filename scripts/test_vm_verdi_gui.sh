@@ -84,6 +84,7 @@ GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
 GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
 GUI_RS_CFG_DONTCARE_ITERATIONS="${GUI_RS_CFG_DONTCARE_ITERATIONS:-20}"
 GUI_RS_CFG_NA_ITERATIONS="${GUI_RS_CFG_NA_ITERATIONS:-20}"
+GUI_CRG_SOURCE_MAPPING_ITERATIONS="${GUI_CRG_SOURCE_MAPPING_ITERATIONS:-20}"
 GUI_STRESS_ITERATIONS="${GUI_STRESS_ITERATIONS:-100}"
 GUI_LOAD_ROWS="${GUI_LOAD_ROWS:-10000}"
 GUI_VISIBLE_SECONDS="${GUI_VISIBLE_SECONDS:-2}"
@@ -314,6 +315,7 @@ for numeric_setting in \
   "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
   "$GUI_RS_CFG_DONTCARE_ITERATIONS" \
   "$GUI_RS_CFG_NA_ITERATIONS" \
+  "$GUI_CRG_SOURCE_MAPPING_ITERATIONS" \
   "$GUI_STRESS_ITERATIONS" \
   "$GUI_LOAD_ROWS" \
   "$GUI_VISIBLE_SECONDS"; do
@@ -330,6 +332,8 @@ done
   fail "GUI_RS_CFG_DONTCARE_ITERATIONS must be greater than zero"
 [ "$GUI_RS_CFG_NA_ITERATIONS" -gt 0 ] ||
   fail "GUI_RS_CFG_NA_ITERATIONS must be greater than zero"
+[ "$GUI_CRG_SOURCE_MAPPING_ITERATIONS" -gt 0 ] ||
+  fail "GUI_CRG_SOURCE_MAPPING_ITERATIONS must be greater than zero"
 [ "$GUI_STRESS_ITERATIONS" -gt 0 ] || fail "GUI_STRESS_ITERATIONS must be greater than zero"
 [ "$GUI_LOAD_ROWS" -gt 0 ] || fail "GUI_LOAD_ROWS must be greater than zero"
 
@@ -1331,6 +1335,25 @@ if grep -Eq 'RS_CFG_EN_[A-Z_]+' "$RS_CFG_NA_LOG"; then
   fail "offline GUI RS_CFG_EN=NA case emitted an RS_CFG_EN_* finding"
 fi
 
+CRG_SOURCE_MAPPING_LOG="$TEST_ROOT/offline_gui_crg_source_mapping.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --crg-source-mapping \
+  --iterations "$GUI_CRG_SOURCE_MAPPING_ITERATIONS" \
+  --visible-tab results \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$CRG_SOURCE_MAPPING_LOG"
+grep -Fq \
+  "state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=crg-source-mapping iterations=$GUI_CRG_SOURCE_MAPPING_ITERATIONS" \
+  "$CRG_SOURCE_MAPPING_LOG"
+grep -Fq \
+  'crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none' \
+  "$CRG_SOURCE_MAPPING_LOG"
+grep -Fq 'schemas=report-v3/inventory-v2' "$CRG_SOURCE_MAPPING_LOG"
+if grep -Eq 'CRG_SOURCE_[A-Z_]+' "$CRG_SOURCE_MAPPING_LOG"; then
+  fail "offline GUI CRG_source mapping case emitted a CRG_SOURCE_* finding"
+fi
+
 OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
   --project-root "$PROJECT_ROOT" \
@@ -1369,13 +1392,16 @@ for gui_log in \
   "$DEFAULT_RULE_LOG" \
   "$RS_CFG_DONTCARE_LOG" \
   "$RS_CFG_NA_LOG" \
+  "$CRG_SOURCE_MAPPING_LOG" \
   "$OFFLINE_STRESS_LOG" \
   "$OFFLINE_LOAD_LOG"; do
   grep -Fq 'header-map=column-index strict-header=false' "$gui_log"
   grep -Fq \
-    'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules' \
+    'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules' \
     "$gui_log"
   grep -Fq 'module-rule-ports=preserved' "$gui_log"
+  grep -Fq 'crg-source-db=crud-complete' "$gui_log"
+  grep -Fq 'dirty-copy=export-preserved/import-cleared' "$gui_log"
   grep -Fq 'schemas=report-v3/inventory-v2' "$gui_log"
 done
 
@@ -1383,13 +1409,13 @@ assert_no_unexpected_collector_logs
 assert_verdi_still_ready
 
 trap - ERR
-echo "PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
+echo "PASS: partial KDB compatibility, arbitrary Excel headers, position/CRG_source mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
 echo "ELAB_DB=$ELAB_DB"
 echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
-echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
+echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$CRG_SOURCE_MAPPING_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)
     if [ "$KEEP_VERDI_GUI" = 1 ]; then

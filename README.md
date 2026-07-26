@@ -6,7 +6,7 @@
 - 同一 `RS_inst` 组（可填写前缀或完整本地例化名）的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
 - 每个实例的模块定义名是否等于 `RS_module`；
 - 每个实例按其 `RS_module` 规则分别选择并独立检查 clk/rst formal port 是否存在、已连接且符合 Excel；一个端口缺失不会抹掉另一个端口的有效证据；
-- `CRG_source` 继续从 Excel 解析并写入报告，但当前暂不参与 PASS/FAIL；
+- Excel `CRG_source` 简写是否能通过可选映射库解析到实际 RTL 全路径；解析结果和 Excel 原值都会写入报告，但当前暂不参与 PASS/FAIL；
 - 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CRG_EN` 和有效拍贡献条件；Excel/internal 字段仍使用兼容键 `RS_CFG_EN` 保存“假门控”标签；
 - 重叠的 `RS_inst` 导致同一实例匹配多个 Excel 组时，明确报错。
 
@@ -72,7 +72,7 @@ python -m rscheck validate \
 
 从 0.6.0 或更早版本复制的配置可能已经显式写入 `"validate_headers": true`；该值会继续启用严格诊断。使用自定义业务表头时请改为 `false`、在 GUI 取消勾选，或在单次 CLI 运行中传 `--no-header-check`。
 
-## Position 映射库
+## Position 与 CRG Source 映射库
 
 Excel 的 `position` 可以填写便于维护的简写，不必重复很长的 RTL hierarchy。可选的 `position_mappings` 数据库保存“Excel 简写 -> RTL 全路径”的对应关系：
 
@@ -106,6 +106,41 @@ python -m rscheck position-db delete \
 ```
 
 `set` 会新增或覆盖同名简写，`delete` 删除简写，`list --json` 和 `resolve --json` 可供脚本消费。数据库修改通过临时文件原子替换写回 `--config` 指定文件，但同一配置文件不支持多个 GUI/CLI 写入者并发合并；维护数据库时应保持单写者，外部修改后先在 GUI 重新加载再继续编辑。需要保留原配置时应先使用项目副本。
+
+Excel 的 `CRG_source` 同样可以使用简写。可选的 `crg_source_mappings` 数据库保存“Excel CRG_source 简写 -> RTL 全路径”；查找区分大小写：
+
+```json
+"crg_source_mappings": {
+  "crg_aux": "top.u_tile.u_aux_crg",
+  "crg_core": "top.u_tile.u_crg"
+}
+```
+
+命中时，内部 `CRG_source` 使用右侧完整路径，report v3/CSV 的 `crg_source_alias` 保留 Excel 原值；未命中时把 Excel 值直接视为完整路径，`crg_source_alias` 为空。该映射仅用于规范化和报告展示：当前不检查 CRG 来源正确性，也不会把 CRG 全路径或简写加入 NPI collector 的 positions 请求。
+
+可以在 GUI 的“CRG Source映射库”页维护，也可以使用对称的 CLI：
+
+```bash
+python -m rscheck crg-source-db set \
+  --config config/rscheck.example.json \
+  --alias core0_crg \
+  --rtl-path tb_top.dut.u_core0.u_crg
+
+python -m rscheck crg-source-db list \
+  --config config/rscheck.example.json \
+  --json
+
+python -m rscheck crg-source-db resolve \
+  --config config/rscheck.example.json \
+  --crg-source core0_crg \
+  --json
+
+python -m rscheck crg-source-db delete \
+  --config config/rscheck.example.json \
+  --alias core0_crg
+```
+
+`crg-source-db` 的 `set/delete` 与 `position-db` 一样原子写回配置并遵守单写者约束；`resolve` 未命中时返回 direct 语义，即完整路径保持输入值、alias 为空。
 
 ## 模块规则库和动态拍数
 
@@ -150,7 +185,7 @@ python -m rscheck position-db delete \
 
 实例的本地名字减去 `RS_inst` 后，空 remainder 直接合法，用于完整名输入；非空 remainder 才必须完整匹配 `rtl.suffix_regex`。例如，`RS_inst=AAAA_BBB` 时 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配；`RS_inst=CTRL_RS_D0` 时，本地实例 `CTRL_RS_D0` 以空后缀匹配。
 
-空后缀实例仍照常检查 `RS_module`、parameters、`step` 贡献和 clk/rst；`CRG_source` 仍进入报告但不参与判定。空后缀实例不参与 suffix tag/index 或连续编号检查。非空后缀成员中，不同 suffix stem 仍属于同一组，只产生 warning；数字是否从 0 连续默认不影响 PASS，需要时把 `require_contiguous_indices` 设为 `true`。
+空后缀实例仍照常检查 `RS_module`、parameters、`step` 贡献和 clk/rst；解析后的完整 `CRG_source` 及可选简称仍进入报告但不参与判定。空后缀实例不参与 suffix tag/index 或连续编号检查。非空后缀成员中，不同 suffix stem 仍属于同一组，只产生 warning；数字是否从 0 连续默认不影响 PASS，需要时把 `require_contiguous_indices` 设为 `true`。
 
 匹配仍保留前缀语义：若同一 scope 同时存在 `PFX` 和 `PFX_C0`，填写 `RS_inst=PFX` 会同时匹配空后缀的 `PFX` 和带后缀的 `PFX_C0`。当前没有 exact-only 模式；需要只检查 `PFX` 时，应避免同 scope 中存在也符合该前缀与 suffix 规则的其他实例，或拆分命名。
 
@@ -162,7 +197,7 @@ Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析�
 
 这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；真实 NPI collector、`libNPI.so`、`libnpiL1.so` 和 elaborated KDB 在线采集只支持 Linux：
 
-当前 `0.9.2` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及两个数据库一起迁移到其他设备。
+当前 `0.10.0` GUI 支持完整配置 JSON 的导入和导出，便于把列映射及三个数据库一起迁移到其他设备。
 
 ```bash
 python -m rscheck gui
@@ -182,11 +217,11 @@ bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”页可搜索、新建、修改、删除简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页以相同方式维护兼容规则键 `has_rs_cfg_en`、逗号分隔的 `step_parameters` 和逐模块 `clk_port/rst_port`。端口输入留空时分别使用 `clk`、`rst_n`。任一数据库存在未保存修改时不能运行检查。
+“检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行，以及九个内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。“Position 映射库”和“CRG Source映射库”页分别维护两种 Excel 简写与 RTL 全路径并原子保存回当前配置 JSON；“模块规则库”页维护兼容规则键 `has_rs_cfg_en`、逗号分隔的 `step_parameters` 和逐模块 `clk_port/rst_port`。端口输入留空时分别使用 `clk`、`rst_n`。任一数据库存在未保存修改时不能运行检查。
 
-“配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules`。导出以当前界面的 Excel 选项和九列列号、已加载配置的完整 `rtl`、两个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
+“配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`crg_source_mappings`、`module_rules`。导出以当前界面的 Excel 选项和九列列号、已加载配置的完整 `rtl`、三个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
 
-“导入”严格要求候选文件包含上述五个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置可省略的根字段。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库和 Position 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后两个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
+“导入”严格要求候选文件包含上述六个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置省略 `position_mappings` 或 `crg_source_mappings` 的情况，其中缺少 `crg_source_mappings` 时按空库处理。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库、Position 映射库和 CRG Source 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后三个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
 
 RTL 数据源可选：
 
@@ -195,7 +230,7 @@ RTL 数据源可选：
 
 在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
 
-“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、解析后的完整 `position`、Excel position 简写、Excel/internal `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`，其中门控参数证据键为 `RS_CRG_EN`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
+“检查结果”页显示 PASS/FAIL、行数、通过/失败数、error/warning 数、解析后的完整 `position` 及 Excel 简写、解析后的完整 `CRG_source` 及 Excel 简写、Excel/internal `RS_CFG_EN` 标签、物理匹配实例数和“实际/期望拍”。选择结果行可查看模块规则、逐实例 parameter 状态与 `0/1/?` 贡献，以及 matched instances 的全部 effective `parameters`，其中门控参数证据键为 `RS_CRG_EN`；选择具体 finding 可查看 expected/actual。“运行日志”页保留实际命令、stdout、stderr 和退出码。
 
 ## 先验证 Excel
 
@@ -220,7 +255,7 @@ python -m rscheck check \
   --csv-report output/rs_report.csv
 ```
 
-CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。每行 `spec.position` 是解析后的完整路径，命中映射时 `spec.position_alias` 保存 Excel 简写，否则为空。report v3 还包含每行最终采用的 `module_rule`（含 `clk_port/rst_port`）、`step_check.physical_instances`、`step_check.effective_step`、逐实例 `contributions`，以及实例、全部 formal ports 和 effective `parameters` 证据。`spec.CRG_source` 仍原样保留，但不参与当前 PASS/FAIL；新 collector 停用 clock source trace，因此在线新采 inventory 的 `clk_sources` 固定为 `[]`。CSV 同步包含 `position_alias`、`physical_instances`、`effective_step` 与 `step_contributions`。inventory 的 `warnings` 表示其余 NPI traversal 证据不完整，会转换为硬错误；可选 `notices` 当前用于记录可继续检查的 partial KDB，并在报告中显示非致命 `NPI_LOAD_PARTIAL` warning。
+CSV 报告使用 UTF-8 BOM，可直接用 Excel 打开。NPI inventory 保持 schema v2；当前 JSON report 是 schema v3。每行 `spec.position` 和 `spec.CRG_source` 都保存解析后的完整路径；映射命中时，`spec.position_alias`、`spec.crg_source_alias` 分别保存 Excel 简写，未命中时对应 alias 为空。report v3 还包含每行最终采用的 `module_rule`（含 `clk_port/rst_port`）、`step_check.physical_instances`、`step_check.effective_step`、逐实例 `contributions`，以及实例、全部 formal ports 和 effective `parameters` 证据。CRG 映射和解析不参与当前 PASS/FAIL；新 collector 停用 clock source trace，因此在线新采 inventory 的 `clk_sources` 固定为 `[]`。CSV 同步包含 `position`/`position_alias`、`CRG_source`/`crg_source_alias`、`physical_instances`、`effective_step` 与 `step_contributions`。inventory 的 `warnings` 表示其余 NPI traversal 证据不完整，会转换为硬错误；可选 `notices` 当前用于记录可继续检查的 partial KDB，并在报告中显示非致命 `NPI_LOAD_PARTIAL` warning。
 
 `--inventory` 是面向测试和问题复现的离线模式，不证明 inventory 与当前 RTL 同步。生产签核应使用 `--collector --elab-db` 从当前 Verdi elaborated KDB 重新采集。
 
@@ -335,7 +370,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 - 当前版本仅把 `Intf_type` 作为报告标签。若要检查 interface 数据链，需要补充 input/output formal port 映射、首尾预期信号和 stage 顺序定义。
 - clk/rst 的复合表达式（concat、运算、mux 等）不会做字符串猜测，而是报 `UNSUPPORTED_CONNECTION`。
 - 模块规则必须同时指定非空的 clk 与 rst formal port 名；端口名可自定义，但当前没有“无 rst/跳过 rst”模式。checker 对两个端口独立取证和判定：实际模块存在且已连接规则所指 clk、但没有规则所指 rst 时，该行 FAIL 且只报告 `RST_PORT_MISSING`，不得同时误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
-- `CRG_source` 当前只作为必填 Excel 字段和报告证据保留，完全不参与 PASS/FAIL。新 collector 不追踪 clock source，在线新采 inventory 的 `clk_sources` 为 `[]`；旧 inventory 中已有的 `clk_sources` 也仅作为证据加载。
+- `CRG_source` 当前会通过可选 `crg_source_mappings` 解析为完整路径，并与 Excel 简写一起保留为报告证据，但完全不参与 PASS/FAIL，也不加入 NPI positions。新 collector 不追踪 clock source，在线新采 inventory 的 `clk_sources` 为 `[]`；旧 inventory 中已有的 `clk_sources` 也仅作为证据加载。
 - `RS_CRG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - inventory `warnings` 中的 NPI traversal 问题仍按 `NPI_UNRESOLVED` 硬错误处理；partial load 本身写入可选 `notices` 并显示为非致命 warning，只有 position、实例、端口和 parameter 证据仍完整时检查才可能 PASS。
 - 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
@@ -347,7 +382,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、九列映射、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN`、`has_rs_cfg_en=true` 的 Excel/internal 标签要求、`false` 时任意字面值 don't-care、精确大写 `NA` 的逐行门控检查豁免及其他检查继续执行、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、报告导出、GUI 完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、九列映射、position/CRG Source 两套简称映射的命中与完整路径直通、`step=0`、实例分组、逐模块 clk/rst 端口规则与旧配置继承、有 clk/无 rst 时仅产生 `RST_PORT_MISSING` 的隔离回归、单/多 parameter 动态拍数、未知值 fail-closed、逐实例 RTL `RS_CRG_EN`、`has_rs_cfg_en=true` 的 Excel/internal 标签要求、`false` 时任意字面值 don't-care、精确大写 `NA` 的逐行门控检查豁免及其他检查继续执行、CRG 判定停用、schema v2 inventory、schema v3 report、partial-load notice、NPI L1 端口 fallback 合同、JSON/CSV alias+full 报告导出、GUI 六根完整配置导入/导出的事务与副本语义、GUI 命令构造/生命周期、完整进程组取消和 Linux GUI 启动器。测试总数以当前 `unittest` 输出为准。真实 NPI/L1 编译、partial KDB、全部 formal port/effective parameter 采集和设计加载必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -365,13 +400,13 @@ VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --com
 
 每次运行的唯一目录、`full_vm_test.log` 和 `artifacts` 路径会在退出时打印；三次 clone 尝试都受 timeout 和强制结束上限约束，所有测试现场均保留且不自动删除。已有 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE` 优先于自动导入；`VERDI_AUTO_LICENSE_IMPORT=0` 可关闭自动导入。只有当前 checkout 已经可信且位于 VM 本机文件系统时，才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
 
-工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。有 clk/无 rst 的专项在线 GUI 回归默认连续运行 20 轮，每轮都重新通过 collector 加载同一 elaborated KDB；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 填任意非标准文本的离线 GUI 专项也默认运行 20 轮，可用 `GUI_RS_CFG_DONTCARE_ITERATIONS` 覆盖。精确 `NA` 的离线 GUI 专项同样默认运行 20 轮，可用正整数 `GUI_RS_CFG_NA_ITERATIONS` 覆盖，日志为 `offline_gui_rs_cfg_na.log`，固定证据为 `rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none`；该用例故意保留 RTL `RS_CRG_EN=1`，同时继续执行非门控检查。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`；VM 端到端脚本会在十份 GUI 日志中逐一硬断言该标记，其中包括两个门控专项日志、partial KDB 的 `partial_load_gui.log`、逐模块自定义端口的 `online_gui_custom_port.log`，以及端口隔离回归的 `online_gui_clk_present_rst_missing.log`。
+工具自带 GUI 的完整配置往返、可见离线正例/反例、100 轮稳定性、10,000 行负载、取消启动竞态和在线 KDB smoke 命令见 [完整测试指南](docs/TESTING.md) 和 [VM GUI 复现指南](docs/VM_GUI_TEST.md)。有 clk/无 rst 的专项在线 GUI 回归默认连续运行 20 轮，每轮都重新通过 collector 加载同一 elaborated KDB；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 填任意非标准文本的离线 GUI 专项也默认运行 20 轮，可用 `GUI_RS_CFG_DONTCARE_ITERATIONS` 覆盖。精确 `NA` 的离线 GUI 专项同样默认运行 20 轮，可用正整数 `GUI_RS_CFG_NA_ITERATIONS` 覆盖，日志为 `offline_gui_rs_cfg_na.log`。CRG Source 映射专项默认运行 20 轮，可用 `GUI_CRG_SOURCE_MAPPING_ITERATIONS` 覆盖，日志为 `offline_gui_crg_source_mapping.log`，固定证据为 `crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none`。GUI smoke 成功行必须包含 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules`；VM 端到端脚本会在十一份 GUI 日志中逐一硬断言该标记，其中包括 CRG 映射专项、两个门控专项、partial KDB、自定义端口和端口隔离回归日志。
 
 GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常见桌面/Xwayland 进程和可读的进程环境；不要求固定桌面用户名、GNOME 或 `gnome-session-binary`。`scripts/test_vm_verdi_gui.sh --gui-probe-only` 也可执行同一探测。fresh 驱动最终调用的完整脚本会运行全部 Python 测试、构建 collector、生成新的 `kdb.elab++` 并启动 `verdi -elab`；只有新窗口标题匹配 `VERDI_READY_REGEX`、明确显示已展开的 `top` 才进入 NPI/GUI 检查，其他启动页或无关 Verdi 窗口不能作为就绪证据。测试默认在退出时关闭本次启动的 Verdi，避免遗留进程和 license 占用；人工检查时可显式设置 `KEEP_VERDI_GUI=1`。
 
 ## 已验证环境
 
-当前代码版本为 `0.9.2`，已在以下环境完成固定 SHA fresh-checkout 验收：
+当前代码版本为 `0.10.0`。上一版固定 SHA fresh-checkout 已在以下环境验收；本版 CRG Source 映射需按本文十一日志门禁重新验证：
 
 ```text
 CentOS 7.9

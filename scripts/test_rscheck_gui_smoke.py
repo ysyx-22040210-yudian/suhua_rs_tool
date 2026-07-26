@@ -51,6 +51,8 @@ _BUSINESS_HEADERS = (
 )
 _RS_CFG_DONTCARE_TEXT = "任意非标准文本"
 _RS_CFG_NA_TEXT = "NA"
+_CRG_SOURCE_ALIAS = "core_clock_source"
+_CRG_SOURCE_FULL_PATH = "top.u_soc.u_crg_core"
 
 
 def _window_identifier(root: object) -> str:
@@ -123,7 +125,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-delay", type=float, default=0.1)
     parser.add_argument(
         "--visible-tab",
-        choices=("config", "positions", "rules", "results", "log"),
+        choices=(
+            "config",
+            "positions",
+            "crg-sources",
+            "rules",
+            "results",
+            "log",
+        ),
         default="results",
         help="tab left visible after the smoke assertions pass",
     )
@@ -157,6 +166,11 @@ def _parser() -> argparse.ArgumentParser:
         "--rs-cfg-na",
         action="store_true",
         help="prove Excel RS_CFG_EN=NA skips gating checks for this row",
+    )
+    parser.add_argument(
+        "--crg-source-mapping",
+        action="store_true",
+        help="prove an Excel CRG_source alias resolves to its RTL full path",
     )
     parser.add_argument("--validate-only", action="store_true")
     return parser
@@ -436,6 +450,74 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
     return specs_path, inventory_path
 
 
+def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
+    specs_path = output / "crg_source_mapping_specs.csv"
+    inventory_path = output / "crg_source_mapping_inventory.json"
+    position = "top.u_crg_mapping"
+    instance_name = "CRG_MAP_RS"
+    with specs_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(_BUSINESS_HEADERS)
+        writer.writerow(
+            (
+                "CRG_MAP_IF",
+                "rs_pipe",
+                instance_name,
+                position,
+                1,
+                "clk_crg_map",
+                "rst_n",
+                _CRG_SOURCE_ALIAS,
+                "假门控",
+            )
+        )
+    with inventory_path.open("w", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "schema_version": 2,
+                "positions": {
+                    position: {
+                        "found": True,
+                        "instances": [
+                            {
+                                "name": instance_name,
+                                "full_name": f"{position}.{instance_name}",
+                                "module": "rs_pipe",
+                                "file": "crg_source_mapping_top.sv",
+                                "line": 21,
+                                "parameters": {
+                                    "RS_CRG_EN": "0",
+                                    "WIDTH": "8",
+                                    "rs_mode": "1",
+                                },
+                                "ports": {
+                                    "clk": {
+                                        "connection": f"{position}.clk_crg_map",
+                                        "type": "npiNet",
+                                    },
+                                    "rst": {
+                                        "connection": f"{position}.rst_n",
+                                        "type": "npiNet",
+                                    },
+                                },
+                                "clk_sources": [
+                                    {
+                                        "instance": _CRG_SOURCE_FULL_PATH,
+                                        "module": "crg_core",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+                "warnings": [],
+            },
+            stream,
+            ensure_ascii=True,
+        )
+    return specs_path, inventory_path
+
+
 def _write_custom_port_spec(output: Path) -> Path:
     specs_path = output / "custom_port_specs.csv"
     with specs_path.open("w", encoding="utf-8", newline="") as stream:
@@ -507,6 +589,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_na
+        or args.crg_source_mapping
         or args.generated_rows
     ):
         raise SystemExit(
@@ -527,6 +610,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_dontcare
+        or args.crg_source_mapping
         or args.generated_rows
     ):
         raise SystemExit(
@@ -536,6 +620,27 @@ def main() -> int:
         raise SystemExit("--rs-cfg-na is available only in offline inventory mode")
     if args.rs_cfg_na and args.validate_only:
         raise SystemExit("--rs-cfg-na requires a full check, not --validate-only")
+    if args.crg_source_mapping and (
+        args.negative
+        or args.expect_partial_load
+        or args.default_rule
+        or args.custom_port
+        or args.clk_without_rst
+        or args.rs_cfg_dontcare
+        or args.rs_cfg_na
+        or args.generated_rows
+    ):
+        raise SystemExit(
+            "--crg-source-mapping is mutually exclusive with all other special modes"
+        )
+    if args.crg_source_mapping and online:
+        raise SystemExit(
+            "--crg-source-mapping is available only in offline inventory mode"
+        )
+    if args.crg_source_mapping and args.validate_only:
+        raise SystemExit(
+            "--crg-source-mapping requires a full check, not --validate-only"
+        )
     if online and args.generated_rows:
         raise SystemExit("--generated-rows is available only in offline inventory mode")
     if args.expect_partial_load and not online:
@@ -546,6 +651,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_na
+        or args.crg_source_mapping
         or args.generated_rows
         or args.validate_only
     ):
@@ -557,6 +663,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_na
+        or args.crg_source_mapping
     ):
         raise SystemExit(
             "--negative is mutually exclusive with --generated-rows, --custom-port, "
@@ -570,6 +677,7 @@ def main() -> int:
         or args.custom_port
         or args.clk_without_rst
         or args.rs_cfg_na
+        or args.crg_source_mapping
     ):
         raise SystemExit(
             "--default-rule is mutually exclusive with --negative, --generated-rows, "
@@ -612,6 +720,17 @@ def main() -> int:
                 f"GUI config button layout overlaps or overflows: {expected_text}"
             )
         previous_right = right
+    if app.notebook.tab(app.crg_sources_tab, "text") != "CRG Source映射库":
+        raise SystemExit("GUI CRG Source mapping database tab label is incorrect")
+    if (
+        app.crg_source_tree.heading("alias", "text") != "CRG Source简称"
+        or app.crg_source_tree.heading("rtl_path", "text") != "RTL完整路径"
+    ):
+        raise SystemExit("GUI CRG Source mapping column labels are incorrect")
+    app.notebook.select(app.crg_sources_tab)
+    root.update()
+    if not app.crg_source_tree.winfo_ismapped():
+        raise SystemExit("GUI CRG Source mapping database is not visible")
     app.notebook.select(app.rules_tab)
     root.update()
     rule_columns = (
@@ -670,15 +789,23 @@ def main() -> int:
             "clk_port": "clk",
             "rst_port": "rst",
         }
-        source_config_text = (
-            json.dumps(source_config, ensure_ascii=False, indent=2) + "\n"
-        )
+    crg_source_mappings = source_config.setdefault("crg_source_mappings", {})
+    crg_source_mappings.setdefault("gui_crg_alias", "top.u_crg_source")
+    if args.crg_source_mapping:
+        crg_source_mappings[_CRG_SOURCE_ALIAS] = _CRG_SOURCE_FULL_PATH
+    source_config_text = json.dumps(source_config, ensure_ascii=False, indent=2) + "\n"
     original_position_mappings = source_config.get("position_mappings", {})
     if original_position_mappings.get("tile_core") != "top.u_tile":
         raise SystemExit(
             "sample config must map position alias 'tile_core' to 'top.u_tile'"
         )
     original_module_rules = source_config.get("module_rules", {})
+    original_crg_source_mappings = source_config.get("crg_source_mappings", {})
+    if original_crg_source_mappings.get("gui_crg_alias") != "top.u_crg_source":
+        raise SystemExit(
+            "temporary config must map CRG_source alias 'gui_crg_alias' "
+            "to 'top.u_crg_source'"
+        )
     if args.default_rule and "rs_default_pipe" in original_module_rules:
         raise SystemExit("default-rule smoke module must not be explicitly registered")
     config_path.write_text(source_config_text, encoding="utf-8")
@@ -751,6 +878,80 @@ def main() -> int:
         or app._position_tree_aliases.get(restored_positions[0]) != "tile_core"
     ):
         raise SystemExit("GUI position mapping search did not find tile_core after restore")
+
+    app.crg_source_alias_var.set("gui_smoke_crg_source")
+    app.crg_source_path_var.set("top.u_gui_smoke_crg")
+    app._apply_crg_source_mapping()
+    if not app._crg_source_mappings_dirty:
+        raise SystemExit("GUI CRG_source mapping edit did not set dirty state")
+    app._save_crg_source_mappings()
+    if app._crg_source_mappings_dirty:
+        raise SystemExit("GUI CRG_source mapping save did not clear dirty state")
+    app._load_config_from_form()
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if saved_config.get("crg_source_mappings", {}).get(
+        "gui_smoke_crg_source"
+    ) != "top.u_gui_smoke_crg":
+        raise SystemExit("GUI CRG_source mapping save/reload failed")
+    app.crg_source_search_var.set("gui_smoke")
+    filtered_crg_sources = app.crg_source_tree.get_children()
+    if (
+        len(filtered_crg_sources) != 1
+        or app._crg_source_tree_aliases.get(filtered_crg_sources[0])
+        != "gui_smoke_crg_source"
+    ):
+        raise SystemExit(
+            "GUI CRG_source mapping search did not isolate the saved entry"
+        )
+    app.crg_source_tree.selection_set(filtered_crg_sources[0])
+    app._on_crg_source_selected()
+    app.crg_source_path_var.set("top.u_gui_smoke_crg_updated")
+    app._apply_crg_source_mapping()
+    if not app._crg_source_mappings_dirty:
+        raise SystemExit("GUI CRG_source mapping update did not set dirty state")
+    app._save_crg_source_mappings()
+    if app._crg_source_mappings_dirty:
+        raise SystemExit(
+            "GUI CRG_source mapping update save did not clear dirty state"
+        )
+    app._load_config_from_form()
+    updated_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if updated_config.get("crg_source_mappings", {}).get(
+        "gui_smoke_crg_source"
+    ) != "top.u_gui_smoke_crg_updated":
+        raise SystemExit("GUI CRG_source mapping update/reload failed")
+    app.crg_source_search_var.set("gui_smoke")
+    filtered_crg_sources = app.crg_source_tree.get_children()
+    if len(filtered_crg_sources) != 1:
+        raise SystemExit("GUI CRG_source mapping disappeared before delete")
+    app.crg_source_tree.selection_set(filtered_crg_sources[0])
+    app._on_crg_source_selected()
+    app._delete_crg_source_mapping()
+    if not app._crg_source_mappings_dirty:
+        raise SystemExit("GUI CRG_source mapping delete did not set dirty state")
+    app._save_crg_source_mappings()
+    if app._crg_source_mappings_dirty:
+        raise SystemExit(
+            "GUI CRG_source mapping delete save did not clear dirty state"
+        )
+    app._load_config_from_form()
+    restored_config = json.loads(config_path.read_text(encoding="utf-8"))
+    if restored_config.get("crg_source_mappings", {}) != (
+        original_crg_source_mappings
+    ):
+        raise SystemExit(
+            "GUI CRG_source mapping delete did not restore the original mapping set"
+        )
+    app.crg_source_search_var.set("gui_crg_alias")
+    restored_crg_sources = app.crg_source_tree.get_children()
+    if (
+        len(restored_crg_sources) != 1
+        or app._crg_source_tree_aliases.get(restored_crg_sources[0])
+        != "gui_crg_alias"
+    ):
+        raise SystemExit(
+            "GUI CRG_source mapping search did not find gui_crg_alias after restore"
+        )
 
     app.module_name_var.set("gui_smoke_rule")
     app.module_has_rs_cfg_en_var.set(False)
@@ -841,15 +1042,23 @@ def main() -> int:
         "gui_reset_n",
     )
     app._position_mappings["gui_unsaved_position"] = "top.u_gui_unsaved"
+    app._crg_source_mappings["gui_unsaved_crg_source"] = (
+        "top.u_gui_unsaved_crg_source"
+    )
     app._module_rules_dirty = True
     app._position_mappings_dirty = True
+    app._crg_source_mappings_dirty = True
     gui_module.filedialog.asksaveasfilename = (
         lambda **_kwargs: str(export_path)
     )
     app._export_config()
     if app.config_var.get() != active_path_before_export:
         raise SystemExit("GUI config export unexpectedly changed the active config path")
-    if not app._module_rules_dirty or not app._position_mappings_dirty:
+    if (
+        not app._module_rules_dirty
+        or not app._position_mappings_dirty
+        or not app._crg_source_mappings_dirty
+    ):
         raise SystemExit("GUI config export unexpectedly cleared database dirty state")
     exported_config = _read_json_object(export_path, "exported config")
     expected_roots = {
@@ -857,6 +1066,7 @@ def main() -> int:
         "columns",
         "rtl",
         "position_mappings",
+        "crg_source_mappings",
         "module_rules",
     }
     if set(exported_config) != expected_roots:
@@ -889,20 +1099,38 @@ def main() -> int:
         "gui_unsaved_position"
     ) != "top.u_gui_unsaved":
         raise SystemExit("GUI config export omitted an unsaved position mapping")
+    expected_exported_crg_source_mappings = {
+        **original_crg_source_mappings,
+        "gui_unsaved_crg_source": "top.u_gui_unsaved_crg_source",
+    }
+    if exported_config.get("crg_source_mappings", {}) != (
+        expected_exported_crg_source_mappings
+    ):
+        raise SystemExit(
+            "GUI config export did not preserve the complete CRG_source database"
+        )
     active_config = _read_json_object(config_path, "active config")
     if "gui_unsaved_rule" in active_config.get("module_rules", {}) or (
         "gui_unsaved_position" in active_config.get("position_mappings", {})
+    ) or (
+        "gui_unsaved_crg_source"
+        in active_config.get("crg_source_mappings", {})
     ):
         raise SystemExit("GUI config export modified the active config file")
 
     app.sheet_var.set("not imported")
     app._module_rules.clear()
     app._position_mappings.clear()
+    app._crg_source_mappings.clear()
     gui_module.filedialog.askopenfilename = lambda **_kwargs: str(export_path)
     app._import_config()
     if app.config_var.get() != str(export_path):
         raise SystemExit("GUI config import did not switch the active config path")
-    if app._module_rules_dirty or app._position_mappings_dirty:
+    if (
+        app._module_rules_dirty
+        or app._position_mappings_dirty
+        or app._crg_source_mappings_dirty
+    ):
         raise SystemExit("GUI config import did not clear database dirty state")
     if app.sheet_var.get() != "PortableSmoke":
         raise SystemExit("GUI config import did not restore Excel settings")
@@ -916,6 +1144,10 @@ def main() -> int:
         raise SystemExit("GUI config import lost module rule port names")
     if "gui_unsaved_position" not in app._position_mappings:
         raise SystemExit("GUI config import did not restore the position database")
+    if app._crg_source_mappings != expected_exported_crg_source_mappings:
+        raise SystemExit(
+            "GUI config import did not restore the complete CRG_source database"
+        )
     if app._loaded_config is None or app._loaded_config.rtl != rtl_before_export:
         raise SystemExit("GUI config import did not restore the RTL configuration")
 
@@ -923,6 +1155,13 @@ def main() -> int:
     app._load_config_from_form()
     if app.config_var.get() != str(config_path):
         raise SystemExit("GUI smoke failed to restore its active config after I/O test")
+    if (
+        app._crg_source_mappings != original_crg_source_mappings
+        or app._crg_source_mappings_dirty
+    ):
+        raise SystemExit(
+            "GUI smoke failed to restore the clean original CRG_source database"
+        )
     config_io_verified = True
     expected_rows = (
         1
@@ -932,6 +1171,7 @@ def main() -> int:
         or args.clk_without_rst
         or args.rs_cfg_dontcare
         or args.rs_cfg_na
+        or args.crg_source_mapping
         else args.generated_rows or 2
     )
     expected_tree_rows = expected_rows + (1 if args.expect_partial_load else 0)
@@ -940,6 +1180,7 @@ def main() -> int:
         or args.default_rule
         or args.rs_cfg_dontcare
         or args.rs_cfg_na
+        or args.crg_source_mapping
         or args.generated_rows
     )
     if args.default_rule:
@@ -948,6 +1189,8 @@ def main() -> int:
         excel_path, inventory_path = _write_rs_cfg_dontcare_inputs(output)
     elif args.rs_cfg_na:
         excel_path, inventory_path = _write_rs_cfg_na_inputs(output)
+    elif args.crg_source_mapping:
+        excel_path, inventory_path = _write_crg_source_mapping_inputs(output)
     elif args.custom_port:
         excel_path = _write_custom_port_spec(output)
         inventory_path = project_root / "tests" / "fixtures" / "inventory.json"
@@ -1123,6 +1366,8 @@ def main() -> int:
                 if args.rs_cfg_dontcare
                 else "NA_RS"
                 if args.rs_cfg_na
+                else "CRG_MAP_RS"
+                if args.crg_source_mapping
                 else "AAAA_BBB"
             )
             expected_instances = (
@@ -1133,6 +1378,7 @@ def main() -> int:
                 or args.clk_without_rst
                 or args.rs_cfg_dontcare
                 or args.rs_cfg_na
+                or args.crg_source_mapping
                 else "6"
             )
             expected_step_cell = (
@@ -1143,27 +1389,39 @@ def main() -> int:
                 or args.clk_without_rst
                 or args.rs_cfg_dontcare
                 or args.rs_cfg_na
+                or args.crg_source_mapping
                 else "5/6"
                 if args.negative
                 else "5/5"
             )
             if (
-                len(first_values) < 8
-                or str(first_values[4]) != expected_group
-                or str(first_values[6]) != expected_instances
-                or str(first_values[7]) != expected_step_cell
+                len(first_values) < 9
+                or str(first_values[5]) != expected_group
+                or str(first_values[7]) != expected_instances
+                or str(first_values[8]) != expected_step_cell
                 or (
-                    (args.rs_cfg_dontcare or args.rs_cfg_na)
+                    args.crg_source_mapping
+                    and str(first_values[4])
+                    != f"{_CRG_SOURCE_ALIAS} -> {_CRG_SOURCE_FULL_PATH}"
+                )
+                or (
+                    (
+                        args.rs_cfg_dontcare
+                        or args.rs_cfg_na
+                        or args.crg_source_mapping
+                    )
                     and (
-                        len(first_values) < 9
+                        len(first_values) < 10
                         or str(first_values[0]) != "PASS"
-                        or str(first_values[5])
+                        or str(first_values[6])
                         != (
                             _RS_CFG_DONTCARE_TEXT
                             if args.rs_cfg_dontcare
                             else _RS_CFG_NA_TEXT
+                            if args.rs_cfg_na
+                            else "假门控"
                         )
-                        or str(first_values[8]) != "0E/0W"
+                        or str(first_values[9]) != "0E/0W"
                     )
                 )
             ):
@@ -1225,10 +1483,10 @@ def main() -> int:
                     return
                 global_values = app.result_tree.item("global", "values")
                 if (
-                    len(global_values) < 9
+                    len(global_values) < 10
                     or str(global_values[0]) != "PASS"
                     or str(global_values[2]) != "GLOBAL"
-                    or str(global_values[8]) != "0E/1W"
+                    or str(global_values[9]) != "0E/1W"
                 ):
                     failed = True
                     print(
@@ -1355,6 +1613,48 @@ def main() -> int:
                     failed = True
                     print(
                         "GUI_SMOKE_FAIL: serialized RS_CFG_EN=NA skip evidence "
+                        "is incomplete",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+            if args.crg_source_mapping:
+                report_rows = raw_report.get("rows")
+                report_row = (
+                    report_rows[0]
+                    if isinstance(report_rows, list)
+                    and len(report_rows) == 1
+                    and isinstance(report_rows[0], dict)
+                    else {}
+                )
+                report_spec = report_row.get("spec", {})
+                try:
+                    with csv_report_path.open(
+                        encoding="utf-8-sig", newline=""
+                    ) as stream:
+                        csv_rows = list(csv.DictReader(stream))
+                except OSError as exc:
+                    failed = True
+                    print(
+                        f"GUI_SMOKE_FAIL: cannot read CSV report: {exc}",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
+                if (
+                    not isinstance(report_rows, list)
+                    or len(report_rows) != 1
+                    or not isinstance(report_spec, dict)
+                    or report_spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH
+                    or report_spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                    or report_row.get("findings") != []
+                    or len(csv_rows) != 1
+                    or csv_rows[0].get("CRG_source") != _CRG_SOURCE_FULL_PATH
+                    or csv_rows[0].get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: serialized CRG_source mapping evidence "
                         "is incomplete",
                         file=sys.stderr,
                     )
@@ -1564,6 +1864,27 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+                if args.crg_source_mapping and (
+                    spec.get("RS_module") != "rs_pipe"
+                    or spec.get("RS_inst") != "CRG_MAP_RS"
+                    or spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH
+                    or spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                    or step_check.get("expected") != 1
+                    or step_check.get("physical_instances") != 1
+                    or step_check.get("effective_step") != 1
+                    or contribution_values != [1]
+                    or len(instances) != 1
+                    or instances[0].get("full_name")
+                    != "top.u_crg_mapping.CRG_MAP_RS"
+                    or record.get("findings") != []
+                ):
+                    failed = True
+                    print(
+                        "GUI_SMOKE_FAIL: CRG_source mapping result evidence mismatch",
+                        file=sys.stderr,
+                    )
+                    root.destroy()
+                    return
                 if args.custom_port and (
                     spec.get("RS_module") != "rs_custom"
                     or spec.get("RS_inst") != "CUSTOM_RS"
@@ -1723,6 +2044,19 @@ def main() -> int:
                     )
                     root.destroy()
                     return
+            if args.crg_source_mapping and (
+                evidence_spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH
+                or evidence_spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS
+                or "finding" in evidence
+                or app.finding_tree.get_children()
+            ):
+                failed = True
+                print(
+                    "GUI_SMOKE_FAIL: GUI CRG_source mapping evidence mismatch",
+                    file=sys.stderr,
+                )
+                root.destroy()
+                return
             if (
                 args.negative or args.clk_without_rst
             ) and not isinstance(evidence.get("finding"), dict):
@@ -1820,7 +2154,7 @@ def main() -> int:
             f"errors={app.summary_errors_var.get()} "
             f"warnings={app.summary_warnings_var.get()} "
             f"mode={'validate' if args.validate_only else 'online' if online else 'offline'} "
-            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'rs-cfg-na' if args.rs_cfg_na else 'partial-load' if args.expect_partial_load else 'positive'} "
+            f"case={'negative' if args.negative else 'default-rule' if args.default_rule else 'custom-port' if args.custom_port else 'clk-present-rst-missing' if args.clk_without_rst else 'rs-cfg-dontcare' if args.rs_cfg_dontcare else 'rs-cfg-na' if args.rs_cfg_na else 'crg-source-mapping' if args.crg_source_mapping else 'partial-load' if args.expect_partial_load else 'positive'} "
             f"iterations={completed} "
             f"window=mapped window_id={window_id}"
             " header-map=column-index strict-header=false"
@@ -1832,8 +2166,9 @@ def main() -> int:
             f"{' clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' if args.clk_without_rst else ''}"
             f"{' has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none parsed-rs-cfg-en=任意非标准文本' if args.rs_cfg_dontcare else ''}"
             f"{' rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' if args.rs_cfg_na else ''}"
+            f"{' crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none' if args.crg_source_mapping else ''}"
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
-            f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules module-rule-ports=preserved' if config_io_verified else ''}"
+            f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules module-rule-ports=preserved crg-source-db=crud-complete dirty-copy=export-preserved/import-cleared' if config_io_verified else ''}"
             " rules-layout=980x680-fit"
             f"{' schemas=report-v3/inventory-v2' if not args.validate_only else ''}",
             flush=True,
@@ -1841,6 +2176,7 @@ def main() -> int:
         visible_tabs = {
             "config": app.setup_tab,
             "positions": app.positions_tab,
+            "crg-sources": app.crg_sources_tab,
             "rules": app.rules_tab,
             "results": app.results_tab,
             "log": app.log_tab,

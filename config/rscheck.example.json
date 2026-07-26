@@ -19,6 +19,10 @@
   "position_mappings": {
     "tile_core": "top.u_tile"
   },
+  "crg_source_mappings": {
+    "crg_aux": "top.u_tile.u_aux_crg",
+    "crg_core": "top.u_tile.u_crg"
+  },
   "rtl": {
     "clk_port": "clk",
     "rst_port": "rst",

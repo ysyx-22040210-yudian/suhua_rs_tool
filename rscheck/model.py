@@ -84,6 +84,7 @@ class ToolConfig:
     rtl: RtlConfig
     module_rules: Mapping[str, ModuleRule] = field(default_factory=dict)
     position_mappings: Mapping[str, str] = field(default_factory=dict)
+    crg_source_mappings: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,7 @@ class SpecRow:
     crg_source: str
     rs_cfg_en: str
     position_alias: str = ""
+    crg_source_alias: str = ""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -120,6 +122,7 @@ class SpecRow:
             "clk": self.clk,
             "rst": self.rst,
             "CRG_source": self.crg_source,
+            "crg_source_alias": self.crg_source_alias,
             "RS_CFG_EN": self.rs_cfg_en,
         }
 

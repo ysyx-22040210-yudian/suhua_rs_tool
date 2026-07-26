@@ -67,12 +67,15 @@ class WorkerOutcome:
 def _evidence_payload(
     record: Mapping[str, Any], finding: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
+    spec = record.get("spec", {})
     evidence: dict[str, Any] = {
-        "spec": record.get("spec", {}),
+        "spec": spec,
         "module_rule": record.get("module_rule"),
         "step_check": record.get("step_check"),
         "matched_instances": record.get("matched_instances", []),
     }
+    if isinstance(spec, Mapping):
+        evidence["crg_source_resolution"] = _crg_source_display(spec)
     if finding is not None:
         evidence["finding"] = {
             "severity": finding.get("severity"),
@@ -149,6 +152,30 @@ def _position_display(spec: Mapping[str, Any]) -> str:
     return position
 
 
+def _crg_source_mapping_from_form(
+    short_name: str, rtl_path: str
+) -> tuple[str, str]:
+    alias = short_name.strip()
+    full_path = rtl_path.strip()
+    if not alias:
+        raise GuiInputError("CRG_source 简写不能为空")
+    if alias.startswith(".") or alias.endswith("."):
+        raise GuiInputError("CRG_source 简写不能以 '.' 开头或结尾")
+    if not full_path:
+        raise GuiInputError("CRG Source RTL 层次全路径不能为空")
+    if not full_path.strip("."):
+        raise GuiInputError("CRG Source RTL 层次全路径不能仅由 '.' 组成")
+    return alias, full_path
+
+
+def _crg_source_display(spec: Mapping[str, Any]) -> str:
+    crg_source = str(spec.get("CRG_source", ""))
+    alias = spec.get("crg_source_alias", "")
+    if isinstance(alias, str) and alias:
+        return f"{alias} -> {crg_source}"
+    return crg_source
+
+
 def _resolved_config_path(value: str | Path) -> str:
     try:
         return str(Path(value).expanduser().resolve())
@@ -201,6 +228,10 @@ class RsCheckApp:
         self._position_mappings_dirty = False
         self._editing_position_alias = ""
         self._position_tree_aliases: dict[str, str] = {}
+        self._crg_source_mappings: dict[str, str] = {}
+        self._crg_source_mappings_dirty = False
+        self._editing_crg_source_alias = ""
+        self._crg_source_tree_aliases: dict[str, str] = {}
 
         self._configure_root()
         self._create_variables()
@@ -282,6 +313,10 @@ class RsCheckApp:
         self.position_alias_var = tk.StringVar()
         self.position_path_var = tk.StringVar()
         self.position_mapping_status_var = tk.StringVar(value="映射 0")
+        self.crg_source_search_var = tk.StringVar()
+        self.crg_source_alias_var = tk.StringVar()
+        self.crg_source_path_var = tk.StringVar()
+        self.crg_source_mapping_status_var = tk.StringVar(value="映射 0")
 
         self.source_mode_var = tk.StringVar(value=LIVE_SOURCE)
         self.collector_var = tk.StringVar(value=str(collector))
@@ -312,17 +347,20 @@ class RsCheckApp:
         self.setup_tab = ttk.Frame(self.notebook, padding=12)
         self.rules_tab = ttk.Frame(self.notebook, padding=10)
         self.positions_tab = ttk.Frame(self.notebook, padding=10)
+        self.crg_sources_tab = ttk.Frame(self.notebook, padding=10)
         self.results_tab = ttk.Frame(self.notebook, padding=10)
         self.log_tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.setup_tab, text="检查配置")
         self.notebook.add(self.rules_tab, text="模块规则库")
         self.notebook.add(self.positions_tab, text="Position 映射库")
+        self.notebook.add(self.crg_sources_tab, text="CRG Source映射库")
         self.notebook.add(self.results_tab, text="检查结果")
         self.notebook.add(self.log_tab, text="运行日志")
 
         self._build_setup_tab()
         self._build_rules_tab()
         self._build_positions_tab()
+        self._build_crg_sources_tab()
         self._build_results_tab()
         self._build_log_tab()
         self._build_status_bar()
@@ -728,6 +766,96 @@ class RsCheckApp:
             "write", lambda *_: self._render_position_tree()
         )
 
+    def _build_crg_sources_tab(self) -> None:
+        tab = self.crg_sources_tab
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Label(toolbar, text="搜索 CRG_source").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Entry(toolbar, textvariable=self.crg_source_search_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Label(toolbar, textvariable=self.crg_source_mapping_status_var).grid(
+            row=0, column=2, sticky="e"
+        )
+
+        tree_frame = ttk.Frame(tab)
+        tree_frame.grid(row=1, column=0, sticky="nsew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        self.crg_source_tree = ttk.Treeview(
+            tree_frame,
+            columns=("alias", "rtl_path"),
+            show="headings",
+            selectmode="browse",
+        )
+        for name, title, width, stretch in (
+            ("alias", "CRG Source简称", 280, False),
+            ("rtl_path", "RTL完整路径", 1200, False),
+        ):
+            self.crg_source_tree.heading(name, text=title)
+            self.crg_source_tree.column(
+                name, width=width, minwidth=140, stretch=stretch
+            )
+        crg_source_scroll = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self.crg_source_tree.yview
+        )
+        crg_source_xscroll = ttk.Scrollbar(
+            tree_frame, orient="horizontal", command=self.crg_source_tree.xview
+        )
+        self.crg_source_tree.configure(
+            yscrollcommand=crg_source_scroll.set,
+            xscrollcommand=crg_source_xscroll.set,
+        )
+        self.crg_source_tree.grid(row=0, column=0, sticky="nsew")
+        crg_source_scroll.grid(row=0, column=1, sticky="ns")
+        crg_source_xscroll.grid(row=1, column=0, sticky="ew")
+        self.crg_source_tree.bind(
+            "<<TreeviewSelect>>", self._on_crg_source_selected
+        )
+
+        editor = ttk.LabelFrame(tab, text="CRG Source 映射编辑", padding=10)
+        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        editor.columnconfigure(1, weight=1)
+        editor.columnconfigure(3, weight=3)
+        ttk.Label(editor, text="CRG Source简称").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Entry(editor, textvariable=self.crg_source_alias_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 18)
+        )
+        ttk.Label(editor, text="RTL完整路径").grid(
+            row=0, column=2, sticky="w"
+        )
+        ttk.Entry(editor, textvariable=self.crg_source_path_var).grid(
+            row=0, column=3, sticky="ew", padx=(8, 0)
+        )
+
+        actions = ttk.Frame(tab)
+        actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(actions, text="新建", command=self._new_crg_source_mapping).pack(
+            side="left"
+        )
+        ttk.Button(
+            actions, text="应用修改", command=self._apply_crg_source_mapping
+        ).pack(side="left", padx=8)
+        ttk.Button(
+            actions, text="删除", command=self._delete_crg_source_mapping
+        ).pack(side="left")
+        ttk.Button(
+            actions,
+            text="保存映射库",
+            command=self._save_crg_source_mappings,
+        ).pack(side="right")
+        self.crg_source_search_var.trace_add(
+            "write", lambda *_: self._render_crg_source_tree()
+        )
+
     def _build_results_tab(self) -> None:
         tab = self.results_tab
         tab.rowconfigure(1, weight=3)
@@ -760,6 +888,7 @@ class RsCheckApp:
             "row",
             "interface",
             "position",
+            "crg_source",
             "rs_inst",
             "rs_cfg_en",
             "physical_instances",
@@ -777,6 +906,7 @@ class RsCheckApp:
             "row": "Excel 行",
             "interface": "Interface",
             "position": "Position",
+            "crg_source": "CRG Source",
             "rs_inst": "RS_inst",
             "rs_cfg_en": "RS_CFG_EN",
             "physical_instances": "匹配实例",
@@ -788,6 +918,7 @@ class RsCheckApp:
             "row": 60,
             "interface": 85,
             "position": 520,
+            "crg_source": 520,
             "rs_inst": 120,
             "rs_cfg_en": 90,
             "physical_instances": 75,
@@ -950,6 +1081,11 @@ class RsCheckApp:
             and not self._confirm_discard_position_changes()
         ):
             return
+        if (
+            self._crg_source_mappings_dirty
+            and not self._confirm_discard_crg_source_changes()
+        ):
+            return
         try:
             config = load_complete_config(selected)
             self._apply_config(config, selected, "完整配置已导入")
@@ -1077,6 +1213,11 @@ class RsCheckApp:
                 and not self._confirm_discard_position_changes()
             ):
                 return
+            if (
+                self._crg_source_mappings_dirty
+                and not self._confirm_discard_crg_source_changes()
+            ):
+                return
         try:
             config = load_config(config_path)
             self._apply_config(config, config_path, "配置已加载")
@@ -1102,10 +1243,14 @@ class RsCheckApp:
         self._module_rules_dirty = False
         self._position_mappings = dict(config.position_mappings)
         self._position_mappings_dirty = False
+        self._crg_source_mappings = dict(config.crg_source_mappings)
+        self._crg_source_mappings_dirty = False
         self._new_rule()
         self._new_position_mapping()
+        self._new_crg_source_mapping()
         self._render_rule_tree()
         self._render_position_tree()
+        self._render_crg_source_tree()
         self.status_var.set(status)
 
     def _config_snapshot_from_form(self) -> ToolConfig:
@@ -1115,6 +1260,7 @@ class RsCheckApp:
             self._loaded_config,
             module_rules=dict(self._module_rules),
             position_mappings=dict(self._position_mappings),
+            crg_source_mappings=dict(self._crg_source_mappings),
         )
         raw = config_to_dict(candidate)
         excel = raw["excel"]
@@ -1184,6 +1330,17 @@ class RsCheckApp:
             messagebox.askyesno(
                 "未保存映射",
                 "Position 映射库有未保存修改，确定放弃吗？",
+                parent=self.root,
+            )
+        )
+
+    def _confirm_discard_crg_source_changes(self) -> bool:
+        if not self._crg_source_mappings_dirty:
+            return True
+        return bool(
+            messagebox.askyesno(
+                "未保存映射",
+                "CRG Source 映射库有未保存修改，确定放弃吗？",
                 parent=self.root,
             )
         )
@@ -1325,16 +1482,26 @@ class RsCheckApp:
         except RsCheckError as exc:
             messagebox.showerror("保存失败", str(exc), parent=self.root)
             return
+        loaded_config = reloaded
         if self._position_mappings_dirty:
-            self._loaded_config = replace(
-                reloaded,
+            loaded_config = replace(
+                loaded_config,
                 position_mappings=dict(baseline.position_mappings),
             )
         else:
-            self._loaded_config = reloaded
             self._position_mappings = dict(reloaded.position_mappings)
             self._new_position_mapping()
             self._render_position_tree()
+        if self._crg_source_mappings_dirty:
+            loaded_config = replace(
+                loaded_config,
+                crg_source_mappings=dict(baseline.crg_source_mappings),
+            )
+        else:
+            self._crg_source_mappings = dict(reloaded.crg_source_mappings)
+            self._new_crg_source_mapping()
+            self._render_crg_source_tree()
+        self._loaded_config = loaded_config
         self._module_rules = dict(reloaded.module_rules)
         self._module_rules_dirty = False
         self._render_rule_tree()
@@ -1467,20 +1634,184 @@ class RsCheckApp:
         except RsCheckError as exc:
             messagebox.showerror("保存失败", str(exc), parent=self.root)
             return
+        loaded_config = reloaded
         if self._module_rules_dirty:
-            self._loaded_config = replace(
-                reloaded,
+            loaded_config = replace(
+                loaded_config,
                 module_rules=dict(baseline.module_rules),
             )
         else:
-            self._loaded_config = reloaded
             self._module_rules = dict(reloaded.module_rules)
             self._new_rule()
             self._render_rule_tree()
+        if self._crg_source_mappings_dirty:
+            loaded_config = replace(
+                loaded_config,
+                crg_source_mappings=dict(baseline.crg_source_mappings),
+            )
+        else:
+            self._crg_source_mappings = dict(reloaded.crg_source_mappings)
+            self._new_crg_source_mapping()
+            self._render_crg_source_tree()
+        self._loaded_config = loaded_config
         self._position_mappings = dict(reloaded.position_mappings)
         self._position_mappings_dirty = False
         self._render_position_tree()
         self.status_var.set("Position 映射库已保存")
+
+    def _render_crg_source_tree(self) -> None:
+        if not hasattr(self, "crg_source_tree"):
+            return
+        selected_alias = self._editing_crg_source_alias
+        for item in self.crg_source_tree.get_children():
+            self.crg_source_tree.delete(item)
+        self._crg_source_tree_aliases.clear()
+        search = self.crg_source_search_var.get().strip().casefold()
+        selected_iid = ""
+        for index, alias in enumerate(sorted(self._crg_source_mappings)):
+            rtl_path = self._crg_source_mappings[alias]
+            if (
+                search
+                and search not in alias.casefold()
+                and search not in rtl_path.casefold()
+            ):
+                continue
+            iid = f"crg-source-mapping-{index}"
+            self._crg_source_tree_aliases[iid] = alias
+            self.crg_source_tree.insert(
+                "", "end", iid=iid, values=(alias, rtl_path)
+            )
+            if alias == selected_alias:
+                selected_iid = iid
+        if selected_iid:
+            self.crg_source_tree.selection_set(selected_iid)
+            self.crg_source_tree.see(selected_iid)
+        suffix = " · 未保存" if self._crg_source_mappings_dirty else ""
+        self.crg_source_mapping_status_var.set(
+            f"映射 {len(self._crg_source_mappings)}{suffix}"
+        )
+
+    def _on_crg_source_selected(self, _event: Any = None) -> None:
+        selection = self.crg_source_tree.selection()
+        if not selection:
+            return
+        alias = self._crg_source_tree_aliases.get(selection[0], "")
+        rtl_path = self._crg_source_mappings.get(alias)
+        if rtl_path is None:
+            return
+        self._editing_crg_source_alias = alias
+        self.crg_source_alias_var.set(alias)
+        self.crg_source_path_var.set(rtl_path)
+
+    def _new_crg_source_mapping(self) -> None:
+        self._editing_crg_source_alias = ""
+        self.crg_source_alias_var.set("")
+        self.crg_source_path_var.set("")
+        if hasattr(self, "crg_source_tree"):
+            self.crg_source_tree.selection_remove(
+                *self.crg_source_tree.selection()
+            )
+
+    def _apply_crg_source_mapping(self) -> None:
+        try:
+            alias, rtl_path = _crg_source_mapping_from_form(
+                self.crg_source_alias_var.get(), self.crg_source_path_var.get()
+            )
+        except GuiInputError as exc:
+            messagebox.showerror("映射错误", str(exc), parent=self.root)
+            return
+        original = self._editing_crg_source_alias
+        if alias in self._crg_source_mappings and alias != original:
+            messagebox.showerror(
+                "映射错误",
+                f"CRG_source 简写 {alias!r} 已存在",
+                parent=self.root,
+            )
+            return
+        if original and original != alias:
+            self._crg_source_mappings.pop(original, None)
+        self._crg_source_mappings[alias] = rtl_path
+        self._editing_crg_source_alias = alias
+        self._crg_source_mappings_dirty = True
+        self._render_crg_source_tree()
+        self.status_var.set("CRG Source 映射已修改")
+
+    def _delete_crg_source_mapping(self) -> None:
+        alias = self._editing_crg_source_alias
+        if not alias or alias not in self._crg_source_mappings:
+            return
+        if not messagebox.askyesno(
+            "删除映射",
+            f"确定删除 CRG_source 简写 {alias!r} 的映射吗？",
+            parent=self.root,
+        ):
+            return
+        del self._crg_source_mappings[alias]
+        self._crg_source_mappings_dirty = True
+        self._new_crg_source_mapping()
+        self._render_crg_source_tree()
+        self.status_var.set("CRG Source 映射已删除")
+
+    def _save_crg_source_mappings(self) -> None:
+        config_path = self.config_var.get().strip()
+        if self._loaded_config is None or not config_path:
+            messagebox.showerror("保存失败", "请先加载配置 JSON", parent=self.root)
+            return
+        try:
+            path_matches = _same_config_path(config_path, self._loaded_config_path)
+        except GuiInputError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        if not path_matches:
+            messagebox.showerror(
+                "保存失败",
+                "配置路径已变化，请先加载当前配置",
+                parent=self.root,
+            )
+            return
+        baseline = self._loaded_config
+        try:
+            current = load_config(config_path)
+            if current.crg_source_mappings != baseline.crg_source_mappings:
+                messagebox.showerror(
+                    "保存冲突",
+                    "CRG Source 映射库已被外部修改，请先重新加载配置后再保存",
+                    parent=self.root,
+                )
+                return
+            updated = replace(
+                current,
+                crg_source_mappings=dict(self._crg_source_mappings),
+            )
+            output = save_config(updated, config_path)
+            reloaded = load_config(output)
+        except RsCheckError as exc:
+            messagebox.showerror("保存失败", str(exc), parent=self.root)
+            return
+        loaded_config = reloaded
+        if self._module_rules_dirty:
+            loaded_config = replace(
+                loaded_config,
+                module_rules=dict(baseline.module_rules),
+            )
+        else:
+            self._module_rules = dict(reloaded.module_rules)
+            self._new_rule()
+            self._render_rule_tree()
+        if self._position_mappings_dirty:
+            loaded_config = replace(
+                loaded_config,
+                position_mappings=dict(baseline.position_mappings),
+            )
+        else:
+            self._position_mappings = dict(reloaded.position_mappings)
+            self._new_position_mapping()
+            self._render_position_tree()
+        self._loaded_config = loaded_config
+        self._crg_source_mappings = dict(reloaded.crg_source_mappings)
+        self._crg_source_mappings_dirty = False
+        self._render_crg_source_tree()
+        self.status_var.set("CRG Source 映射库已保存")
 
     def _update_source_mode(self) -> None:
         if self.source_mode_var.get() == LIVE_SOURCE:
@@ -1536,6 +1867,13 @@ class RsCheckApp:
                 parent=self.root,
             )
             return
+        if self._crg_source_mappings_dirty:
+            messagebox.showerror(
+                "映射未保存",
+                "请先在 CRG Source 映射库页保存修改",
+                parent=self.root,
+            )
+            return
         config_path = self.config_var.get().strip()
         try:
             path_matches = bool(
@@ -1549,7 +1887,7 @@ class RsCheckApp:
         if not path_matches:
             messagebox.showerror(
                 "配置未加载",
-                "配置路径已变化，请先点击“加载”同步模块规则库和 Position 映射库",
+                "配置路径已变化，请先点击“加载”同步模块规则库、Position 映射库和 CRG Source 映射库",
                 parent=self.root,
             )
             return
@@ -1759,6 +2097,7 @@ class RsCheckApp:
                 list(self.setup_tab.winfo_children())
                 + list(self.rules_tab.winfo_children())
                 + list(self.positions_tab.winfo_children())
+                + list(self.crg_sources_tab.winfo_children())
             )
             while stack:
                 widget = stack.pop()
@@ -1787,6 +2126,7 @@ class RsCheckApp:
         self._result_records.clear()
         self._finding_records.clear()
         self.result_tree.column("position", width=520, stretch=False)
+        self.result_tree.column("crg_source", width=520, stretch=False)
         self.result_tree.xview_moveto(0)
         self._set_evidence("")
 
@@ -1799,6 +2139,19 @@ class RsCheckApp:
         if required > current:
             self.result_tree.column(
                 "position",
+                width=min(required, 2400),
+                stretch=False,
+            )
+
+    def _fit_result_crg_source_column(self, value: str) -> None:
+        try:
+            required = tkfont.nametofont("TkDefaultFont").measure(value) + 24
+        except Exception:
+            required = len(value) * 9 + 24
+        current = int(self.result_tree.column("crg_source", "width"))
+        if required > current:
+            self.result_tree.column(
+                "crg_source",
                 width=min(required, 2400),
                 stretch=False,
             )
@@ -1822,7 +2175,9 @@ class RsCheckApp:
         for index, spec in enumerate(rows):
             iid = f"validation-{index}"
             position_text = _position_display(spec)
+            crg_source_text = _crg_source_display(spec)
             self._fit_result_position_column(position_text)
+            self._fit_result_crg_source_column(crg_source_text)
             self._result_records[iid] = {"spec": spec, "findings": [], "matched_instances": []}
             self.result_tree.insert(
                 "",
@@ -1833,6 +2188,7 @@ class RsCheckApp:
                     spec.get("row", ""),
                     spec.get("Intf_type", ""),
                     position_text,
+                    crg_source_text,
                     spec.get("RS_inst", ""),
                     spec.get("RS_CFG_EN", ""),
                     "-",
@@ -1905,7 +2261,9 @@ class RsCheckApp:
         expected_step = step_check.get("expected", spec.get("step", ""))
         effective_text = "?" if effective_step is None else str(effective_step)
         position_text = _position_display(spec)
+        crg_source_text = _crg_source_display(spec)
         self._fit_result_position_column(position_text)
+        self._fit_result_crg_source_column(crg_source_text)
         self._result_records[iid] = record
         self.result_tree.insert(
             "",
@@ -1916,6 +2274,7 @@ class RsCheckApp:
                 spec.get("row", ""),
                 spec.get("Intf_type", ""),
                 position_text,
+                crg_source_text,
                 spec.get("RS_inst", ""),
                 spec.get("RS_CFG_EN", ""),
                 physical_instances,
@@ -2031,6 +2390,11 @@ class RsCheckApp:
         if (
             self._position_mappings_dirty
             and not self._confirm_discard_position_changes()
+        ):
+            return
+        if (
+            self._crg_source_mappings_dirty
+            and not self._confirm_discard_crg_source_changes()
         ):
             return
         self.root.destroy()

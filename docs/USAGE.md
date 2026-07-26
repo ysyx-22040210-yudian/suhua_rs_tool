@@ -106,7 +106,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 | `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
 | `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
 | `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
-| `CRG_source` | clk 预期的上游来源标签 | 当前仍必填、解析并写入 report，但暂不参与 PASS/FAIL |
+| `CRG_source` | 配置库中的来源简写，或 clk 来源模块的完整 RTL 层次路径 | 简写命中后转换为全路径，未命中时兼容完整路径输入；完整路径和可选简称写入 report，但暂不参与 PASS/FAIL |
 | `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | 去除首尾空白后精确为大写 `NA` 时，仅跳过该行全部 `RS_CFG_EN`/RTL `RS_CRG_EN` 检查；否则 `has_rs_cfg_en=true` 时必须精确填写 `假门控`，`false` 时任意字面内容都不参与标签判定；内容均解析并写入报告 |
 
 一行定义一组，唯一组键是 `(解析后的完整 position, RS_inst)`。同一个完整 `position` 下可以有多组，每组占一行；即使两行使用不同文本，只要映射到同一完整路径且 `RS_inst` 相同，也属于重复组并会被拒绝。
@@ -236,9 +236,20 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
 
 例如 `position=tile_core` 映射为 `top.u_tile` 后，`clk=clk_rs` 可以匹配 `top.u_tile.clk_rs`。若 `allow_leaf_signal_match=true`，还允许只比较最后一级信号名，但这可能把不同 scope 的同名信号误判为一致，默认关闭。
 
-### 3.4 CRG 来源
+### 3.4 CRG 来源简写与完整路径
 
-`CRG_source` 当前仍是 Excel 的必填内部属性，会经过列映射、行解析并原样进入 JSON/CSV report，便于以后恢复来源规则或人工审计；它目前**完全不参与 PASS/FAIL**。错误值、找不到来源、多个来源以及空 `clk_sources` 都不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding。
+可选配置 `crg_source_mappings` 是 Excel CRG_source 简写到 RTL 全路径的数据库。例如：
+
+```json
+"crg_source_mappings": {
+  "crg_aux": "top.u_tile.u_aux_crg",
+  "crg_core": "top.u_tile.u_crg"
+}
+```
+
+解析每行时按区分大小写的 Excel 文本精确查找。命中时，`SpecRow.crg_source` 和 report/CSV 的 `CRG_source` 保存完整 RTL 路径，`crg_source_alias` 保留 Excel 简写；未命中时直接把 Excel 文本作为完整路径，alias 为空。和 position 映射一样，输入会先去除首尾空白，并去除路径首尾的 `.`；不做模糊、前缀或递归映射。
+
+`CRG_source` 当前仍是 Excel 的必填内部属性，但它目前**完全不参与 PASS/FAIL**。错误值、找不到来源、多个来源以及空 `clk_sources` 都不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding。CRG_source 的简称和完整路径也不会加入 NPI collector 的 positions 请求；collector 只接收各行解析后的完整 `position`。
 
 当前 collector 已停用 Netlist clock source trace，新在线采集的每个实例都写出 `"clk_sources": []`。旧 schema v2 offline inventory 中已有的 `clk_sources` 仍能加载和显示，但 checker 不比较它们。配置键 `rtl.crg_match` 为兼容旧配置保留，当前不改变判定结果。
 
@@ -292,7 +303,7 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
 
 ## 4. 配置文件完整说明
 
-配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`position_mappings`、`module_rules` 五个键。`position_mappings` 可省略，其余结构要求见下文；未知键、错误类型和未知内部属性名都会被拒绝。
+配置文件是 UTF-8 JSON，根对象只允许 `excel`、`columns`、`rtl`、`position_mappings`、`crg_source_mappings`、`module_rules` 六个键。普通加载兼容历史配置省略 `position_mappings` 或 `crg_source_mappings`，缺少时按空库处理；GUI“完整导入”严格要求六根全部存在。未知键、错误类型和未知内部属性名都会被拒绝。
 
 完整示例：
 
@@ -327,6 +338,10 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
   "position_mappings": {
     "tile_core": "top.u_tile",
     "lsu_pipe": "top.u_core.u_lsu.u_pipe"
+  },
+  "crg_source_mappings": {
+    "crg_aux": "top.u_tile.u_aux_crg",
+    "crg_core": "top.u_tile.u_crg"
   },
   "module_rules": {
     "rs_pipe": {
@@ -411,7 +426,35 @@ python -m rscheck position-db delete \
 `resolve` 只查询，不读取 Excel、不加载 inventory、不启动 NPI；未命中时会返回 direct 的完整
 路径语义，即 `position_alias` 为空、`position` 等于输入值。
 
-### 4.5 `module_rules`
+### 4.5 `crg_source_mappings`
+
+`crg_source_mappings` 可省略或设为空 JSON 对象。每个键是 Excel 可以填写的非空 CRG_source 简写，每个值是对应的非空 RTL 完整层次路径；名称区分大小写。未命中的 Excel 值按完整路径直通，因此旧表无需修改。
+
+映射只影响 Excel 解析、GUI/CLI 展示及 JSON/CSV 报告中的 alias+full 证据，不参与 PASS/FAIL，也不会增加 NPI positions。GUI 可视化维护之外，CLI 提供对称的 CRUD 和单值解析：
+
+```bash
+python -m rscheck crg-source-db set \
+  --config config/rscheck.example.json \
+  --alias core0_crg \
+  --rtl-path tb_top.dut.u_core0.u_crg
+
+python -m rscheck crg-source-db list \
+  --config config/rscheck.example.json \
+  --json
+
+python -m rscheck crg-source-db resolve \
+  --config config/rscheck.example.json \
+  --crg-source core0_crg \
+  --json
+
+python -m rscheck crg-source-db delete \
+  --config config/rscheck.example.json \
+  --alias core0_crg
+```
+
+`set/delete` 原子写回配置并遵守与 position 数据库相同的单写者约束。`resolve --json` 命中时返回完整 `CRG_source` 和 Excel `crg_source_alias`；未命中时返回输入路径和空 alias，不读取 Excel、inventory 或 NPI。
+
+### 4.6 `module_rules`
 
 `module_rules` 必须是 JSON 对象，可以为空。每个键是一个需要覆盖默认行为的精确模块定义名。当前格式的每个值使用以下四项；未知键会被拒绝：
 
@@ -426,7 +469,7 @@ python -m rscheck position-db delete \
 
 旧配置中的显式规则可以暂时省略 `clk_port/rst_port`：加载器分别从同一文件的 `rtl.clk_port/rst_port` 继承，保持升级前语义。配置一旦由 GUI 保存规则库、导出完整配置或经 `save_config` 写回，这两个键就会在每条规则中显式化。新手写配置应直接包含两项，不要依赖继承。
 
-### 4.6 命令行覆盖
+### 4.7 命令行覆盖
 
 | 参数 | 作用 |
 |---|---|
@@ -437,7 +480,7 @@ python -m rscheck position-db delete \
 | `--header-check` | 本次运行显式开启严格表头诊断，要求映射表头等于内部属性名 |
 | `--no-header-check` | 本次运行按列号解析且不比较表头文字；这是默认行为，也可覆盖配置中的 `true` |
 
-`position_mappings` 和 `module_rules` 没有仅对单次检查生效的临时覆盖参数，检查始终读取当前配置 JSON。Position 映射可通过 GUI 或 `position-db` 子命令持久化维护；模块规则通过 GUI 维护。严格表头诊断默认关闭；仅当规格表主动采用九个标准内部属性名作为表头，并希望用它额外发现错列时，才使用 `--header-check`。
+`position_mappings`、`crg_source_mappings` 和 `module_rules` 没有仅对单次检查生效的临时覆盖参数，检查始终读取当前配置 JSON。两套映射可分别通过 GUI 或 `position-db`、`crg-source-db` 子命令持久化维护；模块规则通过 GUI 维护。严格表头诊断默认关闭；仅当规格表主动采用九个标准内部属性名作为表头，并希望用它额外发现错列时，才使用 `--header-check`。
 
 ## 5. 工具自带桌面 GUI
 
@@ -489,7 +532,7 @@ bash scripts/launch_rscheck_gui.sh
 
 ### 5.3 完整配置导入和导出
 
-`0.9.2` 的可移植配置 JSON 由且仅由以下五个根对象组成：
+`0.10.0` 的可移植配置 JSON 由且仅由以下六个根对象组成：
 
 | 根对象 | 导出来源 | 内容 |
 |---|---|---|
@@ -497,21 +540,22 @@ bash scripts/launch_rscheck_gui.sh
 | `columns` | 当前 GUI | 九个内部属性的 1-based 列号 |
 | `rtl` | 当前已加载配置 | suffix 规则、连续编号开关，以及供旧规则继承的全局 clk/rst 等 RTL 兼容设置 |
 | `position_mappings` | 当前 GUI 内存数据库 | 全部 position 简写到完整 RTL 路径的映射 |
+| `crg_source_mappings` | 当前 GUI 内存数据库 | 全部 CRG_source 简写到完整 RTL 路径的映射 |
 | `module_rules` | 当前 GUI 内存数据库 | 全部模块规则及其 `has_rs_cfg_en`、`step_parameters`、`clk_port`、`rst_port`；前者控制 RTL `RS_CRG_EN` |
 
-“导出”是副本操作。它会先校验当前 GUI 的 Excel 选项和列号，再把上述五个根对象写入另一个 JSON。两个数据库中已经点击“应用新建/修改”但尚未点击各自“保存”按钮的修改也包含在副本中；页面搜索只改变表格显示，不影响导出范围。导出成功后仍使用原来的当前配置路径，两个数据库原有的“未保存”状态也保持不变，原配置文件不会被改写。工具会解析规范化路径并拒绝把导出目标设为当前配置自身；需要覆盖其他已有副本时由系统保存对话框确认。若用户只改了“配置 JSON”路径输入框而没有点击“加载”，导出会在打开保存对话框前拒绝，确保 `rtl` 始终来自界面实际加载的配置。
+“导出”是副本操作。它会先校验当前 GUI 的 Excel 选项和列号，再把上述六个根对象写入另一个 JSON。三个数据库中已经点击“应用新建/修改”但尚未点击各自“保存”按钮的修改也包含在副本中；页面搜索只改变表格显示，不影响导出范围。导出成功后仍使用原来的当前配置路径，三个数据库原有的“未保存”状态也保持不变，原配置文件不会被改写。工具会解析规范化路径并拒绝把导出目标设为当前配置自身；需要覆盖其他已有副本时由系统保存对话框确认。若用户只改了“配置 JSON”路径输入框而没有点击“加载”，导出会在打开保存对话框前拒绝，确保 `rtl` 始终来自界面实际加载的配置。
 
 “导入”采用先校验、后确认、最后整体替换的顺序：
 
-1. 选择候选 JSON 后，工具先完整解析并校验全部五个根对象；无效文件立即拒绝，此时不会询问丢弃本地修改。
-2. 候选有效时，若当前 Excel/列号表单与已加载配置不同，先询问是否丢弃；若模块规则库或 Position 映射库存在未保存修改，再按数据库逐一询问。
-3. 所有确认接受后，工具重新读取并校验候选文件，防止其在确认期间被替换；复核仍有效才一次性载入五个根对象、把候选 JSON 切换为当前配置路径，并清除两个数据库的未保存状态。
+1. 选择候选 JSON 后，工具先完整解析并校验全部六个根对象；无效文件立即拒绝，此时不会询问丢弃本地修改。
+2. 候选有效时，若当前 Excel/列号表单与已加载配置不同，先询问是否丢弃；若模块规则库、Position 映射库或 CRG Source 映射库存在未保存修改，再按数据库逐一询问。
+3. 所有确认接受后，工具重新读取并校验候选文件，防止其在确认期间被替换；复核仍有效才一次性载入六个根对象、把候选 JSON 切换为当前配置路径，并清除三个数据库的未保存状态。
 
-取消文件选择、首次/复核校验失败或拒绝任一 Excel/数据库丢弃确认，都不会部分导入；当前路径、GUI 字段、两个内存数据库和 dirty 状态保持原样。导入不同于“加载”：导入通过文件选择器选择配置并严格要求五个根对象全部存在；“加载”读取“配置 JSON”输入框当前路径，继续兼容第 4 节所述历史配置的可选根字段。两者都会执行首次 schema 校验、Excel/数据库确认和二次读取，成功后再更新界面。
+取消文件选择、首次/复核校验失败或拒绝任一 Excel/数据库丢弃确认，都不会部分导入；当前路径、GUI 字段、三个内存数据库和 dirty 状态保持原样。导入不同于“加载”：导入通过文件选择器选择配置并严格要求六个根对象全部存在；“加载”读取“配置 JSON”输入框当前路径，继续兼容第 4 节所述历史配置省略映射根字段的情况。两者都会执行首次 schema 校验、Excel/数据库确认和二次读取，成功后再更新界面。
 
 `excel.sheet` 的 JSON 类型有语义：字符串表示工作表名，正整数表示 1-based 序号。若已加载配置使用字符串形式的纯数字工作表名（例如 `"123"`），GUI 中未编辑该字段时，导出和运行都继续使用字符串名称，不会静默改为序号 `123`；用户主动把工作表字段改成纯 ASCII 数字时，才按序号解析。
 
-Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventory、JSON/CSV report 和超时等是单次运行输入或输出，不属于这五个配置根对象，也不会随导入/导出迁移。换设备后应在 GUI 中重新选择这些本机路径。
+Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventory、JSON/CSV report 和超时等是单次运行输入或输出，不属于这六个配置根对象，也不会随导入/导出迁移。换设备后应在 GUI 中重新选择这些本机路径。
 
 ### 5.4 “Position 映射库”页
 
@@ -519,7 +563,13 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 简写和完整路径都必须为非空文本，简写不能重复。存在未保存映射时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。保存后可直接用 Excel 中的简写运行，CLI/NPI 获得的是映射后的完整路径。
 
-### 5.5 “模块规则库”页
+### 5.5 “CRG Source映射库”页
+
+加载配置后，该页列出 Excel CRG_source 简写和 RTL 完整路径，支持搜索、新建、修改、删除和原子保存。操作、dirty 阻断、切换配置确认及保存冲突处理与 Position 映射库一致。
+
+命中映射后，GUI 结果表、JSON report 和 CSV 同时显示或保存 `简称 -> 完整路径`；未命中时显示直通的完整路径。该页只维护解析数据库，不开启 CRG 来源正确性检查，也不会把这些路径加入 NPI positions。
+
+### 5.6 “模块规则库”页
 
 加载配置后，规则页列出模块名、是否具有 RTL `RS_CRG_EN`、clk/rst formal port 名和决定拍数的 parameters。配置文件中对应的布尔键仍为 `has_rs_cfg_en`。用户可以搜索规则，或通过“新建/修改”“删除”维护当前配置：
 
@@ -531,20 +581,20 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 重复 parameter、`RS_CRG_EN` 被误放入 `step_parameters`、空模块名或含空白的端口名等会在应用时拒绝。存在“未保存”规则时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。旧规则缺少端口键时会先显示继承后的实际值，保存后 JSON 中每条规则都会显式包含端口名。
 
-### 5.6 执行、结果和取消
+### 5.7 执行、结果和取消
 
 - `验证 Excel`：在后台运行 `validate --json`，检查配置、列映射和规格行；只有勾选可选严格诊断时才额外比较表头。成功后切到“检查结果”页并显示 `VALID`。
 - `运行 RTL 检查`：在后台运行与当前界面等价的 `check` 命令；返回 `0` 显示 `PASS`，返回 `1` 显示 `FAIL` 和差异，基础设施错误显示 `ERROR`。
 - `取消`：终止整组后台进程。Linux 先向 CLI 及 collector 所在进程组发送终止信号，超时后强制结束；Windows 终止完整子进程树。关闭仍在运行的窗口时也会先询问是否取消。
 - `打开报告目录`：使用系统文件管理器打开 JSON/CSV 所在目录。
 
-“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position、Excel position 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。`spec.CRG_source` 仍可查看，但不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
+“检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position/CRG_source 及各自 Excel 简写、“匹配实例”和“实际/期望拍”，避免把别名与真实 hierarchy、物理实例数与有效拍数混淆。选中一行后，下方列出 finding；证据面板显示 `spec.position_alias`、`spec.crg_source_alias`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、逐实例 contribution、所有 effective `parameters`、全部 formal ports、固定为空的新采 `clk_sources` 和源文件/行号。CRG_source 证据不会产生 finding。再选具体 finding 会切换为 expected/actual。全局 finding 会作为 `GLOBAL` 行显示。“运行日志”页记录实际 CLI 命令、stdout、stderr 和退出码。
 
-GUI 共五个页签：“检查配置”“模块规则库”“Position 映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行五根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,module_rules`。VM 的有 clk/无 rst 专项在线 GUI 回归默认执行 20 轮，要求每轮 GUI 均显示 1 行 FAIL、1 error，finding 集合精确为 `{RST_PORT_MISSING}`；`has_rs_cfg_en=false` 且 Excel/internal `RS_CFG_EN` 为任意非标准文本的离线 GUI 专项也默认执行 20 轮，要求文本进入报告但不产生 finding。精确 `NA` 的离线专项默认 20 轮，由正整数 `GUI_RS_CFG_NA_ITERATIONS` 控制，日志为 `offline_gui_rs_cfg_na.log`；固定 marker `rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none` 证明 RTL 门控参数即使为非零 `1` 也只跳过门控检查。端到端脚本会对十份 GUI 日志执行配置往返门禁，其中明确包含 `partial_load_gui.log`、`online_gui_clk_present_rst_missing.log`、`offline_gui_rs_cfg_dontcare.log` 和 `offline_gui_rs_cfg_na.log`。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 共六个页签：“检查配置”“模块规则库”“Position 映射库”“CRG Source映射库”“检查结果”“运行日志”。它在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义，也不改变报告 schema 或退出码。完整可见 smoke 会实际执行六根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules`，并输出 `crg-source-db=crud-complete`。VM 的有 clk/无 rst、两个 RS_CFG_EN 专项和 CRG Source 映射专项默认各执行 20 轮；后者由 `GUI_CRG_SOURCE_MAPPING_ITERATIONS` 控制，日志为 `offline_gui_crg_source_mapping.log`，固定 marker 为 `crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=not-judged findings=none`。端到端脚本会对十一份 GUI 日志执行配置往返门禁。映射/规则保存、100 轮稳定性、10,000 行负载、取消竞态和 VM 在线测试见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
-`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会确认包括 `RS_CFG_EN` 在内的九个列号映射，解析 `position_mappings` 并在摘要中显示完整路径；默认不判断实际表头文字，只有显式开启严格诊断时才比较表头。它不能判断 RTL 路径是否真实存在，也不会在此阶段应用 `has_rs_cfg_en=true` 的精确 `假门控` 标签要求；该判定只在 `check` 阶段执行，`false` 时标签内容始终 don't-care。精确大写 `NA` 的门控豁免也在 `check` 时生效，且不会关闭同一行的其他 RTL 检查。
+`validate` 只检查配置和规格表，不加载 inventory、不启动 NPI，也不检查 RTL。因此它会确认包括 `RS_CFG_EN` 在内的九个列号映射，解析 `position_mappings` 和 `crg_source_mappings`，并在摘要/JSON 中保留两组完整路径与 alias；默认不判断实际表头文字，只有显式开启严格诊断时才比较表头。它不能判断 RTL 路径是否真实存在，也不会在此阶段应用 `has_rs_cfg_en=true` 的精确 `假门控` 标签要求；该判定只在 `check` 阶段执行，`false` 时标签内容始终 don't-care。精确大写 `NA` 的门控豁免也在 `check` 时生效，且不会关闭同一行的其他 RTL 检查。
 
 ```bash
 python -m rscheck validate \
@@ -556,8 +606,8 @@ python -m rscheck validate \
 
 ```text
 VALID: 2 specification row(s)
-row 2: tile_core -> top.u_tile / AAAA_BBB module=rs_pipe step=5
-row 3: tile_core -> top.u_tile / CTRL_RS_D0 module=rs_pipe step=1
+row 2: tile_core -> top.u_tile / AAAA_BBB module=rs_pipe step=5 CRG_source=crg_core -> top.u_tile.u_crg
+row 3: tile_core -> top.u_tile / CTRL_RS_D0 module=rs_pipe step=1 CRG_source=crg_core -> top.u_tile.u_crg
 ```
 
 输出完整规范化 JSON：
@@ -791,12 +841,12 @@ python -m rscheck check \
 在线流程为：
 
 1. Python 解析规格表和配置；
-2. 解析 position 简写，提取所有唯一完整 `position` 写入临时文本文件；简写不会送入 collector；
+2. 解析 position 和 CRG_source 简写；仅提取唯一完整 `position` 写入临时文本文件，任何 CRG_source 简写或完整路径都不会送入 collector；
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
 5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；若 load 返回 0，则枚举 top，存在可查询 top 时记录 partial notice 并继续，否则退出 11；
 6. collector 遍历层次、逐实例全部 formal ports 和 effective parameters；端口先用 Language Model 枚举，再用 NPI L1 按完整实例路径补采，生成 schema v2 inventory；`clk_sources` 固定为空；
-7. Python 加载 inventory，执行组、拍数、模块、逐模块 clk/rst 和 RTL `RS_CRG_EN` 检查；`CRG_source` 仅保留为报告证据；
+7. Python 加载 inventory，执行组、拍数、模块、逐模块 clk/rst 和 RTL `RS_CRG_EN` 检查；解析后的 `CRG_source` 全路径和可选简称仅保留为报告证据；
 8. 可选保存 inventory 和 JSON/CSV 报告。
 
 在线专用参数：
@@ -872,7 +922,7 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 - `schema_version`：当前固定为 `3`；注意 NPI inventory 的 schema 仍为 `2`；
 - `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
 - `global_findings`：例如硬错误 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`，或非致命 warning `NPI_LOAD_PARTIAL`；
-- `rows[].spec`：规范化后的九字段规格和源行号；`position` 是解析后的完整 RTL 路径，命中映射时 `position_alias` 保存 Excel 原始简写，未命中时为空；兼容标签字段 `RS_CFG_EN` 可以是空字符串；
+- `rows[].spec`：规范化后的九字段规格和源行号；`position`、`CRG_source` 是各自解析后的完整 RTL 路径，命中映射时 `position_alias`、`crg_source_alias` 保存对应 Excel 原始简写，未命中时为空；兼容标签字段 `RS_CFG_EN` 可以是空字符串；
 - `rows[].module_rule`：本行最终采用的规则；始终包含最终生效的 `clk_port/rst_port`；无显式覆盖时记录隐式默认的 `has_rs_cfg_en=true`、空 `step_parameters`、`clk_port="clk"`、`rst_port="rst_n"`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
 - `rows[].matched_instances`：实例路径、模块、文件/行号、`parameters`、全部 formal port 连线、兼容字段 `clk_sources` 及对应 `step_evaluation`；`parameters` 的值类型为 `string|null`，门控 parameter 证据键为 `RS_CRG_EN`；新在线采集的 `clk_sources` 为 `[]`；
@@ -880,20 +930,20 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 
 输出目录不存在时会自动创建。
 
-`rows[].spec.CRG_source` 继续保存 Excel 原值，但当前不会生成任何 CRG finding，也不会影响 `summary.passed`。
+`rows[].spec.CRG_source` 保存解析后的完整路径，`rows[].spec.crg_source_alias` 在命中映射时保存 Excel 原值；当前两者不会生成任何 CRG finding，也不会影响 `summary.passed`。
 
-GUI 为历史问题复现保留 report schema v2 的只读兼容显示，但 v2 没有模块规则和逐实例贡献，不能证明动态 step 判定；当前 CLI 新生成的报告始终是 v3。
+GUI 为历史问题复现保留 report schema v2 的只读兼容显示，也接受早期 v3 report 缺少 `crg_source_alias` 并按空 alias 展示；v2 没有模块规则和逐实例贡献，不能证明动态 step 判定。当前 CLI 新生成的报告始终是 v3，并始终写出 `crg_source_alias`。
 
 ### 11.3 CSV 报告
 
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
 ```text
-status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual
+status,row,position,position_alias,CRG_source,crg_source_alias,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual
 ```
 
 无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
-`position` 始终是检查使用的 RTL 全路径，`position_alias` 是命中映射时的 Excel 简写。`step_contributions` 是 JSON 文本，记录每个实例的 parameter 状态和贡献。CSV 的 `RS_CFG_EN` 列仍表示 Excel 标签；RTL `RS_CRG_EN` 与动态拍数失败沿用通用 `expected` / `actual`，逐实例完整证据保存在 JSON report v3 中。为保持下游兼容，相关 finding code 仍使用 `RS_CFG_EN_*` 前缀。
+`position` 与 `CRG_source` 始终是解析后的 RTL 全路径；`position_alias` 与 `crg_source_alias` 是各自命中映射时的 Excel 简写。`step_contributions` 是 JSON 文本，记录每个实例的 parameter 状态和贡献。CSV 的 `RS_CFG_EN` 列仍表示 Excel 标签；RTL `RS_CRG_EN` 与动态拍数失败沿用通用 `expected` / `actual`，逐实例完整证据保存在 JSON report v3 中。为保持下游兼容，相关 finding code 仍使用 `RS_CFG_EN_*` 前缀。
 
 ### 11.4 Python CLI 退出码
 
@@ -955,7 +1005,7 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 | `CLK_UNCONNECTED` / `RST_UNCONNECTED` | formal port 没有 high connection | 修正例化连线 |
 | `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对 `position` 的简单名或完整层次名，并核对连接 |
 | `UNSUPPORTED_CONNECTION` | clk/rst 经 concat、运算、mux 等复杂表达式连接 | 改为可追踪的直接信号，或扩展采集/规则模型 |
-| `CRG_source` 与预期不同但仍 PASS | 当前版本暂停 CRG 正确性判定 | 这是当前设计；字段仍进入 report，但新 inventory 的 `clk_sources=[]`，不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding |
+| `CRG_source` 与预期不同但仍 PASS | 当前版本只解析简称、暂停 CRG 正确性判定 | 这是当前设计；先用 `crg-source-db resolve --json` 或 report 的 `CRG_source`/`crg_source_alias` 核对映射，字段不会加入 NPI positions；新 inventory 的 `clk_sources=[]`，不会产生 `CRG_SOURCE_*` 或 `MULTIPLE_CLK_SOURCES` finding |
 | `RS_CFG_EN_PARAMETER_MISSING` | 非 `NA` 行的兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
 | `RS_CFG_EN_PARAMETER_UNEXPECTED` | 非 `NA` 行为 `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
 | `RS_CFG_EN_LABEL_MISMATCH` | 非 `NA` 行为 `has_rs_cfg_en=true`，但 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；`has_rs_cfg_en=false` 时任意字面内容都不会产生本 finding |
@@ -973,11 +1023,11 @@ status,row,position,position_alias,RS_module,RS_inst,RS_CFG_EN,physical_instance
 - `Intf_type` 仅作为业务标签，不验证 interface 的 input/output 数据链。
 - 当前九字段不足以证明每一拍的数据端口按顺序串接，也不检查首拍输入和末拍输出。
 - `step` 是模块规则计算出的有效拍数，不等同于物理实例数；后缀连续性只按具有合法非空 remainder 的 indexed 物理实例检查，空后缀实例不参与编号检查。
-- position 映射是区分大小写的精确替换，不做模糊、前缀或多级递归解析；未命中值按完整路径直通。
+- position 与 CRG_source 映射都是区分大小写的精确替换，不做模糊、前缀或多级递归解析；未命中值按完整路径直通。
 - collector 只收集 `position` 的直接 module children；会穿过 `npiGenScope`，但不会进入已经遇到的普通子模块，也不会穿过 interface/program 等其他层次边界。
 - SystemVerilog instance array 名如 `u[0]` 不符合默认 `AAAA_BBB_C0` 后缀风格；检查单个元素时可直接把 `u[0]` 作为完整本地 `RS_inst`，按数组前缀分组时才需要定制 `suffix_regex` 和前缀策略。
 - clk/rst 的复杂表达式不做字符串猜测，统一按 `UNSUPPORTED_CONNECTION` 处理。
-- `CRG_source` 当前仅解析和报告，不做来源追踪或正确性判断；新 inventory 的 `clk_sources` 固定为空。
+- `CRG_source` 当前仅解析简称并报告 alias+full，不做来源追踪或正确性判断，也不加入 NPI positions；新 inventory 的 `clk_sources` 固定为空。
 - RTL `RS_CRG_EN` 和 `step_parameters` 只按逐实例 effective 值判定；schema v1 或缺少 `parameters` 的 inventory 不具备所需证据，不能用于当前检查。
 - `allow_leaf_signal_match=true` 会放宽层次比较，可能让不同 scope 的同名信号误匹配。
 - inventory `warnings` 中的 NPI traversal 问题会升级为 `NPI_UNRESOLVED` error；partial-load stderr warning 写入 inventory `notices`，在 report/GUI 中保持非致命 `NPI_LOAD_PARTIAL`。

@@ -14,6 +14,8 @@ from rscheck.config import load_config as read_config
 from rscheck.gui import (
     RsCheckApp,
     WorkerOutcome,
+    _crg_source_display,
+    _crg_source_mapping_from_form,
     _evidence_payload,
     _module_rule_from_form,
     _parse_step_parameters,
@@ -67,12 +69,14 @@ class GuiLifecycleTests(unittest.TestCase):
         *,
         module_rules=None,
         position_mappings=None,
+        crg_source_mappings=None,
     ) -> ToolConfig:
         return ToolConfig(
             excel=ExcelConfig(),
             rtl=RtlConfig(),
             module_rules=module_rules or {},
             position_mappings=position_mappings or {},
+            crg_source_mappings=crg_source_mappings or {},
         )
 
     @staticmethod
@@ -112,6 +116,10 @@ class GuiLifecycleTests(unittest.TestCase):
                 f"core_{offset}": f"tb.dut_{offset}.u_core",
                 f"pipe_{offset}": f"tb.dut_{offset}.u_core.u_pipe",
             },
+            crg_source_mappings={
+                f"crg_core_{offset}": f"tb.dut_{offset}.u_crg",
+                f"crg_aux_{offset}": f"tb.dut_{offset}.u_aux_crg",
+            },
         )
 
     @staticmethod
@@ -132,12 +140,17 @@ class GuiLifecycleTests(unittest.TestCase):
         app._loaded_config_path = resolved_path
         app._module_rules = dict(config.module_rules)
         app._position_mappings = dict(config.position_mappings)
+        app._crg_source_mappings = dict(config.crg_source_mappings)
         app._module_rules_dirty = False
         app._position_mappings_dirty = False
+        app._crg_source_mappings_dirty = False
+        app._crg_source_mappings_dirty = False
         app._new_rule = Mock()
         app._new_position_mapping = Mock()
+        app._new_crg_source_mapping = Mock()
         app._render_rule_tree = Mock()
         app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
         app.status_var = _FakeVar("ready")
         return app
 
@@ -149,8 +162,10 @@ class GuiLifecycleTests(unittest.TestCase):
             app._loaded_config_path,
             dict(app._module_rules),
             dict(app._position_mappings),
+            dict(app._crg_source_mappings),
             app._module_rules_dirty,
             app._position_mappings_dirty,
+            app._crg_source_mappings_dirty,
             app.sheet_var.get(),
             app.header_row_var.get(),
             app.data_start_row_var.get(),
@@ -162,6 +177,7 @@ class GuiLifecycleTests(unittest.TestCase):
         baseline = self._complete_config(offset=1)
         exported_rules = self._complete_config(offset=7).module_rules
         exported_positions = self._complete_config(offset=7).position_mappings
+        exported_crg_sources = self._complete_config(offset=7).crg_source_mappings
 
         with tempfile.TemporaryDirectory() as temporary:
             current_path = Path(temporary) / "current.json"
@@ -176,8 +192,10 @@ class GuiLifecycleTests(unittest.TestCase):
                 export_app.column_vars[name].set(str(20 + index))
             export_app._module_rules = dict(exported_rules)
             export_app._position_mappings = dict(exported_positions)
+            export_app._crg_source_mappings = dict(exported_crg_sources)
             export_app._module_rules_dirty = True
             export_app._position_mappings_dirty = True
+            export_app._crg_source_mappings_dirty = True
             before_export = self._config_state(export_app)
 
             with patch(
@@ -203,6 +221,7 @@ class GuiLifecycleTests(unittest.TestCase):
                 rtl=baseline.rtl,
                 module_rules=exported_rules,
                 position_mappings=exported_positions,
+                crg_source_mappings=exported_crg_sources,
             )
             self.assertEqual(read_config(export_path), expected)
 
@@ -225,8 +244,12 @@ class GuiLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(import_app._module_rules, dict(exported_rules))
             self.assertEqual(import_app._position_mappings, dict(exported_positions))
+            self.assertEqual(
+                import_app._crg_source_mappings, dict(exported_crg_sources)
+            )
             self.assertFalse(import_app._module_rules_dirty)
             self.assertFalse(import_app._position_mappings_dirty)
+            self.assertFalse(import_app._crg_source_mappings_dirty)
             self.assertEqual(import_app.sheet_var.get(), "Portable Signals")
             self.assertEqual(import_app.header_row_var.get(), "12")
             self.assertEqual(import_app.data_start_row_var.get(), "14")
@@ -237,13 +260,16 @@ class GuiLifecycleTests(unittest.TestCase):
             )
             import_app._new_rule.assert_called_once_with()
             import_app._new_position_mapping.assert_called_once_with()
+            import_app._new_crg_source_mapping.assert_called_once_with()
             import_app._render_rule_tree.assert_called_once_with()
             import_app._render_position_tree.assert_called_once_with()
+            import_app._render_crg_source_tree.assert_called_once_with()
 
     def test_import_cancel_keeps_complete_current_state(self) -> None:
         app = self._app_with_config(self._complete_config(offset=3), "current.json")
         app._module_rules_dirty = True
         app._position_mappings_dirty = True
+        app._crg_source_mappings_dirty = True
         before = self._config_state(app)
 
         with patch("rscheck.gui.filedialog.askopenfilename", return_value=""):
@@ -257,10 +283,14 @@ class GuiLifecycleTests(unittest.TestCase):
         app = self._app_with_config(self._complete_config(offset=4), "current.json")
         app._module_rules_dirty = True
         app._position_mappings_dirty = True
+        app._crg_source_mappings_dirty = True
         app._confirm_discard_rule_changes = Mock(
             side_effect=AssertionError("invalid input must be rejected before confirmation")
         )
         app._confirm_discard_position_changes = Mock(
+            side_effect=AssertionError("invalid input must be rejected before confirmation")
+        )
+        app._confirm_discard_crg_source_changes = Mock(
             side_effect=AssertionError("invalid input must be rejected before confirmation")
         )
         before = self._config_state(app)
@@ -279,8 +309,10 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(self._config_state(app), before)
         app._new_rule.assert_not_called()
         app._new_position_mapping.assert_not_called()
+        app._new_crg_source_mapping.assert_not_called()
         app._render_rule_tree.assert_not_called()
         app._render_position_tree.assert_not_called()
+        app._render_crg_source_tree.assert_not_called()
 
     def test_import_aborts_atomically_when_dirty_database_is_not_discarded(self) -> None:
         app = self._app_with_config(self._complete_config(offset=5), "current.json")
@@ -302,8 +334,38 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(self._config_state(app), before)
         app._new_rule.assert_not_called()
         app._new_position_mapping.assert_not_called()
+        app._new_crg_source_mapping.assert_not_called()
         app._render_rule_tree.assert_not_called()
         app._render_position_tree.assert_not_called()
+        app._render_crg_source_tree.assert_not_called()
+
+    def test_import_aborts_atomically_when_dirty_crg_database_is_not_discarded(self) -> None:
+        app = self._app_with_config(self._complete_config(offset=5), "current.json")
+        app._module_rules_dirty = True
+        app._position_mappings_dirty = True
+        app._crg_source_mappings_dirty = True
+        app._confirm_discard_rule_changes = Mock(return_value=True)
+        app._confirm_discard_position_changes = Mock(return_value=True)
+        app._confirm_discard_crg_source_changes = Mock(return_value=False)
+        before = self._config_state(app)
+        candidate = self._complete_config(offset=6)
+
+        with patch(
+            "rscheck.gui.filedialog.askopenfilename", return_value="candidate.json"
+        ):
+            with patch("rscheck.gui.load_complete_config", return_value=candidate):
+                app._import_config()
+
+        app._confirm_discard_rule_changes.assert_called_once_with()
+        app._confirm_discard_position_changes.assert_called_once_with()
+        app._confirm_discard_crg_source_changes.assert_called_once_with()
+        self.assertEqual(self._config_state(app), before)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+        app._new_crg_source_mapping.assert_not_called()
+        app._render_rule_tree.assert_not_called()
+        app._render_position_tree.assert_not_called()
+        app._render_crg_source_tree.assert_not_called()
 
     def test_import_aborts_when_candidate_changes_during_confirmation(self) -> None:
         app = self._app_with_config(self._complete_config(offset=5), "current.json")
@@ -557,6 +619,7 @@ class GuiLifecycleTests(unittest.TestCase):
         for save_method, dirty_attribute in (
             ("_save_module_rules", "_module_rules_dirty"),
             ("_save_position_mappings", "_position_mappings_dirty"),
+            ("_save_crg_source_mappings", "_crg_source_mappings_dirty"),
         ):
             with self.subTest(save_method=save_method):
                 with tempfile.TemporaryDirectory() as temporary:
@@ -630,6 +693,8 @@ class GuiLifecycleTests(unittest.TestCase):
                 "RS_CFG_EN": "假门控",
                 "position_alias": "core_pipe",
                 "position": "tb.dut.u_core.u_pipe",
+                "crg_source_alias": "core_crg",
+                "CRG_source": "tb.dut.u_crg",
             },
             "module_rule": {
                 "name": "pipe",
@@ -663,6 +728,9 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(evidence["step_check"]["effective_step"], 1)
         self.assertEqual(evidence["spec"]["position_alias"], "core_pipe")
         self.assertEqual(evidence["spec"]["position"], "tb.dut.u_core.u_pipe")
+        self.assertEqual(
+            evidence["crg_source_resolution"], "core_crg -> tb.dut.u_crg"
+        )
         self.assertEqual(evidence["module_rule"]["clk_port"], "clock_i")
         self.assertEqual(evidence["module_rule"]["rst_port"], "reset_ni")
 
@@ -722,6 +790,89 @@ class GuiLifecycleTests(unittest.TestCase):
             "tb.dut",
         )
 
+    def test_crg_source_mapping_form_trims_and_requires_both_values(self) -> None:
+        alias, rtl_path = _crg_source_mapping_from_form(
+            " core crg ", " tb.dut.core u_crg "
+        )
+        self.assertEqual(alias, "core crg")
+        self.assertEqual(rtl_path, "tb.dut.core u_crg")
+        with self.assertRaisesRegex(GuiInputError, "CRG_source 简写不能为空"):
+            _crg_source_mapping_from_form("  ", "tb.dut")
+        with self.assertRaisesRegex(GuiInputError, "不能以.*开头或结尾"):
+            _crg_source_mapping_from_form(".crg", "tb.dut")
+        with self.assertRaisesRegex(GuiInputError, "RTL 层次全路径不能为空"):
+            _crg_source_mapping_from_form("crg", "  ")
+        with self.assertRaisesRegex(GuiInputError, "不能仅由"):
+            _crg_source_mapping_from_form("crg", "...")
+
+    def test_crg_source_display_shows_alias_and_resolved_path(self) -> None:
+        self.assertEqual(
+            _crg_source_display(
+                {
+                    "crg_source_alias": "core_crg",
+                    "CRG_source": "tb.dut.u_crg",
+                }
+            ),
+            "core_crg -> tb.dut.u_crg",
+        )
+        self.assertEqual(
+            _crg_source_display(
+                {"crg_source_alias": "", "CRG_source": "tb.dut.u_crg"}
+            ),
+            "tb.dut.u_crg",
+        )
+
+    def test_crg_source_mapping_crud_updates_draft_atomically(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app.root = _FakeRoot()
+        app._crg_source_mappings = {"old_crg": "tb.dut.u_old_crg"}
+        app._crg_source_mappings_dirty = False
+        app._editing_crg_source_alias = "old_crg"
+        app.crg_source_alias_var = _FakeVar(" new_crg ")
+        app.crg_source_path_var = _FakeVar(" tb.dut.u_new_crg ")
+        app._render_crg_source_tree = Mock()
+        app._new_crg_source_mapping = Mock()
+        app.status_var = _FakeVar("ready")
+
+        app._apply_crg_source_mapping()
+
+        self.assertEqual(
+            app._crg_source_mappings, {"new_crg": "tb.dut.u_new_crg"}
+        )
+        self.assertEqual(app._editing_crg_source_alias, "new_crg")
+        self.assertTrue(app._crg_source_mappings_dirty)
+        app._render_crg_source_tree.assert_called_once_with()
+
+        with patch("rscheck.gui.messagebox.askyesno", return_value=True):
+            app._delete_crg_source_mapping()
+
+        self.assertEqual(app._crg_source_mappings, {})
+        app._new_crg_source_mapping.assert_called_once_with()
+        self.assertEqual(app._render_crg_source_tree.call_count, 2)
+
+    def test_crg_source_mapping_duplicate_does_not_change_draft(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app.root = _FakeRoot()
+        app._crg_source_mappings = {
+            "crg_a": "tb.dut.u_crg_a",
+            "crg_b": "tb.dut.u_crg_b",
+        }
+        app._crg_source_mappings_dirty = False
+        app._editing_crg_source_alias = "crg_a"
+        app.crg_source_alias_var = _FakeVar("crg_b")
+        app.crg_source_path_var = _FakeVar("tb.dut.u_new")
+        app._render_crg_source_tree = Mock()
+        app.status_var = _FakeVar("ready")
+        before = dict(app._crg_source_mappings)
+
+        with patch("rscheck.gui.messagebox.showerror") as showerror:
+            app._apply_crg_source_mapping()
+
+        self.assertEqual(app._crg_source_mappings, before)
+        self.assertFalse(app._crg_source_mappings_dirty)
+        app._render_crg_source_tree.assert_not_called()
+        showerror.assert_called_once()
+
     def test_unsaved_module_rules_block_operations(self) -> None:
         app = object.__new__(RsCheckApp)
         app._module_rules_dirty = True
@@ -740,6 +891,7 @@ class GuiLifecycleTests(unittest.TestCase):
         app = object.__new__(RsCheckApp)
         app._module_rules_dirty = False
         app._position_mappings_dirty = False
+        app._crg_source_mappings_dirty = False
         app._running = False
         app.controller = SimpleNamespace(is_running=False)
         app.root = _FakeRoot()
@@ -773,6 +925,26 @@ class GuiLifecycleTests(unittest.TestCase):
             parent=app.root,
         )
 
+    def test_unsaved_crg_source_mappings_block_operations(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._module_rules_dirty = False
+        app._position_mappings_dirty = False
+        app._crg_source_mappings_dirty = True
+        app._running = False
+        app.controller = SimpleNamespace(is_running=False)
+        app.root = _FakeRoot()
+        app._request = Mock(side_effect=AssertionError("must not build a request"))
+
+        with patch("rscheck.gui.messagebox.showerror") as showerror:
+            app._start_operation("check")
+
+        app._request.assert_not_called()
+        showerror.assert_called_once_with(
+            "映射未保存",
+            "请先在 CRG Source 映射库页保存修改",
+            parent=app.root,
+        )
+
     def test_saving_position_mappings_uses_current_disk_config(self) -> None:
         app = object.__new__(RsCheckApp)
         config_path = "config.json"
@@ -785,14 +957,17 @@ class GuiLifecycleTests(unittest.TestCase):
         loaded_config = self._config(
             module_rules=baseline_rules,
             position_mappings={"old": "tb.dut.old"},
+            crg_source_mappings={"baseline": "tb.dut.u_crg_base"},
         )
         current_disk_config = self._config(
             module_rules=external_rules,
             position_mappings={"old": "tb.dut.old"},
+            crg_source_mappings={"external": "tb.dut.u_crg_external"},
         )
         reloaded_config = self._config(
             module_rules=external_rules,
             position_mappings={"core": "tb.dut.u_core"},
+            crg_source_mappings={"external": "tb.dut.u_crg_external"},
         )
         app.root = _FakeRoot()
         app.config_var = SimpleNamespace(get=lambda: config_path)
@@ -802,9 +977,13 @@ class GuiLifecycleTests(unittest.TestCase):
         app._position_mappings_dirty = True
         app._module_rules_dirty = True
         app._module_rules = {"draft": ModuleRule("draft", False)}
+        app._crg_source_mappings = {"draft": "tb.dut.u_crg_draft"}
+        app._crg_source_mappings_dirty = True
         app._new_rule = Mock()
+        app._new_crg_source_mapping = Mock()
         app._render_rule_tree = Mock()
         app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
         with patch(
@@ -821,16 +1000,30 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(
             saved_config.position_mappings, {"core": "tb.dut.u_core"}
         )
+        self.assertEqual(
+            saved_config.crg_source_mappings,
+            {"external": "tb.dut.u_crg_external"},
+        )
         self.assertEqual(load_current.call_count, 2)
         self.assertEqual(app._loaded_config.module_rules, baseline_rules)
         self.assertEqual(
             app._loaded_config.position_mappings, {"core": "tb.dut.u_core"}
         )
+        self.assertEqual(
+            app._loaded_config.crg_source_mappings,
+            {"baseline": "tb.dut.u_crg_base"},
+        )
+        self.assertEqual(
+            app._crg_source_mappings, {"draft": "tb.dut.u_crg_draft"}
+        )
         self.assertFalse(app._position_mappings_dirty)
         self.assertTrue(app._module_rules_dirty)
+        self.assertTrue(app._crg_source_mappings_dirty)
         app._new_rule.assert_not_called()
         app._render_rule_tree.assert_not_called()
         app._render_position_tree.assert_called_once_with()
+        app._new_crg_source_mapping.assert_not_called()
+        app._render_crg_source_tree.assert_not_called()
 
     def test_saving_module_rules_uses_current_disk_config(self) -> None:
         app = object.__new__(RsCheckApp)
@@ -843,14 +1036,17 @@ class GuiLifecycleTests(unittest.TestCase):
         loaded_config = self._config(
             module_rules={"rs_pipe": baseline_rule},
             position_mappings=baseline_positions,
+            crg_source_mappings={"baseline": "tb.dut.u_crg_base"},
         )
         current_disk_config = self._config(
             module_rules={"rs_pipe": baseline_rule},
             position_mappings=external_positions,
+            crg_source_mappings={"external": "tb.dut.u_crg_external"},
         )
         reloaded_config = self._config(
             module_rules=edited_rules,
             position_mappings=external_positions,
+            crg_source_mappings={"external": "tb.dut.u_crg_external"},
         )
         app.root = _FakeRoot()
         app.config_var = SimpleNamespace(get=lambda: config_path)
@@ -860,8 +1056,12 @@ class GuiLifecycleTests(unittest.TestCase):
         app._module_rules_dirty = True
         app._position_mappings_dirty = True
         app._position_mappings = {"draft": "tb.dut.draft"}
+        app._crg_source_mappings_dirty = True
+        app._crg_source_mappings = {"draft": "tb.dut.u_crg_draft"}
         app._new_position_mapping = Mock()
+        app._new_crg_source_mapping = Mock()
         app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
         app._render_rule_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
@@ -877,15 +1077,26 @@ class GuiLifecycleTests(unittest.TestCase):
         saved_config = save_current.call_args.args[0]
         self.assertEqual(saved_config.module_rules, edited_rules)
         self.assertEqual(saved_config.position_mappings, external_positions)
+        self.assertEqual(
+            saved_config.crg_source_mappings,
+            {"external": "tb.dut.u_crg_external"},
+        )
         self.assertEqual(load_current.call_count, 2)
         self.assertEqual(app._loaded_config.module_rules, edited_rules)
         self.assertEqual(
             app._loaded_config.position_mappings, baseline_positions
         )
+        self.assertEqual(
+            app._loaded_config.crg_source_mappings,
+            {"baseline": "tb.dut.u_crg_base"},
+        )
         self.assertFalse(app._module_rules_dirty)
         self.assertTrue(app._position_mappings_dirty)
+        self.assertTrue(app._crg_source_mappings_dirty)
         app._new_position_mapping.assert_not_called()
         app._render_position_tree.assert_not_called()
+        app._new_crg_source_mapping.assert_not_called()
+        app._render_crg_source_tree.assert_not_called()
         app._render_rule_tree.assert_called_once_with()
 
     def test_saving_position_mappings_refreshes_clean_module_rules(self) -> None:
@@ -912,9 +1123,13 @@ class GuiLifecycleTests(unittest.TestCase):
         app._position_mappings = {"new": "tb.dut.new"}
         app._position_mappings_dirty = True
         app._module_rules_dirty = False
+        app._crg_source_mappings_dirty = False
+        app._crg_source_mappings = {}
         app._new_rule = Mock()
+        app._new_crg_source_mapping = Mock()
         app._render_rule_tree = Mock()
         app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
         with patch("rscheck.gui.save_config", return_value=config_path):
@@ -927,6 +1142,8 @@ class GuiLifecycleTests(unittest.TestCase):
         self.assertEqual(app._module_rules, {"external": external_rule})
         app._new_rule.assert_called_once_with()
         app._render_rule_tree.assert_called_once_with()
+        app._new_crg_source_mapping.assert_called_once_with()
+        app._render_crg_source_tree.assert_called_once_with()
 
     def test_saving_module_rules_refreshes_clean_position_mappings(self) -> None:
         app = object.__new__(RsCheckApp)
@@ -952,8 +1169,12 @@ class GuiLifecycleTests(unittest.TestCase):
         app._module_rules = {"rs_pipe": edited_rule}
         app._module_rules_dirty = True
         app._position_mappings_dirty = False
+        app._crg_source_mappings_dirty = False
+        app._crg_source_mappings = {}
         app._new_position_mapping = Mock()
+        app._new_crg_source_mapping = Mock()
         app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
         app._render_rule_tree = Mock()
         app.status_var = SimpleNamespace(set=Mock())
 
@@ -969,6 +1190,79 @@ class GuiLifecycleTests(unittest.TestCase):
         )
         app._new_position_mapping.assert_called_once_with()
         app._render_position_tree.assert_called_once_with()
+        app._new_crg_source_mapping.assert_called_once_with()
+        app._render_crg_source_tree.assert_called_once_with()
+
+    def test_saving_crg_source_mappings_uses_current_disk_config(self) -> None:
+        app = object.__new__(RsCheckApp)
+        config_path = "config.json"
+        baseline_rule = ModuleRule("baseline", False)
+        external_rule = ModuleRule("external", True)
+        baseline = self._config(
+            module_rules={"baseline": baseline_rule},
+            position_mappings={"baseline": "tb.dut.u_base"},
+            crg_source_mappings={"old": "tb.dut.u_crg_old"},
+        )
+        current = self._config(
+            module_rules={"external": external_rule},
+            position_mappings={"external": "tb.dut.u_external"},
+            crg_source_mappings={"old": "tb.dut.u_crg_old"},
+        )
+        reloaded = self._config(
+            module_rules={"external": external_rule},
+            position_mappings={"external": "tb.dut.u_external"},
+            crg_source_mappings={"core_crg": "tb.dut.u_crg"},
+        )
+        app.root = _FakeRoot()
+        app.config_var = SimpleNamespace(get=lambda: config_path)
+        app._loaded_config = baseline
+        app._loaded_config_path = str(Path(config_path).resolve())
+        app._crg_source_mappings = {"core_crg": "tb.dut.u_crg"}
+        app._crg_source_mappings_dirty = True
+        app._module_rules = {"draft": ModuleRule("draft", False)}
+        app._module_rules_dirty = True
+        app._position_mappings = {"draft": "tb.dut.u_draft"}
+        app._position_mappings_dirty = True
+        app._new_rule = Mock()
+        app._new_position_mapping = Mock()
+        app._render_rule_tree = Mock()
+        app._render_position_tree = Mock()
+        app._render_crg_source_tree = Mock()
+        app.status_var = SimpleNamespace(set=Mock())
+
+        with patch("rscheck.gui.save_config", return_value=config_path) as save_current:
+            with patch(
+                "rscheck.gui.load_config", side_effect=(current, reloaded)
+            ) as load_current:
+                app._save_crg_source_mappings()
+
+        saved_config = save_current.call_args.args[0]
+        self.assertEqual(saved_config.module_rules, {"external": external_rule})
+        self.assertEqual(
+            saved_config.position_mappings, {"external": "tb.dut.u_external"}
+        )
+        self.assertEqual(
+            saved_config.crg_source_mappings, {"core_crg": "tb.dut.u_crg"}
+        )
+        self.assertEqual(load_current.call_count, 2)
+        self.assertEqual(app._loaded_config.module_rules, {"baseline": baseline_rule})
+        self.assertEqual(
+            app._loaded_config.position_mappings, {"baseline": "tb.dut.u_base"}
+        )
+        self.assertEqual(
+            app._loaded_config.crg_source_mappings,
+            {"core_crg": "tb.dut.u_crg"},
+        )
+        self.assertEqual(app._module_rules, {"draft": ModuleRule("draft", False)})
+        self.assertEqual(app._position_mappings, {"draft": "tb.dut.u_draft"})
+        self.assertTrue(app._module_rules_dirty)
+        self.assertTrue(app._position_mappings_dirty)
+        self.assertFalse(app._crg_source_mappings_dirty)
+        app._new_rule.assert_not_called()
+        app._new_position_mapping.assert_not_called()
+        app._render_rule_tree.assert_not_called()
+        app._render_position_tree.assert_not_called()
+        app._render_crg_source_tree.assert_called_once_with()
 
     def test_position_mapping_save_rejects_external_same_database_change(self) -> None:
         app = object.__new__(RsCheckApp)
@@ -994,6 +1288,36 @@ class GuiLifecycleTests(unittest.TestCase):
             parent=app.root,
         )
         self.assertTrue(app._position_mappings_dirty)
+        self.assertIs(app._loaded_config, baseline)
+
+    def test_crg_source_mapping_save_rejects_external_same_database_change(self) -> None:
+        app = object.__new__(RsCheckApp)
+        config_path = "config.json"
+        baseline = self._config(
+            crg_source_mappings={"core_crg": "tb.dut.u_crg_old"}
+        )
+        current = self._config(
+            crg_source_mappings={"core_crg": "tb.dut.u_crg_external"}
+        )
+        app.root = _FakeRoot()
+        app.config_var = SimpleNamespace(get=lambda: config_path)
+        app._loaded_config = baseline
+        app._loaded_config_path = str(Path(config_path).resolve())
+        app._crg_source_mappings = {"core_crg": "tb.dut.u_crg_local"}
+        app._crg_source_mappings_dirty = True
+
+        with patch("rscheck.gui.load_config", return_value=current):
+            with patch("rscheck.gui.save_config") as save_config:
+                with patch("rscheck.gui.messagebox.showerror") as showerror:
+                    app._save_crg_source_mappings()
+
+        save_config.assert_not_called()
+        showerror.assert_called_once_with(
+            "保存冲突",
+            "CRG Source 映射库已被外部修改，请先重新加载配置后再保存",
+            parent=app.root,
+        )
+        self.assertTrue(app._crg_source_mappings_dirty)
         self.assertIs(app._loaded_config, baseline)
 
     def test_module_rule_save_rejects_external_same_database_change(self) -> None:
@@ -1051,6 +1375,21 @@ class GuiLifecycleTests(unittest.TestCase):
 
         self.assertFalse(app.root.destroyed)
         app._confirm_discard_position_changes.assert_called_once_with()
+
+    def test_close_keeps_window_when_dirty_crg_sources_are_not_discarded(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._module_rules_dirty = False
+        app._position_mappings_dirty = False
+        app._crg_source_mappings_dirty = True
+        app._running = False
+        app.controller = SimpleNamespace(is_running=False)
+        app.root = _FakeRoot()
+        app._confirm_discard_crg_source_changes = Mock(return_value=False)
+
+        app._on_close()
+
+        self.assertFalse(app.root.destroyed)
+        app._confirm_discard_crg_source_changes.assert_called_once_with()
 
     def test_cancel_before_worker_start_never_invokes_process_controller(self) -> None:
         app = object.__new__(RsCheckApp)

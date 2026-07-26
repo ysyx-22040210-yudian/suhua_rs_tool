@@ -229,11 +229,13 @@ class ExcelReaderTests(unittest.TestCase):
             ROOT / "examples" / "RS_Check_Excel_Template.xlsx",
             config.excel,
             config.position_mappings,
+            config.crg_source_mappings,
         )
         csv_rows = read_spec_rows(
             ROOT / "examples" / "specs.csv",
             config.excel,
             config.position_mappings,
+            config.crg_source_mappings,
         )
 
         def values(row: object) -> tuple[object, ...]:
@@ -249,6 +251,7 @@ class ExcelReaderTests(unittest.TestCase):
                     "clk",
                     "rst",
                     "crg_source",
+                    "crg_source_alias",
                     "rs_cfg_en",
                 )
             )
@@ -259,6 +262,13 @@ class ExcelReaderTests(unittest.TestCase):
                 row.position == "top.u_tile" and row.position_alias == "tile_core"
                 for row in xlsx_rows
             )
+        )
+        self.assertEqual(
+            [(row.crg_source, row.crg_source_alias) for row in xlsx_rows],
+            [
+                ("top.u_tile.u_crg", "crg_core"),
+                ("top.u_tile.u_aux_crg", "crg_aux"),
+            ],
         )
 
     def test_repository_excel_template_rs_cfg_en_guidance_and_validation(self) -> None:
@@ -312,6 +322,8 @@ class ExcelReaderTests(unittest.TestCase):
                 "E14",
                 "F14",
                 "G14",
+                "A15",
+                "A17",
             }:
                 continue
             guide_values[reference] = "".join(
@@ -321,7 +333,11 @@ class ExcelReaderTests(unittest.TestCase):
             )
 
         self.assertIn("当前不参与 PASS/FAIL 判定", guide_values["F13"])
+        self.assertIn("config.crg_source_mappings", guide_values["F13"])
+        self.assertIn("完整 RTL 路径", guide_values["F13"])
         self.assertIn("不产生 CRG finding", guide_values["G13"])
+        self.assertIn("GUI CRG Source映射库", guide_values["G13"])
+        self.assertIn("未命中时按完整路径使用", guide_values["G13"])
         self.assertEqual(guide_values["C14"], "可选 / 文本")
         self.assertEqual(
             guide_values["D14"], "RS_CRG_EN 门控参数的兼容标签字段"
@@ -333,6 +349,10 @@ class ExcelReaderTests(unittest.TestCase):
         self.assertIn("仅精确大写 NA（首尾空白忽略）会跳过", guide_values["G14"])
         self.assertIn("na、N/A 不会", guide_values["G14"])
         self.assertIn("step、clk、rst 等其他检查仍执行", guide_values["G14"])
+        self.assertIn("Position/CRG Source映射", guide_values["A15"])
+        self.assertIn("position 和 CRG_source 均可填简称", guide_values["A17"])
+        self.assertIn("config.position_mappings", guide_values["A17"])
+        self.assertIn("config.crg_source_mappings", guide_values["A17"])
 
     def test_repository_excel_table_metadata_matches_visible_headers(self) -> None:
         expected = {
@@ -502,6 +522,70 @@ class ExcelReaderTests(unittest.TestCase):
             )
         self.assertEqual(rows[0].position, "tile1")
         self.assertEqual(rows[0].position_alias, "tile0")
+
+    def test_crg_source_alias_is_resolved_and_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "crg_alias.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.u,1,clk,rst,.core_crg.,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {},
+                {"core_crg": ".tb_top.dut.u_crg."},
+            )
+        self.assertEqual(rows[0].crg_source, "tb_top.dut.u_crg")
+        self.assertEqual(rows[0].crg_source_alias, "core_crg")
+        self.assertEqual(rows[0].as_dict()["CRG_source"], "tb_top.dut.u_crg")
+        self.assertEqual(rows[0].as_dict()["crg_source_alias"], "core_crg")
+
+    def test_unmapped_crg_source_passes_through_and_is_case_sensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "crg_full_path.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.u,1,clk,rst,.core_crg.,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {},
+                {"CORE_CRG": "tb_top.dut.u_crg"},
+            )
+        self.assertEqual(rows[0].crg_source, "core_crg")
+        self.assertEqual(rows[0].crg_source_alias, "")
+
+    def test_crg_source_mapping_is_exact_and_one_level(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "crg_one_level.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.u,1,clk,rst,crg0,\n",
+                encoding="utf-8",
+            )
+            rows = read_spec_rows(
+                path,
+                ExcelConfig(sheet=1, columns=COLUMNS),
+                {},
+                {"crg0": "crg1", "crg1": "tb_top.dut.u_crg"},
+            )
+        self.assertEqual(rows[0].crg_source, "crg1")
+        self.assertEqual(rows[0].crg_source_alias, "crg0")
+
+    def test_crg_source_only_dots_is_rejected_after_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "empty_crg.csv"
+            path.write_text(
+                "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
+                "A,pipe,PFX,top.u,1,clk,rst,...,\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(WorkbookError, "CRG_source cannot be empty"):
+                read_spec_rows(path, ExcelConfig(sheet=1, columns=COLUMNS))
 
     def test_duplicate_group_after_position_resolution_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:

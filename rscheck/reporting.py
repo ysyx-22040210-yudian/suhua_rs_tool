@@ -105,6 +105,8 @@ def _finding_row(
         "row": finding.row_number if finding.row_number is not None else "",
         "position": finding.position,
         "position_alias": row.spec.position_alias if row is not None else "",
+        "CRG_source": row.spec.crg_source if row is not None else "",
+        "crg_source_alias": row.spec.crg_source_alias if row is not None else "",
         "RS_inst": finding.rs_inst,
         "RS_CFG_EN": finding.rs_cfg_en,
         "instance": finding.instance,
@@ -131,6 +133,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "row",
         "position",
         "position_alias",
+        "CRG_source",
+        "crg_source_alias",
         "RS_module",
         "RS_inst",
         "RS_CFG_EN",
@@ -157,6 +161,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "row": row.spec.row_number,
                             "position": row.spec.position,
                             "position_alias": row.spec.position_alias,
+                            "CRG_source": row.spec.crg_source,
+                            "crg_source_alias": row.spec.crg_source_alias,
                             "RS_module": row.spec.rs_module,
                             "RS_inst": row.spec.rs_inst,
                             "RS_CFG_EN": row.spec.rs_cfg_en,
@@ -190,11 +196,17 @@ def format_console_report(report: CheckReport) -> str:
         position = row.spec.position
         if row.spec.position_alias:
             position = f"{row.spec.position_alias} -> {row.spec.position}"
+        crg_source = row.spec.crg_source
+        if row.spec.crg_source_alias:
+            crg_source = (
+                f"{row.spec.crg_source_alias} -> {row.spec.crg_source}"
+            )
         lines.append(
             f"[{'PASS' if row.passed else 'FAIL'}] row {row.spec.row_number} "
             f"{row.spec.intf_type} | {position} / {row.spec.rs_inst} "
             f"physical={len(row.instances)} effective={effective_step} "
             f"expected={row.spec.step} "
+            f"CRG_source={crg_source} "
             f"RS_CFG_EN={row.spec.rs_cfg_en or '<blank>'}"
         )
         for finding in row.findings:

@@ -99,6 +99,7 @@ def _rows_to_specs(
     rows: Iterable[tuple[int, Mapping[int, str]]],
     config: ExcelConfig,
     position_mappings: Mapping[str, str],
+    crg_source_mappings: Mapping[str, str],
 ) -> list[SpecRow]:
     materialised = list(rows)
     if config.validate_headers:
@@ -134,6 +135,13 @@ def _rows_to_specs(
         else:
             position = position_input
             position_alias = ""
+        crg_source_input = values["CRG_source"].strip(".")
+        if crg_source_input in crg_source_mappings:
+            crg_source = crg_source_mappings[crg_source_input].strip(".")
+            crg_source_alias = crg_source_input
+        else:
+            crg_source = crg_source_input
+            crg_source_alias = ""
 
         spec = SpecRow(
             source=path,
@@ -146,12 +154,16 @@ def _rows_to_specs(
             step=step,
             clk=values["clk"],
             rst=values["rst"],
-            crg_source=values["CRG_source"],
+            crg_source=crg_source,
             rs_cfg_en=values["RS_CFG_EN"],
             position_alias=position_alias,
+            crg_source_alias=crg_source_alias,
         )
         if not spec.position:
             errors.append(f"row {row_number}: position cannot be empty")
+            continue
+        if not spec.crg_source:
+            errors.append(f"row {row_number}: CRG_source cannot be empty")
             continue
         if spec.key in seen:
             first_row, first_position_input = seen[spec.key]
@@ -295,7 +307,10 @@ def _xlsx_rows(
 
 
 def _read_xlsx(
-    path: Path, config: ExcelConfig, position_mappings: Mapping[str, str]
+    path: Path,
+    config: ExcelConfig,
+    position_mappings: Mapping[str, str],
+    crg_source_mappings: Mapping[str, str],
 ) -> list[SpecRow]:
     try:
         archive = zipfile.ZipFile(path)
@@ -309,11 +324,21 @@ def _read_xlsx(
         sheet_name, sheet_path = _sheet_target(archive, config.sheet)
         strings = _shared_strings(archive)
         rows = _xlsx_rows(archive, sheet_path, set(config.columns.values()), strings)
-        return _rows_to_specs(path, sheet_name, rows, config, position_mappings)
+        return _rows_to_specs(
+            path,
+            sheet_name,
+            rows,
+            config,
+            position_mappings,
+            crg_source_mappings,
+        )
 
 
 def _read_csv(
-    path: Path, config: ExcelConfig, position_mappings: Mapping[str, str]
+    path: Path,
+    config: ExcelConfig,
+    position_mappings: Mapping[str, str],
+    crg_source_mappings: Mapping[str, str],
 ) -> list[SpecRow]:
     last_error: UnicodeDecodeError | None = None
     text = ""
@@ -340,21 +365,30 @@ def _read_csv(
     parsed_rows = []
     for row_number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
         parsed_rows.append((row_number, {index: value for index, value in enumerate(values, start=1)}))
-    return _rows_to_specs(path, "CSV", parsed_rows, config, position_mappings)
+    return _rows_to_specs(
+        path,
+        "CSV",
+        parsed_rows,
+        config,
+        position_mappings,
+        crg_source_mappings,
+    )
 
 
 def read_spec_rows(
     path: str | Path,
     config: ExcelConfig,
     position_mappings: Mapping[str, str] | None = None,
+    crg_source_mappings: Mapping[str, str] | None = None,
 ) -> list[SpecRow]:
     workbook_path = Path(path).resolve()
     suffix = workbook_path.suffix.lower()
     mappings = position_mappings or {}
+    crg_mappings = crg_source_mappings or {}
     if suffix in {".xlsx", ".xlsm"}:
-        return _read_xlsx(workbook_path, config, mappings)
+        return _read_xlsx(workbook_path, config, mappings, crg_mappings)
     if suffix in {".csv", ".tsv"}:
-        return _read_csv(workbook_path, config, mappings)
+        return _read_csv(workbook_path, config, mappings, crg_mappings)
     if suffix == ".xls":
         raise WorkbookError("legacy .xls is not supported; save the workbook as .xlsx or CSV")
     raise WorkbookError(f"unsupported workbook format {suffix!r}; use .xlsx, .xlsm, .csv, or .tsv")

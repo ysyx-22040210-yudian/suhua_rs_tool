@@ -300,6 +300,7 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
                 f"validation row {index + 1} is missing: {', '.join(missing)}"
             )
         _validate_position_resolution(item, f"validation row {index + 1}")
+        _validate_crg_source_resolution(item, f"validation row {index + 1}")
         rows.append(dict(item))
     return tuple(rows)
 
@@ -312,6 +313,16 @@ def _validate_position_resolution(value: Mapping[str, Any], name: str) -> None:
         return
     if not isinstance(value["position_alias"], str):
         raise GuiReportError(f"{name}.position_alias must be a string")
+
+
+def _validate_crg_source_resolution(value: Mapping[str, Any], name: str) -> None:
+    crg_source = value.get("CRG_source")
+    if not isinstance(crg_source, str) or not crg_source:
+        raise GuiReportError(f"{name}.CRG_source must be a non-empty string")
+    if "crg_source_alias" not in value:
+        return
+    if not isinstance(value["crg_source_alias"], str):
+        raise GuiReportError(f"{name}.crg_source_alias must be a string")
 
 
 def _mapping_array(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
@@ -587,6 +598,7 @@ def load_report(path: str | Path) -> LoadedReport:
                 f"report row {index + 1}.spec.RS_CFG_EN must be a string"
             )
         _validate_position_resolution(spec, f"report row {index + 1}.spec")
+        _validate_crg_source_resolution(spec, f"report row {index + 1}.spec")
         if not isinstance(row.get("passed"), bool):
             raise GuiReportError(f"report row {index + 1}.passed must be true or false")
         actual_passed_rows += int(row["passed"])

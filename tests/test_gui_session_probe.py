@@ -70,13 +70,32 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
         marker = (
             "config-io=roundtrip-complete "
-            "roots=excel,columns,rtl,position_mappings,module_rules"
+            "roots=excel,columns,rtl,position_mappings,"
+            "crg_source_mappings,module_rules"
         )
 
         self.assertIn(marker, gui_smoke)
         self.assertIn(marker, source)
         self.assertIn("app._export_config()", gui_smoke)
         self.assertIn("app._import_config()", gui_smoke)
+        self.assertIn("app._apply_crg_source_mapping()", gui_smoke)
+        self.assertIn("app._save_crg_source_mappings()", gui_smoke)
+        self.assertIn("app._delete_crg_source_mapping()", gui_smoke)
+        self.assertIn('"crg-sources": app.crg_sources_tab', gui_smoke)
+        self.assertIn('!= "CRG Source映射库"', gui_smoke)
+        self.assertIn('!= "CRG Source简称"', gui_smoke)
+        self.assertIn('!= "RTL完整路径"', gui_smoke)
+        self.assertIn("expected_exported_crg_source_mappings", gui_smoke)
+        self.assertIn(
+            "GUI config export did not preserve the complete CRG_source database",
+            gui_smoke,
+        )
+        self.assertIn(
+            "GUI config import did not restore the complete CRG_source database",
+            gui_smoke,
+        )
+        self.assertIn("crg-source-db=crud-complete", gui_smoke)
+        self.assertIn("dirty-copy=export-preserved/import-cleared", gui_smoke)
 
     def test_vm_flow_requires_partial_npi_load_evidence(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -179,6 +198,61 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         )
         self.assertIn(
             "offline GUI RS_CFG_EN=NA case emitted an RS_CFG_EN_* finding",
+            source,
+        )
+
+    def test_vm_flow_requires_crg_source_mapping_gui_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("--crg-source-mapping", source)
+        self.assertIn("--crg-source-mapping", gui_smoke)
+        self.assertIn("GUI_CRG_SOURCE_MAPPING_ITERATIONS", source)
+        self.assertIn(
+            'GUI_CRG_SOURCE_MAPPING_ITERATIONS="${GUI_CRG_SOURCE_MAPPING_ITERATIONS:-20}"',
+            source,
+        )
+        self.assertIn("offline_gui_crg_source_mapping.log", source)
+        marker = (
+            "crg-source-map=core_clock_source->top.u_soc.u_crg_core "
+            "gui-json-csv=alias+full crg-source-check=not-judged findings=none"
+        )
+        self.assertIn(marker, source)
+        self.assertIn(marker, gui_smoke)
+        self.assertIn(
+            'report_spec.get("CRG_source") != _CRG_SOURCE_FULL_PATH',
+            gui_smoke,
+        )
+        self.assertIn(
+            'report_spec.get("crg_source_alias") != _CRG_SOURCE_ALIAS',
+            gui_smoke,
+        )
+        self.assertIn(
+            'csv_rows[0].get("CRG_source") != _CRG_SOURCE_FULL_PATH',
+            gui_smoke,
+        )
+        self.assertIn(
+            'csv_rows[0].get("crg_source_alias") != _CRG_SOURCE_ALIAS',
+            gui_smoke,
+        )
+        self.assertIn(
+            '"--crg-source-mapping is mutually exclusive with all other special modes"',
+            gui_smoke,
+        )
+        unified_log_gate = source.split("for gui_log in \\", 1)[1].split(
+            "done", 1
+        )[0]
+        gui_logs_line = next(
+            line for line in source.splitlines() if line.startswith('echo "GUI_LOGS=')
+        )
+        self.assertIn('"$CRG_SOURCE_MAPPING_LOG"', unified_log_gate)
+        self.assertIn("$CRG_SOURCE_MAPPING_LOG", gui_logs_line)
+        self.assertIn("crg-source-db=crud-complete", unified_log_gate)
+        self.assertIn(
+            "dirty-copy=export-preserved/import-cleared", unified_log_gate
+        )
+        self.assertIn(
+            "offline GUI CRG_source mapping case emitted a CRG_SOURCE_* finding",
             source,
         )
 

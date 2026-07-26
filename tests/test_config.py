@@ -88,6 +88,41 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(reloaded, config)
         self.assertEqual(list(saved_raw["position_mappings"]), ["tile_a", "tile_b"])
 
+    def test_crg_source_mappings_default_to_empty_when_omitted(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        raw.pop("crg_source_mappings", None)
+
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "legacy.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            config = load_config(path)
+            with self.assertRaisesRegex(ConfigError, "missing root sections"):
+                load_complete_config(path)
+
+        self.assertEqual(config.crg_source_mappings, {})
+
+    def test_crg_source_mappings_load_and_save_round_trip(self) -> None:
+        raw = json.loads((ROOT / "config" / "rscheck.example.json").read_text("utf-8"))
+        raw["crg_source_mappings"] = {
+            "crg_b": "tb_top.dut.u_crg_b",
+            "crg_a": "tb_top.dut.u_crg_a",
+        }
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name) / "source.json"
+            saved = Path(name) / "saved.json"
+            source.write_text(json.dumps(raw), encoding="utf-8")
+            config = load_config(source)
+            save_config(config, saved)
+            reloaded = load_config(saved)
+            saved_raw = json.loads(saved.read_text("utf-8"))
+        self.assertEqual(
+            config.crg_source_mappings["crg_a"], "tb_top.dut.u_crg_a"
+        )
+        self.assertEqual(reloaded, config)
+        self.assertEqual(
+            list(saved_raw["crg_source_mappings"]), ["crg_a", "crg_b"]
+        )
+
     def test_invalid_position_mappings_are_rejected(self) -> None:
         original = json.loads(
             (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
@@ -107,6 +142,30 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 raw = json.loads(json.dumps(original))
                 raw["position_mappings"] = mappings
+                path = Path(directory) / "bad.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                with self.assertRaisesRegex(ConfigError, message):
+                    load_config(path)
+
+    def test_invalid_crg_source_mappings_are_rejected(self) -> None:
+        original = json.loads(
+            (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+        )
+        mutations = (
+            ("not_object", [], "JSON object"),
+            ("empty_key", {"": "top.u"}, "keys must be non-empty"),
+            ("key_whitespace", {" crg": "top.u"}, "key must not have surrounding"),
+            ("key_leading_dot", {".crg": "top.u"}, "must not start or end"),
+            ("key_trailing_dot", {"crg.": "top.u"}, "must not start or end"),
+            ("empty_value", {"crg": ""}, "must be a non-empty string"),
+            ("non_string_value", {"crg": 1}, "must be a non-empty string"),
+            ("value_whitespace", {"crg": "top.u "}, "value must not have surrounding"),
+            ("value_only_dots", {"crg": "..."}, "non-empty RTL path"),
+        )
+        for name, mappings, message in mutations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                raw = json.loads(json.dumps(original))
+                raw["crg_source_mappings"] = mappings
                 path = Path(directory) / "bad.json"
                 path.write_text(json.dumps(raw), encoding="utf-8")
                 with self.assertRaisesRegex(ConfigError, message):
@@ -278,7 +337,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(normalized, config)
         self.assertEqual(
             set(config_to_dict(normalized)),
-            {"excel", "columns", "rtl", "position_mappings", "module_rules"},
+            {
+                "excel",
+                "columns",
+                "rtl",
+                "position_mappings",
+                "crg_source_mappings",
+                "module_rules",
+            },
         )
 
     def test_save_rejects_invalid_snapshot_before_replacing_target(self) -> None:

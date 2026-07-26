@@ -273,15 +273,25 @@ class GuiBackendTests(unittest.TestCase):
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
             "position_alias": "core_pipe",
+            "crg_source_alias": "core_crg",
         }
         loaded = load_validation_rows(json.dumps([row]))[0]
         self.assertEqual(loaded["row"], 2)
         self.assertEqual(loaded["position_alias"], "core_pipe")
         self.assertEqual(loaded["position"], "value-3")
+        self.assertEqual(loaded["crg_source_alias"], "core_crg")
+        self.assertEqual(loaded["CRG_source"], "value-7")
         row["position_alias"] = None
         with self.assertRaisesRegex(GuiReportError, "position_alias must be a string"):
             load_validation_rows(json.dumps([row]))
         row["position_alias"] = "core_pipe"
+        row["crg_source_alias"] = None
+        with self.assertRaisesRegex(GuiReportError, "crg_source_alias must be a string"):
+            load_validation_rows(json.dumps([row]))
+        del row["crg_source_alias"]
+        legacy_loaded = load_validation_rows(json.dumps([row]))[0]
+        self.assertNotIn("crg_source_alias", legacy_loaded)
+        row["crg_source_alias"] = "core_crg"
         del row["position"]
         with self.assertRaisesRegex(GuiReportError, "missing"):
             load_validation_rows(json.dumps([row]))
@@ -291,6 +301,7 @@ class GuiBackendTests(unittest.TestCase):
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
             "position_alias": "core_pipe",
+            "crg_source_alias": "core_crg",
         }
         report = {
             "schema_version": 2,
@@ -334,6 +345,8 @@ class GuiBackendTests(unittest.TestCase):
             )
             self.assertEqual(loaded.rows[0]["spec"]["position_alias"], "core_pipe")
             self.assertEqual(loaded.rows[0]["spec"]["position"], "value-3")
+            self.assertEqual(loaded.rows[0]["spec"]["crg_source_alias"], "core_crg")
+            self.assertEqual(loaded.rows[0]["spec"]["CRG_source"], "value-7")
 
             spec["position_alias"] = None
             path.write_text(json.dumps(report), encoding="utf-8")
@@ -342,6 +355,18 @@ class GuiBackendTests(unittest.TestCase):
             ):
                 load_report(path)
             spec["position_alias"] = "core_pipe"
+
+            spec["crg_source_alias"] = None
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(
+                GuiReportError, "crg_source_alias must be a string"
+            ):
+                load_report(path)
+            del spec["crg_source_alias"]
+            path.write_text(json.dumps(report), encoding="utf-8")
+            legacy_loaded = load_report(path)
+            self.assertNotIn("crg_source_alias", legacy_loaded.rows[0]["spec"])
+            spec["crg_source_alias"] = "core_crg"
 
             parameters = report["rows"][0]["matched_instances"][0].pop("parameters")
             path.write_text(json.dumps(report), encoding="utf-8")
@@ -404,6 +429,7 @@ class GuiBackendTests(unittest.TestCase):
         spec = {
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+            "crg_source_alias": "core_crg",
         }
         spec["step"] = 1
         evaluation = {
@@ -472,6 +498,14 @@ class GuiBackendTests(unittest.TestCase):
             )
             self.assertEqual(
                 loaded.rows[0]["module_rule"]["rst_port"], "reset_ni"
+            )
+
+            legacy_alias_report = copy.deepcopy(report)
+            del legacy_alias_report["rows"][0]["spec"]["crg_source_alias"]
+            path.write_text(json.dumps(legacy_alias_report), encoding="utf-8")
+            legacy_alias_loaded = load_report(path)
+            self.assertNotIn(
+                "crg_source_alias", legacy_alias_loaded.rows[0]["spec"]
             )
 
             legacy_report = copy.deepcopy(report)
@@ -598,6 +632,7 @@ class GuiBackendTests(unittest.TestCase):
         spec = {
             "row": 2,
             **{name: f"value-{index}" for index, name in enumerate(FIELD_NAMES)},
+            "crg_source_alias": "core_crg",
         }
         spec["step"] = 0
         report = {

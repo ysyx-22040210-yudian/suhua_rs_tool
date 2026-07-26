@@ -159,8 +159,53 @@ def make_position_mappings(mappings: Mapping[str, str]) -> dict[str, str]:
     return _position_mappings(dict(mappings))
 
 
+def _crg_source_mappings(value: Any) -> dict[str, str]:
+    raw_mappings = _require_mapping(value, "crg_source_mappings")
+    mappings: dict[str, str] = {}
+    for raw_alias, raw_crg_source in raw_mappings.items():
+        if not isinstance(raw_alias, str) or not raw_alias:
+            raise ConfigError("'crg_source_mappings' keys must be non-empty strings")
+        if raw_alias != raw_alias.strip():
+            raise ConfigError(
+                "CRG source mapping key must not have surrounding whitespace: "
+                f"{raw_alias!r}"
+            )
+        if raw_alias.startswith(".") or raw_alias.endswith("."):
+            raise ConfigError(
+                "CRG source mapping key must not start or end with '.': "
+                f"{raw_alias!r}"
+            )
+        if not isinstance(raw_crg_source, str) or not raw_crg_source:
+            raise ConfigError(
+                f"'crg_source_mappings.{raw_alias}' must be a non-empty string"
+            )
+        if raw_crg_source != raw_crg_source.strip():
+            raise ConfigError(
+                "CRG source mapping value must not have surrounding whitespace: "
+                f"{raw_crg_source!r}"
+            )
+        if not raw_crg_source.strip("."):
+            raise ConfigError(
+                f"'crg_source_mappings.{raw_alias}' must contain a non-empty RTL path"
+            )
+        mappings[raw_alias] = raw_crg_source
+    return mappings
+
+
+def make_crg_source_mappings(mappings: Mapping[str, str]) -> dict[str, str]:
+    """Validate and normalize an in-memory CRG source mapping database."""
+    return _crg_source_mappings(dict(mappings))
+
+
 COMPLETE_CONFIG_ROOTS = frozenset(
-    {"excel", "columns", "rtl", "position_mappings", "module_rules"}
+    {
+        "excel",
+        "columns",
+        "rtl",
+        "position_mappings",
+        "crg_source_mappings",
+        "module_rules",
+    }
 )
 
 
@@ -200,6 +245,9 @@ def config_from_dict(raw: Any) -> ToolConfig:
     columns_raw = _require_mapping(root.get("columns", {}), "columns")
     rtl_raw = _require_mapping(root.get("rtl", {}), "rtl")
     position_mappings = _position_mappings(root.get("position_mappings", {}))
+    crg_source_mappings = _crg_source_mappings(
+        root.get("crg_source_mappings", {})
+    )
     _reject_unknown(
         root,
         set(COMPLETE_CONFIG_ROOTS),
@@ -307,6 +355,7 @@ def config_from_dict(raw: Any) -> ToolConfig:
         rtl=rtl,
         module_rules=module_rules,
         position_mappings=position_mappings,
+        crg_source_mappings=crg_source_mappings,
     )
 
 
@@ -331,6 +380,10 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
         "position_mappings": {
             alias: position
             for alias, position in sorted(config.position_mappings.items())
+        },
+        "crg_source_mappings": {
+            alias: crg_source
+            for alias, crg_source in sorted(config.crg_source_mappings.items())
         },
         "module_rules": {
             name: {

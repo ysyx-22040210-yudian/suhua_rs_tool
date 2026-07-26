@@ -261,13 +261,17 @@ class CliTests(unittest.TestCase):
             specs.write_text(
                 (ROOT / "tests" / "fixtures" / "specs.csv")
                 .read_text("utf-8")
-                .replace("top.u_tile", "tile_alias", 1),
+                .replace("top.u_tile", "tile_alias", 1)
+                .replace("crg_core", "crg_alias", 1),
                 encoding="utf-8",
             )
             raw_config = json.loads(
                 (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
             )
             raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            raw_config["crg_source_mappings"] = {
+                "crg_alias": "tb_top.dut.u_crg_core"
+            }
             config = directory / "config.json"
             config.write_text(json.dumps(raw_config), encoding="utf-8")
             output = StringIO()
@@ -286,6 +290,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(rows[0]["position"], "top.u_tile")
         self.assertEqual(rows[0]["position_alias"], "tile_alias")
+        self.assertEqual(rows[0]["CRG_source"], "tb_top.dut.u_crg_core")
+        self.assertEqual(rows[0]["crg_source_alias"], "crg_alias")
 
     def test_position_database_cli_crud_and_resolve(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -369,6 +375,133 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             self.assertEqual(load_config(config).position_mappings, {})
+
+    def test_crg_source_database_cli_crud_and_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            config = Path(name) / "config.json"
+            raw = json.loads(
+                (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
+            )
+            raw["crg_source_mappings"] = {}
+            config.write_text(json.dumps(raw), encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "set",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        "core0_crg",
+                        "--rtl-path",
+                        "tb_top.dut.u_core0.u_crg",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertIn("CRG_SOURCE_DB SAVED", output.getvalue())
+            self.assertEqual(
+                load_config(config).crg_source_mappings["core0_crg"],
+                "tb_top.dut.u_core0.u_crg",
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "resolve",
+                        "--config",
+                        str(config),
+                        "--crg-source",
+                        ".core0_crg.",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue()),
+                {
+                    "CRG_source": "tb_top.dut.u_core0.u_crg",
+                    "crg_source_alias": "core0_crg",
+                },
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "resolve",
+                        "--config",
+                        str(config),
+                        "--crg-source",
+                        "CORE0_CRG",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue()),
+                {"CRG_source": "CORE0_CRG", "crg_source_alias": ""},
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "list",
+                        "--config",
+                        str(config),
+                        "--json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(output.getvalue())["mappings"],
+                {"core0_crg": "tb_top.dut.u_core0.u_crg"},
+            )
+
+            with redirect_stdout(StringIO()):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "delete",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        "core0_crg",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(load_config(config).crg_source_mappings, {})
+
+    def test_crg_source_database_rejected_update_leaves_config_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            config = Path(name) / "config.json"
+            config.write_bytes(
+                (ROOT / "config" / "rscheck.example.json").read_bytes()
+            )
+            original = config.read_bytes()
+            error = StringIO()
+            with redirect_stderr(error):
+                code = main(
+                    [
+                        "crg-source-db",
+                        "set",
+                        "--config",
+                        str(config),
+                        "--alias",
+                        " bad_alias",
+                        "--rtl-path",
+                        "top.u_crg",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("surrounding whitespace", error.getvalue())
+            self.assertEqual(config.read_bytes(), original)
 
     def test_position_database_resolve_rejects_empty_normalized_value(self) -> None:
         for value in ("", "   ", "..."):
@@ -460,18 +593,23 @@ class CliTests(unittest.TestCase):
             specs.write_text(
                 (ROOT / "tests" / "fixtures" / "specs.csv")
                 .read_text("utf-8")
-                .replace("top.u_tile", "tile_alias", 1),
+                .replace("top.u_tile", "tile_alias", 1)
+                .replace("crg_core", "crg_alias", 1),
                 encoding="utf-8",
             )
             raw_config = json.loads(
                 (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
             )
             raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            raw_config["crg_source_mappings"] = {
+                "crg_alias": "tb_top.dut.u_crg_core"
+            }
             config = directory / "config.json"
             config.write_text(json.dumps(raw_config), encoding="utf-8")
             json_report = directory / "report.json"
             csv_report = directory / "report.csv"
-            with redirect_stdout(StringIO()):
+            output = StringIO()
+            with redirect_stdout(output):
                 code = main(
                     [
                         "check",
@@ -493,8 +631,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["rows"][0]["spec"]["position"], "top.u_tile")
         self.assertEqual(report["rows"][0]["spec"]["position_alias"], "tile_alias")
+        self.assertEqual(
+            report["rows"][0]["spec"]["CRG_source"],
+            "tb_top.dut.u_crg_core",
+        )
+        self.assertEqual(
+            report["rows"][0]["spec"]["crg_source_alias"], "crg_alias"
+        )
         self.assertEqual(csv_rows[0]["position"], "top.u_tile")
         self.assertEqual(csv_rows[0]["position_alias"], "tile_alias")
+        self.assertEqual(csv_rows[0]["CRG_source"], "tb_top.dut.u_crg_core")
+        self.assertEqual(csv_rows[0]["crg_source_alias"], "crg_alias")
+        self.assertIn(
+            "CRG_source=crg_alias -> tb_top.dut.u_crg_core", output.getvalue()
+        )
 
     def test_failed_mapped_row_csv_preserves_alias_for_every_finding(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -503,13 +653,17 @@ class CliTests(unittest.TestCase):
             specs.write_text(
                 (ROOT / "tests" / "fixtures" / "specs_negative.csv")
                 .read_text("utf-8")
-                .replace("top.u_tile", "tile_alias"),
+                .replace("top.u_tile", "tile_alias")
+                .replace("crg_core", "crg_alias"),
                 encoding="utf-8",
             )
             raw_config = json.loads(
                 (ROOT / "config" / "rscheck.example.json").read_text("utf-8")
             )
             raw_config["position_mappings"] = {"tile_alias": "top.u_tile"}
+            raw_config["crg_source_mappings"] = {
+                "crg_alias": "tb_top.dut.u_crg_core"
+            }
             config = directory / "config.json"
             config.write_text(json.dumps(raw_config), encoding="utf-8")
             csv_report = directory / "negative.csv.report.csv"
@@ -533,6 +687,12 @@ class CliTests(unittest.TestCase):
         self.assertGreaterEqual(len(csv_rows), 2)
         self.assertTrue(all(row["position"] == "top.u_tile" for row in csv_rows))
         self.assertTrue(all(row["position_alias"] == "tile_alias" for row in csv_rows))
+        self.assertTrue(
+            all(row["CRG_source"] == "tb_top.dut.u_crg_core" for row in csv_rows)
+        )
+        self.assertTrue(
+            all(row["crg_source_alias"] == "crg_alias" for row in csv_rows)
+        )
 
     def test_validate_accepts_unregistered_rs_module(self) -> None:
         with tempfile.TemporaryDirectory() as name:
