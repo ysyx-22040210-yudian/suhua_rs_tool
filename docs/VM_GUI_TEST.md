@@ -660,7 +660,7 @@ offline_gui_10000_rows.log
 
 ## 12. 验证记录
 
-当前代码版本为 `0.10.0`，应按本指南六根配置、CRG Source 专项和十一份 GUI 日志重新验收。上一版 `0.9.2` 的 [RS_CFG_EN=NA 逐行跳过与 VM GUI 压测验证记录](TEST_RESULTS_RS_CFG_NA_2026-07-26.md) 固定到 GitHub 提交 `7570ed09879abc85c7b5e40de57fde735898e47f`，当时使用十份 GUI 日志门禁；该历史结果不能替代本版 CRG 映射验收。GUI resolver 仍不要求 GNOME 或 `gnome-session-binary`。
+当前代码版本为 `0.10.0`。[CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 GitHub 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 272 项全部通过且无 skip；NPI L0/L1、partial/clean KDB、可见 Verdi/Tk GUI、普通在线 3 轮、自定义端口 1 轮、无 rst、don't-care、`NA` 和 CRG Source 映射专项各 20 轮、Tk 100 轮、10,000 行负载及十一份 GUI 日志门禁全部通过。CRG 专项固定证据为 `core_clock_source -> top.u_soc.u_crg_core`、GUI/JSON/CSV alias+full 且不参与 PASS/FAIL。上一版 `0.9.2` 的 [RS_CFG_EN=NA 验证记录](TEST_RESULTS_RS_CFG_NA_2026-07-26.md) 固定到提交 `7570ed09879abc85c7b5e40de57fde735898e47f`，仅作为十日志门禁历史基线。GUI resolver 仍不要求 GNOME 或 `gnome-session-binary`。
 
 [RS_CFG_EN don't-care 与 VM GUI 压测验证记录](TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 是上一版 `0.9.1` 的固定基线，对应提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：GitHub fresh clone 第一次成功，CentOS/Python 3.8 的 240 项全部通过且无 skip；partial/clean KDB、mapped Verdi/Tk GUI、`has_rs_cfg_en=false` / Excel 任意文本专项 20 轮、clk 存在/rst 缺失专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九份 GUI 日志门禁全部通过。更早的 [clk 存在、rst 缺失 finding 隔离记录](TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md) 固定到历史功能提交 `b3d701c2b95a4941fae398b4c2490c7f630127c3`。
 

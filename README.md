@@ -406,7 +406,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前代码版本为 `0.10.0`。上一版固定 SHA fresh-checkout 已在以下环境验收；本版 CRG Source 映射需按本文十一日志门禁重新验证：
+当前代码版本为 `0.10.0`。固定 SHA fresh-checkout 已在以下环境完成 CRG Source 映射和十一日志门禁验收：
 
 ```text
 CentOS 7.9
@@ -416,9 +416,11 @@ Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
 
-[RS_CFG_EN=NA 逐行跳过与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CFG_NA_2026-07-26.md) 固定到 GitHub 提交 `7570ed09879abc85c7b5e40de57fde735898e47f`：CentOS/Python 3.8 的 248 项测试全部通过且无 skip；GitHub fresh clone 第一次成功；partial/clean elaborated KDB、可见 Verdi/Tk GUI、`NA` 专项 20 轮、don't-care 专项 20 轮、无 rst 专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和十日志门禁全部通过。`NA` 专项故意保留 RTL `RS_CRG_EN=1`，最终 1 行 PASS、0 error、0 warning 且 findings 为空。
+[CRG_source 映射库与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 GitHub 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`：GitHub fresh clone 第一次成功；CentOS/Python 3.8 的 272 项测试全部通过且无 skip；NPI L0/L1、partial/clean elaborated KDB、可见 Verdi/Tk GUI、普通在线 3 轮、自定义端口 1 轮、无 rst、don't-care、`NA` 和 CRG Source 映射专项各 20 轮、离线 100 轮、10,000 行负载及十一份 GUI 日志门禁全部通过。CRG 专项确认 `core_clock_source -> top.u_soc.u_crg_core`，GUI/JSON/CSV 同时保留 alias+full，且 CRG Source 不参与 PASS/FAIL。
 
 下列记录属于更早功能版本，仅用于历史对照：
+
+[RS_CFG_EN=NA 逐行跳过与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CFG_NA_2026-07-26.md) 固定到上一版 GitHub 提交 `7570ed09879abc85c7b5e40de57fde735898e47f`：CentOS/Python 3.8 的 248 项测试全部通过且无 skip；当时的 `NA`、don't-care、无 rst、在线和负载测试及十日志门禁全部通过。
 
 [RS_CFG_EN don't-care 与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_RS_CFG_DONTCARE_2026-07-26.md) 固定到 GitHub 功能与门禁提交 `37ccef3bbd15a1191e85664a00e165a296699d12`：CentOS/Python 3.8 的 240 项测试全部通过且无 skip；GitHub fresh clone、partial/clean elaborated KDB、mapped Verdi/Tk GUI、don't-care 专项 20 轮、无 rst 专项 20 轮、普通在线 3 轮、离线 100 轮、10,000 行负载和九日志门禁全部通过。专项确认 Excel/internal `RS_CFG_EN=任意非标准文本` 进入报告，`has_rs_cfg_en=false`、RTL `RS_CRG_EN` 不存在且 findings 为空。
 
