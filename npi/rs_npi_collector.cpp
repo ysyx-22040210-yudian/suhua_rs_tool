@@ -1208,19 +1208,27 @@ class Collector {
       npi_nl_release_handle(instance);
     }
 
-    if (scanned_ports == 0 || unknown_directions != 0) {
-      if (!trace_language_input_ports(current, queue, state)) {
-        mark_trace_unresolved(
-            state, "NPI could not enumerate input ports for upstream module: " +
-                       current.instance);
-      }
+    // Partial KDBs may expose a non-empty but incomplete Netlist port set.
+    // Always merge the Language Model/L1 view so omitted input branches are
+    // still traversed.  A complete Netlist view remains usable when that
+    // fallback is unavailable.
+    const bool fallback_available =
+        trace_language_input_ports(current, queue, state);
+    if (!fallback_available &&
+        (scanned_ports == 0 || unknown_directions != 0)) {
+      mark_trace_unresolved(
+          state, "NPI could not enumerate input ports for upstream module: " +
+                     current.instance);
     }
   }
 
   ClockTrace trace_clock(const std::string& instance_full_name,
                          const std::string& clock_port,
                          const PortInfo& port) {
-    std::string cache_key = clock_port + "\x1f";
+    // The same leaf net name can occur in different hierarchy scopes when a
+    // partial KDB cannot provide a canonical connection full name.
+    std::string cache_key =
+        instance_full_name + "\x1f" + clock_port + "\x1f";
     if (!port.connection.empty() &&
         port.object_type.find("Operation") == std::string::npos) {
       cache_key += port.connection;

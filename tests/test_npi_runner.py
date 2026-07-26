@@ -57,6 +57,35 @@ class NpiCollectorContractTests(unittest.TestCase):
         )
         self.assertIn("result.clk_sources = result.clock_trace.modules", source)
 
+    def test_clock_trace_cache_isolated_by_instance_hierarchy(self) -> None:
+        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'instance_full_name + "\\x1f" + clock_port + "\\x1f"',
+            source,
+        )
+        self.assertNotIn(
+            'std::string cache_key = clock_port + "\\x1f";', source
+        )
+
+    def test_partial_kdb_always_merges_language_model_input_ports(self) -> None:
+        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
+            encoding="utf-8"
+        )
+        start = source.index("  void expand_module_inputs(")
+        end = source.index("  ClockTrace trace_clock(", start)
+        body = source[start:end]
+        fallback_call = "trace_language_input_ports(current, queue, state)"
+        fallback_guard = "if (!fallback_available &&"
+        self.assertIn("const bool fallback_available", body)
+        self.assertIn(fallback_call, body)
+        self.assertIn(fallback_guard, body)
+        self.assertLess(body.index(fallback_call), body.index(fallback_guard))
+        self.assertNotIn(
+            "if (scanned_ports == 0 || unknown_directions != 0) {", body
+        )
+
     def test_makefile_requires_and_links_verdi_npi_l1(self) -> None:
         makefile = (self.project_root / "npi" / "Makefile").read_text(
             encoding="utf-8"
