@@ -18,6 +18,7 @@
 
 - [详细使用文档](docs/USAGE.md)
 - [kdebug RTL inventory 后端、双仓库构建与压测](docs/KDEBUG_BACKEND.md)
+- [工具架构与设计方案（含流程图和架构框图）](docs/ARCHITECTURE_AND_DESIGN.md)
 - [完整测试指南](docs/TESTING.md)
 - [本机用户 Prompts 与工具需求整理](docs/LOCAL_USER_PROMPTS_AND_REQUIREMENTS.md)
 - [kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md)
