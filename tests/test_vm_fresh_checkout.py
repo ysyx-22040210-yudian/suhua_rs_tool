@@ -13,6 +13,7 @@ import unittest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = PROJECT_ROOT / "scripts" / "test_vm_fresh_checkout.sh"
 VERDI_SCRIPT = PROJECT_ROOT / "scripts" / "test_vm_verdi_gui.sh"
+KDEBUG_PRESSURE_SCRIPT = PROJECT_ROOT / "scripts" / "test_kdebug_backend_pressure.sh"
 SITE_ENV_RUNNER = PROJECT_ROOT / "scripts" / "lib" / "run_with_env_file.sh"
 BASH = shutil.which("bash")
 
@@ -43,6 +44,8 @@ class VmFreshCheckoutStaticContractTests(unittest.TestCase):
         self.assertIn('bash "$REPO_ROOT/scripts/test_vm_verdi_gui.sh"', self.source)
         self.assertIn("full_vm_test.log", self.source)
         self.assertIn('VM_RUN_BASE="${VM_RUN_BASE:-${HOME:-}}"', self.source)
+        self.assertIn('Collector backend: ${RSCHECK_COLLECTOR_BACKEND:-kdebug}', self.source)
+        self.assertNotIn('RSCHECK_COLLECTOR_BACKEND:-npi', self.source)
 
     def test_site_environment_is_not_sourced_by_clone_controller(self) -> None:
         self.assertNotIn('source "$VERDI_ENV_FILE"', self.source)
@@ -55,7 +58,110 @@ class VmFreshCheckoutStaticContractTests(unittest.TestCase):
         self.assertIn(
             'RSCHECK_FIXED_OUTPUT_BASE="${OUTPUT_BASE:-', verdi_source
         )
+        self.assertIn(
+            'RSCHECK_FIXED_COLLECTOR_BACKEND="${RSCHECK_COLLECTOR_BACKEND:-kdebug}"',
+            verdi_source,
+        )
+        self.assertIn(
+            '"RSCHECK_COLLECTOR_BACKEND=$RSCHECK_FIXED_COLLECTOR_BACKEND"',
+            verdi_source,
+        )
+        self.assertIn('RSCHECK_FIXED_KDEBUG_BIN="${KDEBUG_BIN-}"', verdi_source)
+        self.assertIn('"KDEBUG_BIN=$RSCHECK_FIXED_KDEBUG_BIN"', verdi_source)
+        self.assertIn(
+            '"KVERIF_EXPECTED_COMMIT=$RSCHECK_FIXED_KVERIF_EXPECTED_COMMIT"',
+            verdi_source,
+        )
+        self.assertIn(
+            '"KDEBUG_EXPECTED_SHA256=$RSCHECK_FIXED_KDEBUG_EXPECTED_SHA256"',
+            verdi_source,
+        )
         self.assertNotIn('"LM_LICENSE_FILE=$LM_LICENSE_FILE"', verdi_source)
+
+    def test_verdi_driver_supports_npi_and_kdebug_collectors(self) -> None:
+        verdi_source = VERDI_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'RSCHECK_COLLECTOR_BACKEND="${RSCHECK_COLLECTOR_BACKEND:-kdebug}"',
+            verdi_source,
+        )
+        self.assertIn('npi|kdebug)', verdi_source)
+        self.assertIn(
+            'COLLECTOR="$PROJECT_ROOT/scripts/rs_kdebug_collector.py"',
+            verdi_source,
+        )
+        self.assertIn('export KDEBUG_BIN', verdi_source)
+        self.assertIn(
+            'export RSCHECK_COLLECTOR_TIMEOUT_SECONDS="$NPI_TIMEOUT"', verdi_source
+        )
+        self.assertIn('ldd "$KDEBUG_BIN"', verdi_source)
+        self.assertIn("kdebug frontend must have no direct NPI dependency", verdi_source)
+        self.assertIn('KDEBUG_MANIFEST="$TEST_ROOT/kdebug_build_manifest.txt"', verdi_source)
+        self.assertIn('export RSCHECK_KDEBUG_HOME="$TEST_ROOT/kdebug_home"', verdi_source)
+        self.assertIn('export KDEBUG_HOME="$RSCHECK_KDEBUG_HOME"', verdi_source)
+        self.assertIn('export PYTHON="$(command -v "$PYTHON_BIN")"', verdi_source)
+        self.assertIn('assert_no_new_kdebug_processes', verdi_source)
+        self.assertIn('timeout --signal=TERM --kill-after=2 "$NPI_TIMEOUT"', verdi_source)
+        self.assertEqual(verdi_source.count('run_collector "$'), 2)
+        self.assertIn("kdebug isolated logs PASS", verdi_source)
+        self.assertIn("rscheck_commit=%s", verdi_source)
+        self.assertIn("kverif_commit=%s", verdi_source)
+        self.assertIn('NPI_CLI_ARGS=(--npi-lib-dir "$NPI_LIB_DIR")', verdi_source)
+        self.assertIn('"${NPI_CLI_ARGS[@]}"', verdi_source)
+        self.assertIn("Collector backend: direct C++ NPI baseline", verdi_source)
+        self.assertIn(
+            "Collector backend: kdebug JSON action rscheck.inventory", verdi_source
+        )
+        self.assertIn('echo "COLLECTOR_BACKEND=$RSCHECK_COLLECTOR_BACKEND"', verdi_source)
+        self.assertIn('collector_command=("$PYTHON_BIN" "$COLLECTOR")', verdi_source)
+        self.assertIn(
+            "kverif checkout must be clean when KVERIF_EXPECTED_COMMIT is set",
+            verdi_source,
+        )
+        self.assertIn("status --porcelain --untracked-files=normal", verdi_source)
+
+    def test_kdebug_mode_does_not_require_baseline_npi_build_inputs(self) -> None:
+        verdi_source = VERDI_SCRIPT.read_text(encoding="utf-8")
+        conditional_start = verdi_source.index(
+            'if [ "$RSCHECK_COLLECTOR_BACKEND" = npi ]; then',
+            verdi_source.index('NPI_CLI_ARGS=()'),
+        )
+        conditional_end = verdi_source.index(
+            '\n[ -d "$PROJECT_ROOT" ]', conditional_start
+        )
+        npi_setup = verdi_source[conditional_start:conditional_end]
+        for marker in (
+            'command -v make',
+            'command -v "$CXX"',
+            'npi.h',
+            'npi_L1.h',
+            'libNPI.so',
+            'libnpiL1.so',
+            'export LD_LIBRARY_PATH',
+        ):
+            self.assertIn(marker, npi_setup)
+        prefix = verdi_source[:conditional_start]
+        self.assertNotIn('command -v make', prefix)
+        self.assertNotIn('command -v "$CXX"', prefix)
+
+    def test_kdebug_pressure_driver_is_bounded_and_elab_only(self) -> None:
+        pressure_source = KDEBUG_PRESSURE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('PRESSURE_ITERATIONS="${PRESSURE_ITERATIONS:-20}"', pressure_source)
+        self.assertIn('ACTION_TIMEOUT_SECONDS="${ACTION_TIMEOUT_SECONDS:-60}"', pressure_source)
+        self.assertIn("rscheck.inventory", pressure_source)
+        self.assertIn('"elab_db": sys.argv[1]', pressure_source)
+        self.assertIn("timeout --signal=TERM --kill-after=3", pressure_source)
+        self.assertIn("RSCHECK_COLLECTOR_TIMEOUT_SECONDS=1", pressure_source)
+        self.assertIn("KDEBUG_TIMEOUT", pressure_source)
+        self.assertIn("INTERNAL_ENGINE_FAILED", pressure_source)
+        self.assertIn('kill -TERM "$CANCEL_PID"', pressure_source)
+        self.assertIn("verdi_pids_for_tmpdir", pressure_source)
+        self.assertIn("KDEBUG_TCL_RESPONSE_JSON=", pressure_source)
+        self.assertIn("did not reach a live Verdi NPI action", pressure_source)
+        self.assertIn("frontend cancellation left", pressure_source)
+        self.assertIn('root.rglob("crash_marker*")', pressure_source)
+        self.assertNotIn("--filelist", pressure_source)
+        self.assertNotIn("--source", pressure_source)
+        self.assertNotIn("work.lib++/", pressure_source)
 
     def test_script_contains_no_host_or_secret_literals(self) -> None:
         self.assertIsNone(
@@ -88,7 +194,7 @@ class VmFreshCheckoutArgumentTests(unittest.TestCase):
 
     def test_bash_syntax(self) -> None:
         assert BASH is not None
-        for script in (SCRIPT, VERDI_SCRIPT, SITE_ENV_RUNNER):
+        for script in (SCRIPT, VERDI_SCRIPT, KDEBUG_PRESSURE_SCRIPT, SITE_ENV_RUNNER):
             completed = subprocess.run(
                 [BASH, "-n", str(script)],
                 cwd=PROJECT_ROOT,
@@ -104,6 +210,26 @@ class VmFreshCheckoutArgumentTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--commit REV", completed.stdout)
         self.assertIn("origin/main", completed.stdout)
+        self.assertIn("Required full kverif SHA", completed.stdout)
+        self.assertIn("Required SHA-256", completed.stdout)
+
+    def test_kdebug_fresh_run_requires_pinned_backend_identity(self) -> None:
+        assert BASH is not None
+        environment = os.environ.copy()
+        environment["RSCHECK_COLLECTOR_BACKEND"] = "kdebug"
+        environment.pop("KVERIF_EXPECTED_COMMIT", None)
+        environment.pop("KDEBUG_EXPECTED_SHA256", None)
+        completed = subprocess.run(
+            [BASH, str(SCRIPT)],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("require KVERIF_EXPECTED_COMMIT", completed.stderr)
 
     def test_unknown_option_returns_usage_error(self) -> None:
         completed = self.run_script("--unknown")

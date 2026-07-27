@@ -46,6 +46,7 @@ from .gui_backend import (
     ProcessResult,
     build_check_command,
     build_validate_command,
+    default_collector_path,
     default_columns,
     find_project_root,
     format_command,
@@ -299,7 +300,7 @@ class RsCheckApp:
     def _create_variables(self) -> None:
         example_excel = self.project_root / "examples" / "specs.csv"
         example_config = self.project_root / "config" / "rscheck.example.json"
-        collector = self.project_root / "npi" / "build" / "rs_npi_collector"
+        collector = default_collector_path(self.project_root)
         output = self.project_root / "output"
 
         self.excel_var = tk.StringVar(value=str(example_excel) if example_excel.is_file() else "")
@@ -331,7 +332,7 @@ class RsCheckApp:
         self.crg_source_mapping_status_var = tk.StringVar(value="映射 0")
 
         self.source_mode_var = tk.StringVar(value=LIVE_SOURCE)
-        self.collector_var = tk.StringVar(value=str(collector))
+        self.collector_var = tk.StringVar(value=collector)
         self.elab_db_var = tk.StringVar()
         self.inventory_var = tk.StringVar()
         self.npi_lib_var = tk.StringVar()
@@ -480,7 +481,7 @@ class RsCheckApp:
         mode_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ttk.Radiobutton(
             mode_bar,
-            text="在线 NPI（elaborated KDB）",
+            text="在线 RTL Collector（elaborated KDB）",
             variable=self.source_mode_var,
             value=LIVE_SOURCE,
             command=self._update_source_mode,
@@ -499,7 +500,7 @@ class RsCheckApp:
         self._compact_path_row(
             self.live_frame,
             0,
-            "Collector",
+            "RTL / kdebug Collector",
             self.collector_var,
             lambda: self._choose_file(self.collector_var, (("可执行文件", "*"),)),
         )
@@ -513,7 +514,7 @@ class RsCheckApp:
         self._compact_path_row(
             self.live_frame,
             2,
-            "NPI 库目录",
+            "运行库目录（可选）",
             self.npi_lib_var,
             lambda: self._choose_directory(self.npi_lib_var),
         )

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# End-to-end test for the sample RTL: Python tests, NPI build, fresh KDB,
+# End-to-end test for the sample RTL: collector verification, fresh KDB,
 # Verdi/tool GUI checks, and offline GUI stability/load coverage.
 { set +x; } 2>/dev/null
 set -Ee -o pipefail
@@ -11,6 +11,10 @@ VERDI_ENV_FILE="${VERDI_ENV_FILE-}"
 RSCHECK_VERDI_ENV_APPLIED="${RSCHECK_VERDI_ENV_APPLIED:-0}"
 RSCHECK_FIXED_PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
 RSCHECK_FIXED_OUTPUT_BASE="${OUTPUT_BASE:-$RSCHECK_FIXED_PROJECT_ROOT/output}"
+RSCHECK_FIXED_COLLECTOR_BACKEND="${RSCHECK_COLLECTOR_BACKEND:-kdebug}"
+RSCHECK_FIXED_KDEBUG_BIN="${KDEBUG_BIN-}"
+RSCHECK_FIXED_KVERIF_EXPECTED_COMMIT="${KVERIF_EXPECTED_COMMIT-}"
+RSCHECK_FIXED_KDEBUG_EXPECTED_SHA256="${KDEBUG_EXPECTED_SHA256-}"
 RSCHECK_LOAD_SITE_ENV=1
 if [ "$#" -eq 1 ] && [ "${1-}" = "--gui-probe-only" ]; then
   RSCHECK_LOAD_SITE_ENV=0
@@ -56,6 +60,10 @@ if [ -n "$VERDI_ENV_FILE" ] &&
     VERDI_ENV_FILE=
     "PROJECT_ROOT=$RSCHECK_FIXED_PROJECT_ROOT"
     "OUTPUT_BASE=$RSCHECK_FIXED_OUTPUT_BASE"
+    "RSCHECK_COLLECTOR_BACKEND=$RSCHECK_FIXED_COLLECTOR_BACKEND"
+    "KDEBUG_BIN=$RSCHECK_FIXED_KDEBUG_BIN"
+    "KVERIF_EXPECTED_COMMIT=$RSCHECK_FIXED_KVERIF_EXPECTED_COMMIT"
+    "KDEBUG_EXPECTED_SHA256=$RSCHECK_FIXED_KDEBUG_EXPECTED_SHA256"
   )
   site_env_command+=("$BASH_BIN" "$SCRIPT_DIR/test_vm_verdi_gui.sh" "$@")
 
@@ -80,6 +88,10 @@ NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
 OUTPUT_BASE="$RSCHECK_FIXED_OUTPUT_BASE"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
+RSCHECK_COLLECTOR_BACKEND="${RSCHECK_COLLECTOR_BACKEND:-kdebug}"
+KDEBUG_BIN="${KDEBUG_BIN-}"
+KVERIF_EXPECTED_COMMIT="${KVERIF_EXPECTED_COMMIT-}"
+KDEBUG_EXPECTED_SHA256="${KDEBUG_EXPECTED_SHA256-}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
 GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
 GUI_RS_CFG_DONTCARE_ITERATIONS="${GUI_RS_CFG_DONTCARE_ITERATIONS:-20}"
@@ -103,6 +115,11 @@ TEST_ROOT=""
 GUI_PROBE_ONLY=0
 VERDI_LAUNCH_PID=""
 ELAB_DB=""
+KDEBUG_ENGINE_BIN=""
+KDEBUG_ENGINE_PY=""
+KDEBUG_PROCESS_BASELINE=""
+KDEBUG_PROCESS_CURRENT=""
+KDEBUG_PROCESS_NEW=""
 
 pid_uses_elab_db() {
   local pid=$1
@@ -160,6 +177,42 @@ stop_owned_verdi() {
   fi
 }
 
+kdebug_build_pids() {
+  local cmdline
+  local pid
+  local argument
+  [ -n "$KDEBUG_BIN" ] || return 0
+  for cmdline in /proc/[0-9]*/cmdline; do
+    pid="${cmdline#/proc/}"
+    pid="${pid%/cmdline}"
+    [ -r "$cmdline" ] || continue
+    while IFS= read -r -d '' argument; do
+      if [ "$argument" = "$KDEBUG_BIN" ] ||
+         [ "$argument" = "$KDEBUG_ENGINE_BIN" ] ||
+         [ "$argument" = "$KDEBUG_ENGINE_PY" ]; then
+        printf '%s\n' "$pid"
+        break
+      fi
+    done <"$cmdline"
+  done
+}
+
+assert_no_new_kdebug_processes() {
+  [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ] || return 0
+  kdebug_build_pids | LC_ALL=C sort -u >"$KDEBUG_PROCESS_CURRENT"
+  LC_ALL=C comm -13 "$KDEBUG_PROCESS_BASELINE" "$KDEBUG_PROCESS_CURRENT" \
+    >"$KDEBUG_PROCESS_NEW"
+  if [ -s "$KDEBUG_PROCESS_NEW" ]; then
+    echo "New kdebug build processes remained after the test:" >&2
+    while IFS= read -r pid; do
+      [ -r "/proc/$pid/cmdline" ] || continue
+      tr '\0' ' ' <"/proc/$pid/cmdline" >&2
+      echo >&2
+    done <"$KDEBUG_PROCESS_NEW"
+    fail "kdebug frontend or engine process leak detected"
+  fi
+}
+
 cleanup() {
   local rc=$?
   trap - EXIT
@@ -172,6 +225,27 @@ cleanup() {
 fail() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+run_collector() {
+  local stdout_path=$1
+  local stderr_path=$2
+  local -a collector_command=("$COLLECTOR")
+  shift 2
+  if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
+    collector_command=("$PYTHON_BIN" "$COLLECTOR")
+  fi
+  timeout --signal=TERM --kill-after=2 "$NPI_TIMEOUT" \
+    "${collector_command[@]}" "$@" >"$stdout_path" 2>"$stderr_path"
+}
+
+git_in_directory() {
+  local directory=$1
+  shift
+  (
+    cd "$directory"
+    git "$@"
+  )
 }
 
 # BEGIN VERDI LICENSE ENVIRONMENT HELPERS
@@ -231,7 +305,7 @@ resolve_verdi_license_environment() {
 }
 # END VERDI LICENSE ENVIRONMENT HELPERS
 
-collector_error_pattern='error\[(ELAB_DB|NPI_INIT|NPI_LOAD|NPI_END|OUTPUT|INTERNAL)\]|NPI collector (timed out|exited with code|succeeded but did not create|failed to start)|npi_load_design failed'
+collector_error_pattern='error\[(ELAB_DB|NPI_INIT|NPI_LOAD|NPI_END|KDEBUG_[A-Z_]+|OUTPUT|INTERNAL)\]|(NPI|RTL) collector (timed out|exited with code|succeeded but did not create|failed to start)|npi_load_design failed'
 
 assert_no_collector_errors() {
   local log_path=$1
@@ -457,6 +531,11 @@ case "$KEEP_VERDI_GUI" in
   *) fail "KEEP_VERDI_GUI must be 0 or 1" ;;
 esac
 
+case "$RSCHECK_COLLECTOR_BACKEND" in
+  npi|kdebug) ;;
+  *) fail "RSCHECK_COLLECTOR_BACKEND must be npi or kdebug" ;;
+esac
+
 for numeric_setting in \
   "$GUI_START_TIMEOUT" \
   "$NPI_TIMEOUT" \
@@ -505,7 +584,7 @@ case "$VERDI_AUTO_LICENSE_IMPORT" in
 esac
 resolve_verdi_license_environment
 
-for command_name in xwininfo make ldd mktemp nohup sort comm tee grep find pgrep sed; do
+for command_name in xwininfo ldd mktemp nohup sort comm tee grep find pgrep sed timeout; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     if [ "$command_name" = xwininfo ]; then
       fail "xwininfo not found; install x11-utils (Debian/Ubuntu) or xorg-x11-utils (RHEL/CentOS)"
@@ -532,7 +611,6 @@ if [ -n "$GCC_ENABLE" ]; then
 fi
 
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "Python executable not found: $PYTHON_BIN"
-command -v "$CXX" >/dev/null 2>&1 || fail "C++ compiler not found: $CXX"
 
 if [ -z "$VERDI_BIN" ]; then
   if [ -n "$VERDI_HOME" ] && [ -x "$VERDI_HOME/bin/verdi" ]; then
@@ -557,52 +635,67 @@ ELABCOM_BIN="${ELABCOM_BIN:-$VERDI_HOME/bin/elabcom}"
 [ -x "$VERICOM_BIN" ] || fail "vericom not found; set VERICOM_BIN or correct VERDI_HOME"
 [ -x "$ELABCOM_BIN" ] || fail "elabcom not found; set ELABCOM_BIN or correct VERDI_HOME"
 
-NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
-if [ -z "$NPI_LIB_DIR" ]; then
-  if [ -n "$NPI_PLATFORM" ] && [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/libNPI.so" ]; then
-    NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
-  elif [ -f "$VERDI_HOME/share/NPI/lib/LINUX64/libNPI.so" ]; then
-    NPI_PLATFORM=LINUX64
-    NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/LINUX64"
-  else
-    for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libNPI.so; do
-      [ -f "$candidate_library" ] || continue
-      NPI_LIB_DIR="${candidate_library%/libNPI.so}"
-      NPI_PLATFORM="${NPI_LIB_DIR##*/}"
-      break
-    done
+if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
+  if [ -n "${NPIL1_PATH:-}" ] && [ -f "$NPIL1_PATH/npi_L1.tcl" ]; then
+    :
+  elif [ ! -f "$VERDI_HOME/share/NPI/L1/TCL/npi_L1.tcl" ]; then
+    fail "npi_L1.tcl not found; set NPIL1_PATH or correct VERDI_HOME"
   fi
 fi
-[ -n "$NPI_PLATFORM" ] || NPI_PLATFORM="${NPI_LIB_DIR##*/}"
-NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
-if [ -z "$NPI_L1_LIB_DIR" ]; then
-  if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
-    NPI_L1_LIB_DIR="$NPI_LIB_DIR"
-  else
-    NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
-    if [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER/libnpiL1.so" ]; then
-      NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
+
+NPI_RUNTIME_LIB_DIRS=""
+NPI_CLI_ARGS=()
+if [ "$RSCHECK_COLLECTOR_BACKEND" = npi ]; then
+  command -v make >/dev/null 2>&1 || fail "required command not found: make"
+  command -v "$CXX" >/dev/null 2>&1 || fail "C++ compiler not found: $CXX"
+  NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
+  if [ -z "$NPI_LIB_DIR" ]; then
+    if [ -n "$NPI_PLATFORM" ] && [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM/libNPI.so" ]; then
+      NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
+    elif [ -f "$VERDI_HOME/share/NPI/lib/LINUX64/libNPI.so" ]; then
+      NPI_PLATFORM=LINUX64
+      NPI_LIB_DIR="$VERDI_HOME/share/NPI/lib/LINUX64"
     else
-      for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libnpiL1.so; do
+      for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libNPI.so; do
         [ -f "$candidate_library" ] || continue
-        NPI_L1_LIB_DIR="${candidate_library%/libnpiL1.so}"
+        NPI_LIB_DIR="${candidate_library%/libNPI.so}"
+        NPI_PLATFORM="${NPI_LIB_DIR##*/}"
         break
       done
     fi
   fi
-fi
-[ -f "$NPI_INC_DIR/npi.h" ] || fail "NPI header not found: $NPI_INC_DIR/npi.h"
-[ -f "$NPI_LIB_DIR/libNPI.so" ] || fail "libNPI.so not found; set NPI_LIB_DIR"
-[ -f "$NPI_L1_INC_DIR/npi_L1.h" ] ||
-  fail "NPI L1 header not found; set NPI_L1_INC_DIR"
-[ -f "$NPI_L1_LIB_DIR/libnpiL1.so" ] ||
-  fail "libnpiL1.so not found; set NPI_L1_LIB_DIR"
+  [ -n "$NPI_PLATFORM" ] || NPI_PLATFORM="${NPI_LIB_DIR##*/}"
+  NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
+  if [ -z "$NPI_L1_LIB_DIR" ]; then
+    if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
+      NPI_L1_LIB_DIR="$NPI_LIB_DIR"
+    else
+      NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
+      if [ -f "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER/libnpiL1.so" ]; then
+        NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
+      else
+        for candidate_library in "$VERDI_HOME"/share/NPI/lib/*/libnpiL1.so; do
+          [ -f "$candidate_library" ] || continue
+          NPI_L1_LIB_DIR="${candidate_library%/libnpiL1.so}"
+          break
+        done
+      fi
+    fi
+  fi
+  [ -f "$NPI_INC_DIR/npi.h" ] || fail "NPI header not found: $NPI_INC_DIR/npi.h"
+  [ -f "$NPI_LIB_DIR/libNPI.so" ] || fail "libNPI.so not found; set NPI_LIB_DIR"
+  [ -f "$NPI_L1_INC_DIR/npi_L1.h" ] ||
+    fail "NPI L1 header not found; set NPI_L1_INC_DIR"
+  [ -f "$NPI_L1_LIB_DIR/libnpiL1.so" ] ||
+    fail "libnpiL1.so not found; set NPI_L1_LIB_DIR"
 
-NPI_RUNTIME_LIB_DIRS="$NPI_LIB_DIR"
-if [ "$NPI_L1_LIB_DIR" != "$NPI_LIB_DIR" ]; then
-  NPI_RUNTIME_LIB_DIRS="$NPI_L1_LIB_DIR:$NPI_RUNTIME_LIB_DIRS"
+  NPI_RUNTIME_LIB_DIRS="$NPI_LIB_DIR"
+  if [ "$NPI_L1_LIB_DIR" != "$NPI_LIB_DIR" ]; then
+    NPI_RUNTIME_LIB_DIRS="$NPI_L1_LIB_DIR:$NPI_RUNTIME_LIB_DIRS"
+  fi
+  export LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  NPI_CLI_ARGS=(--npi-lib-dir "$NPI_LIB_DIR")
 fi
-export LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 [ -d "$PROJECT_ROOT" ] || fail "PROJECT_ROOT is not a directory: $PROJECT_ROOT"
 [ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
@@ -616,28 +709,140 @@ TEST_ROOT="$(mktemp -d "$OUTPUT_BASE/verdi_gui_test.XXXXXXXX")"
 
 cd "$PROJECT_ROOT"
 "$PYTHON_BIN" --version
-"$CXX" --version
+if [ "$RSCHECK_COLLECTOR_BACKEND" = npi ]; then
+  "$CXX" --version
+fi
 "$PYTHON_BIN" -m unittest discover -v 2>&1 | tee "$TEST_ROOT/python_tests.log"
 grep -Eq '^Ran [0-9]+ tests? in ' "$TEST_ROOT/python_tests.log"
 grep -q '^OK' "$TEST_ROOT/python_tests.log"
 
-NPI_BUILD_DIR="$TEST_ROOT/npi_build"
-make -C npi \
-  BUILD_DIR="$NPI_BUILD_DIR" \
-  VERDI_HOME="$VERDI_HOME" \
-  NPI_PLATFORM="$NPI_PLATFORM" \
-  NPI_INC="$NPI_INC_DIR" \
-  NPI_LIB="$NPI_LIB_DIR" \
-  NPI_L1_INC="$NPI_L1_INC_DIR" \
-  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
-  CXX="$CXX"
-COLLECTOR="$NPI_BUILD_DIR/rs_npi_collector"
-[ -x "$COLLECTOR" ] || fail "collector was not built: $COLLECTOR"
-ldd "$COLLECTOR" | tee "$TEST_ROOT/collector_ldd.txt"
-grep -q 'libNPI.so' "$TEST_ROOT/collector_ldd.txt"
-grep -q 'libnpiL1.so' "$TEST_ROOT/collector_ldd.txt"
-if grep -q 'not found' "$TEST_ROOT/collector_ldd.txt"; then
-  fail "collector has unresolved shared libraries"
+if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
+  command -v sha256sum >/dev/null 2>&1 || fail "required command not found: sha256sum"
+  [ -n "$KDEBUG_BIN" ] || fail "KDEBUG_BIN is required for the kdebug collector backend"
+  case "$KDEBUG_BIN" in
+    /*) ;;
+    *) fail "KDEBUG_BIN must be an absolute path" ;;
+  esac
+  [ -x "$KDEBUG_BIN" ] || fail "kdebug executable is not accessible: $KDEBUG_BIN"
+  KDEBUG_BIN="$(cd "$(dirname "$KDEBUG_BIN")" && pwd -P)/$(basename "$KDEBUG_BIN")"
+  KDEBUG_BUILD_DIR="$(dirname "$KDEBUG_BIN")"
+  KDEBUG_ENGINE_BIN="$KDEBUG_BUILD_DIR/libexec/kdebug-engine"
+  KDEBUG_ENGINE_PY="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_engine.py"
+  KDEBUG_NPI_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_npi.tcl"
+  KDEBUG_RSCHECK_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/rscheck_inventory.tcl"
+  for required_kdebug_file in \
+    "$KDEBUG_ENGINE_BIN" \
+    "$KDEBUG_ENGINE_PY" \
+    "$KDEBUG_NPI_TCL" \
+    "$KDEBUG_RSCHECK_TCL"; do
+    [ -f "$required_kdebug_file" ] ||
+      fail "kdebug build tree is incomplete: $required_kdebug_file"
+  done
+  [ -x "$KDEBUG_ENGINE_BIN" ] || fail "kdebug engine is not executable: $KDEBUG_ENGINE_BIN"
+
+  read -r KDEBUG_SHA256 _ < <(sha256sum "$KDEBUG_BIN")
+  if [ -n "$KDEBUG_EXPECTED_SHA256" ] &&
+     [ "$KDEBUG_SHA256" != "$KDEBUG_EXPECTED_SHA256" ]; then
+    fail "kdebug SHA-256 does not match KDEBUG_EXPECTED_SHA256"
+  fi
+
+  KVERIF_REPO_ROOT=""
+  KVERIF_COMMIT=""
+  KVERIF_DIRTY="unavailable"
+  RSCHECK_COMMIT="unavailable"
+  RSCHECK_DIRTY="unavailable"
+  if command -v git >/dev/null 2>&1; then
+    KVERIF_REPO_ROOT="$(git_in_directory "$KDEBUG_BUILD_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$KVERIF_REPO_ROOT" ]; then
+      KVERIF_COMMIT="$(git_in_directory "$KVERIF_REPO_ROOT" rev-parse HEAD)"
+      if [ -z "$(git_in_directory "$KVERIF_REPO_ROOT" status --porcelain --untracked-files=normal)" ]; then
+        KVERIF_DIRTY=0
+      else
+        KVERIF_DIRTY=1
+      fi
+    fi
+    if git_in_directory "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      RSCHECK_COMMIT="$(git_in_directory "$PROJECT_ROOT" rev-parse HEAD)"
+      if git_in_directory "$PROJECT_ROOT" diff --quiet HEAD --; then
+        RSCHECK_DIRTY=0
+      else
+        RSCHECK_DIRTY=1
+      fi
+    fi
+  fi
+  if [ -n "$KVERIF_EXPECTED_COMMIT" ]; then
+    [ -n "$KVERIF_COMMIT" ] ||
+      fail "KVERIF_EXPECTED_COMMIT was set but KDEBUG_BIN is not inside a Git checkout"
+    [ "$KVERIF_COMMIT" = "$KVERIF_EXPECTED_COMMIT" ] ||
+      fail "kverif commit does not match KVERIF_EXPECTED_COMMIT"
+    [ "$KVERIF_DIRTY" = 0 ] ||
+      fail "kverif checkout must be clean when KVERIF_EXPECTED_COMMIT is set"
+  fi
+
+  KDEBUG_MANIFEST="$TEST_ROOT/kdebug_build_manifest.txt"
+  {
+    printf 'kdebug_bin=%s\n' "$KDEBUG_BIN"
+    printf 'kdebug_sha256=%s\n' "$KDEBUG_SHA256"
+    printf 'kverif_repo=%s\n' "${KVERIF_REPO_ROOT:-unavailable}"
+    printf 'kverif_commit=%s\n' "${KVERIF_COMMIT:-unavailable}"
+    printf 'kverif_dirty=%s\n' "$KVERIF_DIRTY"
+    printf 'rscheck_repo=%s\n' "$PROJECT_ROOT"
+    printf 'rscheck_commit=%s\n' "$RSCHECK_COMMIT"
+    printf 'rscheck_dirty=%s\n' "$RSCHECK_DIRTY"
+    sha256sum \
+      "$KDEBUG_BIN" \
+      "$KDEBUG_ENGINE_BIN" \
+      "$KDEBUG_ENGINE_PY" \
+      "$KDEBUG_NPI_TCL" \
+      "$KDEBUG_RSCHECK_TCL" \
+      "$PROJECT_ROOT/rscheck/kdebug_collector.py" \
+      "$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
+  } >"$KDEBUG_MANIFEST"
+
+  export KDEBUG_BIN
+  export PYTHON="$(command -v "$PYTHON_BIN")"
+  export RSCHECK_KDEBUG_HOME="$TEST_ROOT/kdebug_home"
+  export KDEBUG_HOME="$RSCHECK_KDEBUG_HOME"
+  mkdir -p "$RSCHECK_KDEBUG_HOME"
+  export RSCHECK_COLLECTOR_TIMEOUT_SECONDS="$NPI_TIMEOUT"
+  KDEBUG_PROCESS_BASELINE="$TEST_ROOT/kdebug_processes.before"
+  KDEBUG_PROCESS_CURRENT="$TEST_ROOT/kdebug_processes.after"
+  KDEBUG_PROCESS_NEW="$TEST_ROOT/kdebug_processes.new"
+  kdebug_build_pids | LC_ALL=C sort -u >"$KDEBUG_PROCESS_BASELINE"
+  COLLECTOR="$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
+  [ -x "$COLLECTOR" ] || fail "kdebug collector adapter is not executable: $COLLECTOR"
+  ldd "$KDEBUG_BIN" | tee "$TEST_ROOT/kdebug_ldd.txt"
+  if grep -Eiq 'libNPI|libnpiL1|not found' "$TEST_ROOT/kdebug_ldd.txt"; then
+    fail "kdebug frontend must have no direct NPI dependency or unresolved library"
+  fi
+  if grep -REn \
+    '#include[[:space:]]+[<"]npi|\b(ctypes|cffi)\b|lib(NPI|npiL1)' \
+    "$PROJECT_ROOT/rscheck/kdebug_collector.py" \
+    "$PROJECT_ROOT/scripts/rs_kdebug_collector.py"; then
+    fail "kdebug collector adapter contains a direct NPI dependency"
+  fi
+  cat "$KDEBUG_MANIFEST"
+  echo "Collector backend: kdebug JSON action rscheck.inventory"
+else
+  NPI_BUILD_DIR="$TEST_ROOT/npi_build"
+  make -C npi \
+    BUILD_DIR="$NPI_BUILD_DIR" \
+    VERDI_HOME="$VERDI_HOME" \
+    NPI_PLATFORM="$NPI_PLATFORM" \
+    NPI_INC="$NPI_INC_DIR" \
+    NPI_LIB="$NPI_LIB_DIR" \
+    NPI_L1_INC="$NPI_L1_INC_DIR" \
+    NPI_L1_LIB="$NPI_L1_LIB_DIR" \
+    CXX="$CXX"
+  COLLECTOR="$NPI_BUILD_DIR/rs_npi_collector"
+  [ -x "$COLLECTOR" ] || fail "collector was not built: $COLLECTOR"
+  ldd "$COLLECTOR" | tee "$TEST_ROOT/collector_ldd.txt"
+  grep -q 'libNPI.so' "$TEST_ROOT/collector_ldd.txt"
+  grep -q 'libnpiL1.so' "$TEST_ROOT/collector_ldd.txt"
+  if grep -q 'not found' "$TEST_ROOT/collector_ldd.txt"; then
+    fail "collector has unresolved shared libraries"
+  fi
+  echo "Collector backend: direct C++ NPI baseline"
 fi
 
 PARTIAL_ELAB_ROOT="$TEST_ROOT/partial_load_elab"
@@ -661,16 +866,14 @@ printf 'top.u_tile\ntop.u_tile_peer\n' >"$PARTIAL_POSITIONS"
 write_sample_trace_rules "$PARTIAL_TRACE_RULES"
 
 set +e
-LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$COLLECTOR" \
+run_collector "$PARTIAL_STDOUT" "$PARTIAL_STDERR" \
     --positions "$PARTIAL_POSITIONS" \
     --output "$PARTIAL_INVENTORY" \
     --trace-rules "$PARTIAL_TRACE_RULES" \
     --trace-max-depth 16 \
     --clk-port clk \
     --rst-port rst \
-    --elab-db "$PARTIAL_ELAB_DB" \
-    >"$PARTIAL_STDOUT" 2>"$PARTIAL_STDERR"
+    --elab-db "$PARTIAL_ELAB_DB"
 PARTIAL_COLLECTOR_RC=$?
 set -e
 cat "$PARTIAL_STDOUT"
@@ -739,7 +942,7 @@ cd "$PROJECT_ROOT"
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
   --collector "$COLLECTOR" \
   --elab-db "$PARTIAL_ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --npi-timeout "$NPI_TIMEOUT" \
   --json-report "$PARTIAL_REPORT" \
   2>&1 | tee "$PARTIAL_CHECK_LOG"
@@ -778,7 +981,7 @@ PY
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$PARTIAL_ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --iterations 1 \
   --expect-partial-load \
@@ -862,6 +1065,8 @@ CLEAN_POSITIONS="$TEST_ROOT/clean_load_positions.txt"
 CLEAN_TRACE_RULES="$TEST_ROOT/clean_load_trace_rules.tsv"
 CLEAN_INVENTORY="$TEST_ROOT/clean_load_inventory.json"
 CLEAN_COLLECTOR_LOG="$TEST_ROOT/clean_load_collector.log"
+CLEAN_COLLECTOR_STDOUT="$TEST_ROOT/clean_load_collector.stdout"
+CLEAN_COLLECTOR_STDERR="$TEST_ROOT/clean_load_collector.stderr"
 POS_INVENTORY="$TEST_ROOT/positive_inventory.json"
 POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
@@ -869,16 +1074,15 @@ POS_LOG="$TEST_ROOT/positive_console.log"
 
 printf 'top.u_tile\ntop.u_tile_peer\n' >"$CLEAN_POSITIONS"
 write_sample_trace_rules "$CLEAN_TRACE_RULES"
-LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$COLLECTOR" \
+run_collector "$CLEAN_COLLECTOR_STDOUT" "$CLEAN_COLLECTOR_STDERR" \
     --positions "$CLEAN_POSITIONS" \
     --output "$CLEAN_INVENTORY" \
     --trace-rules "$CLEAN_TRACE_RULES" \
     --trace-max-depth 16 \
     --clk-port clk \
     --rst-port rst \
-    --elab-db "$ELAB_DB" \
-    2>&1 | tee "$CLEAN_COLLECTOR_LOG"
+    --elab-db "$ELAB_DB"
+cat "$CLEAN_COLLECTOR_STDOUT" "$CLEAN_COLLECTOR_STDERR" | tee "$CLEAN_COLLECTOR_LOG"
 assert_no_collector_errors "$CLEAN_COLLECTOR_LOG"
 assert_sample_clock_traces "$CLEAN_INVENTORY" "clean-load"
 
@@ -940,7 +1144,7 @@ PY
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --npi-timeout "$NPI_TIMEOUT" \
   --crg-trace-max-depth 3 \
   --keep-inventory "$POS_INVENTORY" \
@@ -1520,7 +1724,7 @@ ONLINE_GUI_LOG="$TEST_ROOT/online_gui_positive.log"
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --iterations "$GUI_ONLINE_ITERATIONS" \
   --visible-tab results \
@@ -1541,7 +1745,7 @@ CRG_TRACE_DEPTH_LOG="$TEST_ROOT/online_gui_crg_trace_depth_limit.log"
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --crg-depth-limit \
   --iterations "$GUI_CRG_TRACE_DEPTH_ITERATIONS" \
@@ -1563,7 +1767,7 @@ CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --custom-port \
   --iterations 1 \
@@ -1586,7 +1790,7 @@ CLK_WITHOUT_RST_GUI_LOG="$TEST_ROOT/online_gui_clk_present_rst_missing.log"
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --clk-without-rst \
   --iterations "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
@@ -1615,7 +1819,7 @@ ONLINE_NEGATIVE_LOG="$TEST_ROOT/online_gui_negative.log"
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
+  "${NPI_CLI_ARGS[@]}" \
   --timeout "$NPI_TIMEOUT" \
   --negative \
   --iterations 1 \
@@ -1752,10 +1956,46 @@ for gui_log in \
 done
 
 assert_no_unexpected_collector_logs
+assert_no_new_kdebug_processes
+if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
+  "$PYTHON_BIN" - "$RSCHECK_KDEBUG_HOME" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+crash_markers = [
+    str(path)
+    for path in root.rglob("crash_marker*")
+    if path.is_file() and path.stat().st_size
+]
+if crash_markers:
+    raise SystemExit("kdebug crash markers were retained: {!r}".format(crash_markers))
+active = []
+for path in root.rglob("registry.json"):
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit("invalid kdebug registry {}: {}".format(path, exc))
+    sessions = document.get("sessions", []) if isinstance(document, dict) else []
+    if sessions:
+        active.append((str(path), sessions))
+if active:
+    raise SystemExit("kdebug registries retain active sessions: {!r}".format(active))
+print("kdebug isolated logs PASS: no crash marker or active registry session")
+PY
+fi
 assert_verdi_still_ready
 
 trap - ERR
 echo "PASS: partial KDB compatibility, arbitrary Excel headers, position/CRG_source mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
+echo "COLLECTOR_BACKEND=$RSCHECK_COLLECTOR_BACKEND"
+echo "COLLECTOR=$COLLECTOR"
+if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
+  echo "KDEBUG_BIN=$KDEBUG_BIN"
+  echo "KDEBUG_MANIFEST=$KDEBUG_MANIFEST"
+  echo "RSCHECK_KDEBUG_HOME=$RSCHECK_KDEBUG_HOME"
+fi
 echo "ELAB_DB=$ELAB_DB"
 echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"

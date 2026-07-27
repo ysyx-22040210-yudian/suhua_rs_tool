@@ -1,6 +1,6 @@
 # RTL 打拍例化检查工具测试指南
 
-本文档给出从本地单元测试、`rscheck` 自带 Tkinter GUI 可见 smoke 和压力测试，到 CentOS/Verdi 在线 NPI 检查的完整验证流程。除非某一节明确说明可以独立执行，Linux 在线测试各节应在同一个 shell 中按顺序执行，以复用 `PROJECT_ROOT`、`TEST_ROOT`、`ELAB_DB` 等变量。
+本文档给出从本地单元测试、`rscheck` 自带 Tkinter GUI 可见 smoke 和压力测试，到 Linux/Verdi/kdebug 在线检查的完整验证流程。kdebug 双仓库构建与固定协议见 [kdebug 后端指南](KDEBUG_BACKEND.md)。除非某一节明确说明可以独立执行，Linux 在线测试各节应在同一个 shell 中按顺序执行，以复用 `PROJECT_ROOT`、`TEST_ROOT`、`ELAB_DB` 等变量。
 
 > **生产契约：在线检查的设计输入只能是 `--elab-db <Verdi elaborated KDB 目录>`。**
 >
@@ -18,23 +18,24 @@
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
-| R3 | Linux + Verdi/NPI + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS；report 保留 `tile_core`，collector/inventory 只出现 `top.u_tile`，并保留动态拍数证据 |
+| R3 | Linux + Verdi/kdebug + Tk | 工具自带 GUI 在线 KDB smoke | `0` | 3 轮均为 2 行 PASS；report 保留 `tile_core`，collector/inventory 只出现 `top.u_tile`，并保留动态拍数证据 |
 | R4 | 通用 Python 环境 | 取消发生在后台进程启动阶段 | `0` | 100 轮全部通过，不遗留子进程 |
 | R5 | Windows / Linux / macOS + Tk | GUI 完整配置导出、导入与事务回归 | `0` | 六个根对象和三个数据库完整往返；副本、dirty、搜索过滤、同路径拒绝及无效/取消/拒绝原子性均通过，输出固定 config-io marker |
-| R6 | Linux + Verdi/NPI + Tk | 有 clk、无 rst 的 GUI 在线隔离回归 | `0` | 默认 20 轮；每轮被测行均为预期 FAIL、1 error，finding 精确为 `RST_PORT_MISSING`，不得出现 `CLK_PORT_MISSING`/`CLK_UNCONNECTED` |
+| R6 | Linux + Verdi/kdebug + Tk | 有 clk、无 rst 的 GUI 在线隔离回归 | `0` | 默认 20 轮；每轮被测行均为预期 FAIL、1 error，finding 精确为 `RST_PORT_MISSING`，不得出现 `CLK_PORT_MISSING`/`CLK_UNCONNECTED` |
 | R7 | Linux + X11/Xwayland + Tk | `has_rs_cfg_en=false` 的 Excel 任意文本 GUI 专项 | `0` | 默认 20 轮；每轮 1 行 PASS、0 error、0 warning，原始 `RS_CFG_EN` 文本保留，RTL 无 `RS_CRG_EN` 且 findings 为空 |
 | R8 | Linux + X11/Xwayland + Tk | Excel/internal `RS_CFG_EN=NA` 逐行豁免 GUI 专项 | `0` | 默认 20 轮；RTL `RS_CRG_EN=1` 仍不产生门控 finding，其他 module/step/clk/rst 检查继续且整行 PASS |
 | R9 | Linux + X11/Xwayland + Tk | CRG_source 简称映射 GUI/JSON/CSV 专项 | `0` | 默认 20 轮；alias+full 保留，三层 witness 精确命中，`crg-source-check=pass trace-depth=3` |
-| R10 | Linux + Verdi/NPI + Tk | CRG trace 深度上限 GUI 在线压测 | `0` | 默认 20 轮；最大深度 2 时六个多层实例产生 6 个 `CRG_TRACE_DEPTH_LIMIT` warning，direct depth 1 分支仍 PASS，行和 CLI 仍通过 |
-| C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports 和 Netlist 漏失的 trace input 分支 |
+| R10 | Linux + Verdi/kdebug + Tk | CRG trace 深度上限 GUI 在线压测 | `0` | 默认 20 轮；最大深度 2 时六个多层实例产生 6 个 `CRG_TRACE_DEPTH_LIMIT` warning，direct depth 1 分支仍 PASS，行和 CLI 仍通过 |
+| C0 | Linux + Verdi/kdebug | kdebug backend 与无 NPI adapter | `0` | `rscheck.inventory` 单 action 生成 inventory v3；adapter/frontend 无直接 NPI 动态依赖；全部 positions 只加载一次 Verdi |
+| C1 | Linux + Verdi/NPI | 旧 C++ NPI collector baseline | `0` | 仅用于 A/B 回归；生成可执行文件且 `libNPI.so`/`libnpiL1.so` 可解析，不作为默认 GUI 后端 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
 | V0 | Linux + X11/Xwayland | 无 Verdi/license 的两个 GUI 环境探测 | `0` | `rscheck GUI probe PASS` / `GUI probe PASS` |
 | V1 | Linux + Verdi + X11/Xwayland | Verdi GUI 加载同一 KDB | `0` | 新窗口标题匹配 `VERDI_READY_REGEX`，明确显示 elaborated top `top` |
-| N1 | Linux + Verdi/NPI | 在线正例 | `0` | 2 行通过；首组 CRG depth 3 命中且分支任一命中，inventory v3/report v4 |
-| N2 | Linux + Verdi/NPI | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 Excel/internal `RS_CFG_EN` 标签差异；实际 RTL parameter 为 `RS_CRG_EN` |
-| N3 | Linux + Verdi/NPI + Tk | 带 elaboration error 但 top 可查询的 partial KDB | `0` | collector/CLI/GUI 继续；2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning |
-| N4 | Linux + Verdi/NPI | 跨父 scope 的 trace cache 隔离 | `0` | partial/clean KDB 都同时采集 `top.u_tile` 和 `top.u_tile_peer`；同名 local clock cone 只包含自身完整 hierarchy，foreign-prefix 为 0 |
+| N1 | Linux + Verdi/kdebug | 在线正例 | `0` | 2 行通过；首组 CRG depth 3 命中且分支任一命中，inventory v3/report v4 |
+| N2 | Linux + Verdi/kdebug | 在线反例 | `1` | 1 行失败、非零 error，包含动态拍数和 Excel/internal `RS_CFG_EN` 标签差异；实际 RTL parameter 为 `RS_CRG_EN` |
+| N3 | Linux + Verdi/kdebug + Tk | 带 elaboration error 但 top 可查询的 partial KDB | `0` | collector/CLI/GUI 继续；2 行 PASS、0 error、1 个 `NPI_LOAD_PARTIAL` warning |
+| N4 | Linux + Verdi/kdebug | 跨父 scope 的 trace cache 隔离 | `0` | partial/clean KDB 都同时采集 `top.u_tile` 和 `top.u_tile_peer`；同名 local clock cone 只包含自身完整 hierarchy，foreign-prefix 为 0 |
 | G1 | 任意 Python 环境 | 旧 filelist passthrough 防回归 | `2` | argparse 报 `unrecognized arguments` |
 | G2 | 任意 Python 环境 | 把 `work.lib++` 错当 elab 输入 | `2` | Python runner 在启动 collector 前拒绝，不生成 PASS 报告 |
 | G3 | 任意 Python 环境 | `--inventory` 与 `--elab-db` 冲突 | `2` | 报 `--elab-db requires --collector` |
@@ -43,7 +44,7 @@
 
 - `0`：检查通过；允许存在不影响判定的 warning。
 - `1`：RTL 与规格不一致，或检查结果包含硬错误。
-- `2`：命令行、配置、Excel、inventory、collector、Verdi/NPI 环境或设计加载失败。
+- `2`：命令行、配置、Excel、inventory、collector、Verdi/kdebug 环境或设计加载失败。
 
 ## 2. 本地测试前提
 
@@ -334,7 +335,7 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 python3 -m rscheck gui
 ```
 
-macOS 不支持真实 NPI 在线采集；在线 collector、`libNPI.so`、`libnpiL1.so` 和 elaborated KDB 加载测试必须在 Linux/Verdi 环境执行。
+macOS 不支持 Verdi/kdebug 在线采集；在线 adapter、kdebug engine 和 elaborated KDB 加载测试必须在 Linux/Verdi 环境执行。
 
 可单独运行 elab-only 契约测试：
 
@@ -620,13 +621,57 @@ CentOS 实测连续 100 轮通过，总耗时约 15.3 秒。完整测试套件�
 ```bash
 : "${PROJECT_ROOT:?set PROJECT_ROOT in the current shell}"
 : "${VERDI_HOME:?set VERDI_HOME in the current shell}"
-: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE in the current shell}"
+: "${KDEBUG_BIN:?set KDEBUG_BIN to the absolute kverif/kdebug/kdebug path}"
 
-export NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
 export NOVAS_INST_DIR="$VERDI_HOME"
-export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
 export PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+# 若系统有多个 Python/GCC 工具链，在这里 source 对应的 enable 脚本。
+# source <PYTHON_TOOLCHAIN_ENABLE>
+# source <GCC_TOOLCHAIN_ENABLE>
+
+cd "$PROJECT_ROOT"
+"$PYTHON_BIN" --version
+test -x "$VERDI_HOME/bin/vericom"
+test -x "$VERDI_HOME/bin/elabcom"
+test -x "$KDEBUG_BIN"
+test -x "$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
+```
+
+若任一 `test` 返回非零，先修复安装路径或环境变量，不要继续构建。
+
+## 6. 准备 kdebug collector backend
+
+原版 kdebug 不能直接替换 collector；必须使用 kverif
+`codex/rscheck-elab-inventory` 和本仓库 `codex/kdebug-npi-backend`。GUI/CLI
+collector 指向 adapter，`KDEBUG_BIN` 指向 kdebug ELF：
+
+```bash
+cd "$PROJECT_ROOT"
+COLLECTOR="$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
+export KDEBUG_BIN
+
+test -x "$COLLECTOR"
+test -x "$KDEBUG_BIN"
+if ldd "$KDEBUG_BIN" | grep -Eq 'libNPI|libnpiL1|not found'; then
+  echo "kdebug frontend has a forbidden or unresolved dependency" >&2
+  exit 1
+fi
+```
+
+adapter 会把 Python runner 生成的 positions/rules 合并为一个
+`kdebug.v1 / rscheck.inventory` action；所有请求必须在同一次 Verdi load/session
+中完成。双仓库 clone/build 和 adapter 直测见 [kdebug 后端指南](KDEBUG_BACKEND.md)。
+
+### 6.1 旧 C++ NPI collector baseline
+
+下列构建只用于 A/B 和历史回归，不得替代上面的 kdebug 签核：
+
+```bash
+cd "$PROJECT_ROOT"
+
 export CXX="${CXX:-g++}"
+export NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
 export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
 export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
 export NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
@@ -640,28 +685,6 @@ if [ -z "${NPI_L1_LIB_DIR:-}" ]; then
 fi
 export NPI_L1_LIB_DIR
 
-# 若系统有多个 Python/GCC 工具链，在这里 source 对应的 enable 脚本。
-# source <PYTHON_TOOLCHAIN_ENABLE>
-# source <GCC_TOOLCHAIN_ENABLE>
-
-cd "$PROJECT_ROOT"
-"$PYTHON_BIN" --version
-"$CXX" --version
-test -x "$VERDI_HOME/bin/vericom"
-test -x "$VERDI_HOME/bin/elabcom"
-test -f "$NPI_INC_DIR/npi.h"
-test -f "$NPI_LIB_DIR/libNPI.so"
-test -f "$NPI_L1_INC_DIR/npi_L1.h"
-test -f "$NPI_L1_LIB_DIR/libnpiL1.so"
-```
-
-若任一 `test` 返回非零，先修复安装路径或环境变量，不要继续构建。
-
-## 6. 构建 C++ NPI collector
-
-```bash
-cd "$PROJECT_ROOT"
-
 make -C npi \
   VERDI_HOME="$VERDI_HOME" \
   NPI_PLATFORM="$NPI_PLATFORM" \
@@ -671,11 +694,11 @@ make -C npi \
   NPI_L1_LIB="$NPI_L1_LIB_DIR" \
   CXX="$CXX"
 
-COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
-test -x "$COLLECTOR"
-file "$COLLECTOR"
-ldd "$COLLECTOR" | grep 'libNPI\.so'
-ldd "$COLLECTOR" | grep 'libnpiL1\.so'
+BASELINE_COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
+test -x "$BASELINE_COLLECTOR"
+file "$BASELINE_COLLECTOR"
+ldd "$BASELINE_COLLECTOR" | grep 'libNPI\.so'
+ldd "$BASELINE_COLLECTOR" | grep 'libnpiL1\.so'
 ```
 
 仓库路径及 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` 不得包含空白；GNU Make 会拆分目标名，Makefile 会在构建前明确拒绝这类路径。
@@ -683,12 +706,12 @@ ldd "$COLLECTOR" | grep 'libnpiL1\.so'
 预期：
 
 - `make` 返回 `0`。
-- `$COLLECTOR` 是当前 CentOS 架构的可执行文件。
+- `$BASELINE_COLLECTOR` 是当前 Linux 架构的可执行文件。
 - `ldd` 中 `libNPI.so` 和 `libnpiL1.so` 都指向预期目录，且都不是 `not found`。
 
 该 collector 会合并 Language Model `npiPort` 遍历和 NPI L1 `npi_mod_inst_get_port` fallback，采集每个直接子 module instance 的全部 formal ports。递归展开上游模块时，它先记录 Netlist 已分类、已解析和未知端口集合，再用同一模块的 Language Model/L1 端口集合补追 Netlist 漏失或未解析的 input；Netlist 已解析的同名端口不会重复入队。对于方向未知的端口，只有 Netlist 与 Language/L1 都无法分类时才因方向证据不足把 trace 标为 unresolved；无法解析连接、对象预算耗尽等其他 NPI 证据问题仍会独立标为 unresolved。Python runner 还会传 `--trace-rules` 和 `--trace-max-depth`，让 collector 从每种 RS module 的有效 clk formal 做有界 Netlist 上游追踪并写出 inventory v3 `clock_trace`。trace cache 键包含 RS 实例完整 hierarchy、clk formal 和连接对象，不能在不同父 scope 的同名 local clock cone 之间复用。`--clk-port/--rst-port` 仍保留为兼容接口。
 
-若 NPI 库不在标准目录，在 `rscheck check` 命令中增加 `--npi-lib-dir "$NPI_LIB_DIR"`。
+若 NPI 库不在标准目录，baseline 命令可增加 `--npi-lib-dir "$NPI_LIB_DIR"`。kdebug 后端通常不传该兼容选项。
 
 该选项只配置 collector 子进程的主要 NPI 动态库搜索路径，不是设计参数，也不会传给 `npi_load_design`。`libnpiL1.so` 位于其他目录时由构建时的 rpath 和当前 `LD_LIBRARY_PATH` 定位。
 
@@ -755,7 +778,6 @@ set +e
   --sheet 1 \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
   --npi-timeout 180 \
   --crg-trace-max-depth 16 \
   --keep-inventory "$POS_INVENTORY" \
@@ -984,43 +1006,19 @@ export PROJECT_ROOT="/path/to/suhua_rs_tool"
 export VERDI_HOME="/path/to/verdi"
 export ELAB_DB="/absolute/path/to/kdb.elab++"
 
-: "${LM_LICENSE_FILE:?set LM_LICENSE_FILE through the approved site environment}"
-export SNPSLMD_LICENSE_FILE="${SNPSLMD_LICENSE_FILE:-$LM_LICENSE_FILE}"
-export NPI_PLATFORM="${NPI_PLATFORM:-LINUX64}"
+: "${KDEBUG_BIN:?set KDEBUG_BIN to the absolute kverif/kdebug/kdebug path}"
 export PYTHON_BIN="${PYTHON_BIN:-python3}"
-export CXX="${CXX:-g++}"
-export NPI_INC_DIR="${NPI_INC_DIR:-$VERDI_HOME/share/NPI/inc}"
-export NPI_LIB_DIR="${NPI_LIB_DIR:-$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM}"
-export NPI_L1_INC_DIR="${NPI_L1_INC_DIR:-$VERDI_HOME/share/NPI/L1/C/inc}"
-if [ -z "${NPI_L1_LIB_DIR:-}" ]; then
-  if [ -f "$NPI_LIB_DIR/libnpiL1.so" ]; then
-    NPI_L1_LIB_DIR="$NPI_LIB_DIR"
-  else
-    NPI_PLATFORM_LOWER="$(printf '%s' "$NPI_PLATFORM" | tr '[:upper:]' '[:lower:]')"
-    NPI_L1_LIB_DIR="$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM_LOWER"
-  fi
-fi
-export NPI_L1_LIB_DIR
-export COLLECTOR="$PROJECT_ROOT/npi/build/rs_npi_collector"
+export KDEBUG_BIN
+export COLLECTOR="$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
 
 cd "$PROJECT_ROOT"
 if [ -f /opt/rh/rh-python38/enable ]; then
   source /opt/rh/rh-python38/enable
 fi
 
-make -C npi \
-  VERDI_HOME="$VERDI_HOME" \
-  NPI_PLATFORM="$NPI_PLATFORM" \
-  NPI_INC="$NPI_INC_DIR" \
-  NPI_LIB="$NPI_LIB_DIR" \
-  NPI_L1_INC="$NPI_L1_INC_DIR" \
-  NPI_L1_LIB="$NPI_L1_LIB_DIR" \
-  CXX="$CXX"
 test -x "$COLLECTOR"
+test -x "$KDEBUG_BIN"
 test -d "$ELAB_DB"
-test -f "$NPI_LIB_DIR/libNPI.so"
-test -f "$NPI_L1_INC_DIR/npi_L1.h"
-test -f "$NPI_L1_LIB_DIR/libnpiL1.so"
 
 bash scripts/launch_rscheck_gui.sh --probe-only
 source scripts/lib/gui_session.sh
@@ -1037,7 +1035,6 @@ trap cleanup_online_window_files EXIT
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
-  --npi-lib-dir "$NPI_LIB_DIR" \
   --timeout 180 \
   --iterations 3 \
   --visible-seconds 15 \
@@ -1362,19 +1359,18 @@ work_lib_as_elab.log
 - 若有意使用严格诊断，确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。
 - 若实际表头本来就是自定义业务名称，关闭该可选诊断；内部属性仍由九个列号映射，不由表头文字决定。
 
-### 14.3 `NPI collector executable not found`
+### 14.3 `RTL collector executable not found` 或 `kdebug executable not found`
 
-- 重新执行第 6 节构建。
-- 确认 `COLLECTOR` 指向文件而不是目录。
-- 执行 `test -x "$COLLECTOR"` 和 `file "$COLLECTOR"`。
+- 确认 `COLLECTOR=$PROJECT_ROOT/scripts/rs_kdebug_collector.py`，不是 kdebug ELF。
+- 确认绝对 `KDEBUG_BIN` 指向 kverif build tree 中的 `kdebug/kdebug`。
+- 执行 `test -x "$COLLECTOR"`、`test -x "$KDEBUG_BIN"`，并确认配套 `kdebug/libexec` 未被拆散。
 
-### 14.4 `libNPI.so` / `libnpiL1.so` 无法加载
+### 14.4 `KDEBUG_RESPONSE` 或 engine 无法启动
 
-- 检查 `VERDI_HOME` 和 `NPI_PLATFORM`。
-- 检查 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`；头文件必须分别包含 `npi.h`、`npi_L1.h`。
-- 执行 `ldd "$COLLECTOR" | grep -E 'libNPI|libnpiL1'`，两项都不能是 `not found`。
-- 必要时使用 `--npi-lib-dir "$NPI_LIB_DIR"`。
-- 不要把动态库路径伪装成设计参数；它与 `--elab-db` 是不同用途。
+- 确认两个仓库分别是 `codex/rscheck-elab-inventory` 和 `codex/kdebug-npi-backend`。
+- kdebug stdout 必须只有一个 JSON response，普通日志必须写 stderr。
+- 确认 `kdebug/libexec/kdebug-engine` 和 `tcl_engine/rscheck_inventory.tcl` 来自同一构建树。
+- 用 [kdebug 后端指南](KDEBUG_BACKEND.md) 的 adapter 直测命令隔离 GUI/CLI。
 
 ### 14.5 Verdi 或 license 初始化失败
 
@@ -1388,13 +1384,12 @@ work_lib_as_elab.log
 - 相对路径按运行命令时的当前目录解析；自动化中建议使用绝对路径。
 - `.elab++` 不是强制后缀，但路径内容必须是 `elabcom` 生成的 elaborated KDB。
 
-### 14.7 `NPI_LOAD_PARTIAL` 或 `error[NPI_LOAD]`
+### 14.7 `NPI_LOAD_PARTIAL` 或 `KDEBUG_ACTION`
 
 - 当前 Python runner 会在 collector 启动前拒绝 `work.lib++` 及其符号链接别名；若看到对应错误，改传真正的 elaborated KDB。
-- `warning[NPI_LOAD_PARTIAL]` 表示 load 返回 0，但 NPI 仍能枚举 top。该 warning 本身不阻止 PASS；继续核对报告中所有目标证据。CRG trace 若受 partial KDB 影响应另见 `CRG_TRACE_UNAVAILABLE`，不能用 partial notice 忽略硬错误。
-- `error[NPI_LOAD]` / 退出 11 表示 load 返回 0 且没有任何 top 可查询。返回第 7 节重建 KDB，并确认 `-top` 与 Excel 层次根一致。
-- 执行 `ldd "$COLLECTOR" | grep -E 'libNPI|libnpiL1'`，确认两个运行时库、`VERDI_HOME`、PATH 中的 Verdi 与生成 KDB 的版本/平台一致。
-- 直接运行 collector 时分别保存 stdout/stderr，并查看当前工作目录下 `rs_npi_collectorLog/compiler.log`。Python runner 在失败时会同时保留两个输出流的首尾诊断。
+- `warning[NPI_LOAD_PARTIAL]` 表示 Verdi load 报错，但同一 action 中仍能枚举 top。该 warning 本身不阻止 PASS；继续核对报告中所有目标证据。CRG trace 若受 partial KDB 影响应另见 `CRG_TRACE_UNAVAILABLE`，不能用 partial notice 忽略硬错误。
+- `KDEBUG_ACTION` / adapter 退出 11 可表示没有任何 top 可查询。返回第 7 节重建 KDB，并确认 top 与 Excel 层次根一致。
+- 保存 adapter/kdebug stdout 和 stderr；失败 envelope 的 `error.code/error.message` 必须可见。
 
 ### 14.8 正例出现 `POSITION_NOT_FOUND`
 
@@ -1408,7 +1403,7 @@ work_lib_as_elab.log
 
 - 先查看 report v4 的 `module_rule.clk_port/rst_port`，确认规则键精确匹配 `RS_module`。未知模块默认使用 `clk/rst_n`；旧显式规则缺键时继承 `rtl.clk_port/rst_port`。
 - 查看 JSON inventory 中对应实例的 `ports`。当前 collector 应包含全部 formal ports；若是升级前生成、只含旧全局 clk/rst 的 offline inventory，请用当前 collector 重新在线采集。
-- partial KDB 中 Language Model 端口遍历为空时，collector 应由 NPI L1 `npi_mod_inst_get_port` fallback 补齐；Netlist 返回非空但不完整的端口集合时，也必须合并 Language/L1 视图补追遗漏 input。若仍为空，核对 `libnpiL1.so`、实例完整路径和 collector 日志。
+- partial KDB 中某一查询视图端口遍历为空或不完整时，kdebug engine 仍必须补齐 formal ports 和遗漏的 trace input 分支。若仍为空，核对实例完整路径、kdebug action diagnostics 和配套 engine 文件；不能把 partial notice 当成完整证据。
 - clk/rst 由 checker 独立判定。模块存在且连接了规则指定的 clk、但没有规则指定的 rst formal port 时，行必须 FAIL 且 finding 只能是 `RST_PORT_MISSING`；若同时看到 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`，先核对 inventory 中 clk 的 formal port/connection 证据，并按回归缺陷处理。当前没有跳过 rst 检查的开关。
 - `CRG_SOURCE_NOT_FOUND`：v3 trace 完整但没有模块完整 hierarchy 精确命中；核对 alias 映射和 `clock_trace.modules/path`。
 - `CRG_TRACE_DEPTH_LIMIT`：目标在本次最大模块跳数之外；确认后提高 `rtl.crg_trace_max_depth` 并重采。
@@ -1499,7 +1494,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、NPI L0/L1 collector 构建、partial/clean elaborated KDB、可见 Verdi、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、`clk/rst_n` input 排除和 direct depth 1；partial 与 clean inventory 还必须同时采集 `top.u_tile`、`top.u_tile_peer` 两个结构相同的 hierarchy，并证明同名 clock cone cache 不跨 scope 污染。每个 scope 固定为 13 个实例、33 个 trace node、4 个 unique module，foreign-prefix 数量必须为 0。深度专项必须证明 max depth 2 只产生 warning。每次 GUI smoke 都完成六根配置和三个数据库往返，并生成 inventory v3/report v4。NPI 唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。
+`scripts/test_vm_verdi_gui.sh` 在 `RSCHECK_COLLECTOR_BACKEND=kdebug` 时自动核对 adapter/kdebug 无直接 NPI frontend 依赖，并执行：全量 Python 测试、partial/clean elaborated KDB、可见 Verdi、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、`clk/rst_n` input 排除和 direct depth 1；partial 与 clean inventory 还必须同时采集 `top.u_tile`、`top.u_tile_peer` 两个结构相同的 hierarchy，并证明同名 clock cone cache 不跨 scope 污染。每个 scope 固定为 13 个实例、33 个 trace node、4 个 unique module，foreign-prefix 数量必须为 0。深度专项必须证明 max depth 2 只产生 warning。每次 GUI smoke 都完成六根配置和三个数据库往返，并生成 inventory v3/report v4。唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。`RSCHECK_COLLECTOR_BACKEND=npi` 仅为旧 baseline。
 
 成功输出至少应包含这些稳定 marker：
 
@@ -1551,14 +1546,27 @@ config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_sourc
 ```bash
 cd "$HOME/suhua_rs_tool"
 bash scripts/launch_verdi_gui.sh --probe-only
-bash scripts/test_vm_fresh_checkout.sh
+RSCHECK_COLLECTOR_BACKEND=kdebug \
+KDEBUG_BIN="$KDEBUG_BIN" \
+KVERIF_EXPECTED_COMMIT=<KVERIF_SHA> \
+KDEBUG_EXPECTED_SHA256=<KDEBUG_ELF_SHA256> \
+bash scripts/test_vm_fresh_checkout.sh \
+  --commit origin/codex/kdebug-npi-backend
 ```
 
 固定到完整提交号或静默加载站点环境文件。`VERDI_ENV_FILE` 必须是可信的绝对路径；它在隔离子进程中加载，输出/xtrace 被抑制，返回非零时不启动正式测试：
 
 ```bash
-bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
-VERDI_ENV_FILE=/path/to/site_env.sh bash scripts/test_vm_fresh_checkout.sh --commit FULL_SHA
+RSCHECK_COLLECTOR_BACKEND=kdebug KDEBUG_BIN="$KDEBUG_BIN" \
+KVERIF_EXPECTED_COMMIT=<KVERIF_SHA> \
+KDEBUG_EXPECTED_SHA256=<KDEBUG_ELF_SHA256> \
+bash scripts/test_vm_fresh_checkout.sh --commit <RSCHECK_SHA>
+
+VERDI_ENV_FILE=/path/to/site_env.sh \
+RSCHECK_COLLECTOR_BACKEND=kdebug KDEBUG_BIN="$KDEBUG_BIN" \
+KVERIF_EXPECTED_COMMIT=<KVERIF_SHA> \
+KDEBUG_EXPECTED_SHA256=<KDEBUG_ELF_SHA256> \
+bash scripts/test_vm_fresh_checkout.sh --commit <RSCHECK_SHA>
 ```
 
 fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BASE:-$HOME}` 生成唯一根目录，最多三次带 TERM/KILL 上限的 clone 并保留每个 `repo_attemptN`；完整输出为 `full_vm_test.log`，正式产物固定在 `artifacts`，PASS/FAIL 后均不自动删除。root 且未设置 license 时，正式脚本会自动读取已选中桌面用户的登录初始化，但只导入 `LM_LICENSE_FILE`/`SNPSLMD_LICENSE_FILE`，不导入 PATH 等其他内容，也不打印值；已有 license 值优先，`VERDI_AUTO_LICENSE_IMPORT=0` 可禁用。只有已信任、已核对且位于 VM 本机文件系统的 checkout 才直接运行 `bash scripts/test_vm_verdi_gui.sh`。
@@ -1570,15 +1578,16 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 | Verdi 定位 | `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` |
 | GUI 选择 | `GUI_USER`、`GUI_DISPLAY`、`GUI_XAUTHORITY`、`GUI_SESSION_PID` |
 | Verdi 就绪 | `GUI_START_TIMEOUT`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX` |
-| 测试工具链 | `PYTHON_BIN`、`CXX` |
-| 非标准 NPI 布局 | `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` |
+| 测试工具链 | `PYTHON_BIN`；`CXX` 仅旧 `npi` baseline |
+| collector backend | `RSCHECK_COLLECTOR_BACKEND=kdebug`、绝对 `KDEBUG_BIN`；fresh kdebug 测试必须用 `KVERIF_EXPECTED_COMMIT`、`KDEBUG_EXPECTED_SHA256` 固定构建；`npi` 仅 baseline |
+| 非标准 NPI 布局 | 仅 baseline 使用 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR` |
 | GUI 压测规模 | `GUI_ONLINE_ITERATIONS`、`GUI_CRG_TRACE_DEPTH_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_RS_CFG_DONTCARE_ITERATIONS`、`GUI_RS_CFG_NA_ITERATIONS`、`GUI_CRG_SOURCE_MAPPING_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS` |
 | fresh 运行目录 | `VM_RUN_BASE`（绝对路径） |
 | 站点环境/license | `VERDI_ENV_FILE`（绝对路径）、`VERDI_AUTO_LICENSE_IMPORT` |
 
-`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。普通在线正例默认 3 轮；CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射五个专项默认各 20 轮，分别由对应 `GUI_*_ITERATIONS` 变量控制。六个轮次变量都必须是十进制正整数。
+`VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。kdebug 模式不会检查或编译旧 NPI C++ collector；它把 engine 的 `PYTHON` 固定为 `PYTHON_BIN`，把 kdebug 的 HOME 隔离到本次 artifacts，并保存构建指纹与残留进程检查结果。普通在线正例默认 3 轮；CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射五个专项默认各 20 轮，分别由对应 `GUI_*_ITERATIONS` 变量控制。六个轮次变量都必须是十进制正整数。
 
-当前代码版本为 `0.11.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v3、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录是当前 `0.11.0` 的签核依据。
+当前代码版本为 `0.11.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录旧 C++ NPI collector 的历史 baseline：Linux 299 项无 skip、partial/clean KDB、mapped Verdi/Tk、depth 3/2、100 轮稳定性和 10,000 行负载。该提交不含 kdebug backend，不能作为本分支的 kdebug 签核依据。
 
 现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用 CRG 来源追踪时的十一日志历史基线，不能作为 inventory v3/report v4 和 depth-limit 专项的当前证据。下列记录只作为历史对照。
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Clone a clean GitHub checkout into VM-native storage, pin the requested
-# commit, and run the repository's complete Verdi/NPI/GUI test driver.
+# commit, and run the repository's complete Verdi/collector/GUI test driver.
 { set +x; } 2>/dev/null
 set -Ee -o pipefail
 umask 077
@@ -16,7 +16,7 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/test_vm_fresh_checkout.sh [--commit REV]
 
-Create an independent VM-native checkout and run the complete Verdi/NPI/GUI
+Create an independent VM-native checkout and run the complete Verdi/collector/GUI
 test suite. Without --commit, the checkout is pinned to origin/main.
 
 Options:
@@ -27,6 +27,13 @@ Environment:
   CLONE_TIMEOUT   Timeout in seconds for each clone attempt (default: 180).
   VM_RUN_BASE     Absolute writable parent for the run directory (default: HOME).
   VERDI_ENV_FILE  Optional absolute site environment file, loaded in isolation.
+  RSCHECK_COLLECTOR_BACKEND
+                   kdebug (default) or npi (explicit historical baseline).
+  KDEBUG_BIN      Absolute patched kdebug executable; required by kdebug backend.
+  KVERIF_EXPECTED_COMMIT
+                   Required full kverif SHA verified against KDEBUG_BIN's checkout.
+  KDEBUG_EXPECTED_SHA256
+                   Required SHA-256 verified against the selected kdebug ELF.
 
 All Verdi, NPI, GUI, compiler, timeout, and stress variables supported by
 scripts/test_vm_verdi_gui.sh are inherited. Run directories are preserved.
@@ -65,6 +72,29 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "${RSCHECK_COLLECTOR_BACKEND:-kdebug}" = kdebug ]; then
+  case "${KVERIF_EXPECTED_COMMIT:-}" in
+    ""|*[!0-9a-fA-F]*)
+      echo "ERROR: kdebug fresh tests require KVERIF_EXPECTED_COMMIT as a full commit SHA" >&2
+      exit 1
+      ;;
+  esac
+  [ "${#KVERIF_EXPECTED_COMMIT}" -eq 40 ] || {
+    echo "ERROR: KVERIF_EXPECTED_COMMIT must be a full 40-character commit SHA" >&2
+    exit 1
+  }
+  case "${KDEBUG_EXPECTED_SHA256:-}" in
+    ""|*[!0-9a-fA-F]*)
+      echo "ERROR: kdebug fresh tests require KDEBUG_EXPECTED_SHA256" >&2
+      exit 1
+      ;;
+  esac
+  [ "${#KDEBUG_EXPECTED_SHA256}" -eq 64 ] || {
+    echo "ERROR: KDEBUG_EXPECTED_SHA256 must be a 64-character SHA-256" >&2
+    exit 1
+  }
+fi
 
 if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
   echo "ERROR: Bash 4 or newer is required" >&2
@@ -195,6 +225,12 @@ HEAD_COMMIT="$(git rev-parse HEAD)"
   exit 1
 }
 echo "Verified commit: $HEAD_COMMIT"
+echo "Collector backend: ${RSCHECK_COLLECTOR_BACKEND:-kdebug}"
+if [ "${RSCHECK_COLLECTOR_BACKEND:-kdebug}" = kdebug ]; then
+  echo "KDEBUG_BIN=${KDEBUG_BIN:-unset}"
+  echo "KVERIF_EXPECTED_COMMIT=${KVERIF_EXPECTED_COMMIT:-unset}"
+  echo "KDEBUG_EXPECTED_SHA256=${KDEBUG_EXPECTED_SHA256:-unset}"
+fi
 
 echo "Running cloned scripts/test_vm_verdi_gui.sh"
 PROJECT_ROOT="$REPO_ROOT" \

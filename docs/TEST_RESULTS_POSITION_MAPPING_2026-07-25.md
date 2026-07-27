@@ -1,5 +1,7 @@
 # Position 映射库与 GUI 压测验证记录（2026-07-25）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.5.0`，最终被测功能提交为
 `845247089872146c0044c6cbd9553906d3126b99`。验证范围包括 Excel `position`
 简写解析、JSON/GUI/CLI 映射库、完整 RTL 路径传递、report alias 证据、配置保存冲突保护、

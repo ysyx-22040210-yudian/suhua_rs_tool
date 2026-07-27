@@ -93,6 +93,33 @@ def _collector_diagnostics(
     return "\n".join(streams)
 
 
+def _atomic_copy(source: Path, destination: Path) -> None:
+    temporary: Path | None = None
+    descriptor: int | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=str(destination.parent),
+        )
+        temporary = Path(temporary_name)
+        with source.open("rb") as input_stream, os.fdopen(descriptor, "wb") as output_stream:
+            descriptor = None
+            shutil.copyfileobj(input_stream, output_stream)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        os.replace(str(temporary), str(destination))
+        temporary = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
 def collect_inventory(
     collector: str | Path,
     specs: Iterable[SpecRow],
@@ -104,9 +131,19 @@ def collect_inventory(
     keep_inventory: str | Path | None = None,
     npi_lib_dir: str | Path | None = None,
 ) -> Inventory:
-    collector_path = Path(collector).resolve()
+    collector_value = os.fspath(collector)
+    collector_candidate = Path(collector_value).expanduser()
+    if (
+        collector_candidate.is_absolute()
+        or collector_candidate.parent != Path(".")
+        or collector_candidate.is_file()
+    ):
+        collector_path = collector_candidate.resolve()
+    else:
+        collector_command = shutil.which(collector_value)
+        collector_path = Path(collector_command or collector_value).resolve()
     if not collector_path.is_file():
-        raise InventoryError(f"NPI collector executable not found: {collector_path}")
+        raise InventoryError(f"RTL collector executable not found: {collector_path}")
     elab_db_path = Path(elab_db).expanduser().resolve()
     if not elab_db_path.exists():
         raise InventoryError(f"Verdi elaborated database not found: {elab_db_path}")
@@ -156,8 +193,10 @@ def collect_inventory(
                 ),
                 encoding="utf-8",
             )
-            command = [
-                str(collector_path),
+            collector_prefix = [str(collector_path)]
+            if collector_path.suffix.lower() == ".py":
+                collector_prefix = [sys.executable, str(collector_path)]
+            command = collector_prefix + [
                 "--positions",
                 str(positions_path),
                 "--output",
@@ -173,56 +212,65 @@ def collect_inventory(
                 "--elab-db",
                 str(elab_db_path),
             ]
+            collector_environment = _collector_environment(npi_lib_dir)
+            if timeout_seconds is not None:
+                collector_environment["RSCHECK_COLLECTOR_TIMEOUT_SECONDS"] = str(
+                    timeout_seconds
+                )
             try:
                 completed = subprocess.run(
                     command,
                     check=False,
                     capture_output=True,
                     timeout=timeout_seconds,
-                    env=_collector_environment(npi_lib_dir),
+                    env=collector_environment,
                     cwd=str(temp_dir),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise InventoryError(
-                    f"NPI collector timed out after {timeout_seconds} second(s)"
+                    f"RTL collector timed out after {timeout_seconds} second(s)"
                 ) from exc
             except OSError as exc:
-                raise InventoryError(f"failed to start NPI collector: {exc}") from exc
+                raise InventoryError(f"failed to start RTL collector: {exc}") from exc
             except UnicodeError as exc:
                 raise InventoryError(
-                    f"failed to decode NPI collector output: {exc}"
+                    f"failed to decode RTL collector output: {exc}"
                 ) from exc
             if completed.returncode != 0:
                 detail = _collector_diagnostics(completed, temp_dir)
                 raise InventoryError(
-                    f"NPI collector exited with code {completed.returncode}"
+                    f"RTL collector exited with code {completed.returncode}"
                     + (f":\n{detail}" if detail else "")
                 )
             if not output_path.is_file():
-                raise InventoryError("NPI collector succeeded but did not create its inventory")
+                raise InventoryError(
+                    "RTL collector succeeded but did not create its inventory"
+                )
             inventory = load_inventory(output_path)
             if inventory.schema_version != 3:
                 raise InventoryError(
-                    "NPI collector returned legacy inventory schema_version "
-                    f"{inventory.schema_version}; rebuild rs_npi_collector for "
+                    "RTL collector returned legacy inventory schema_version "
+                    f"{inventory.schema_version}; use a schema v3 collector for "
                     "recursive CRG tracing"
                 )
             if inventory.notices:
                 detail = _collector_diagnostics(completed, temp_dir)
                 if detail:
                     print(
-                        "NPI collector partial-load diagnostics:\n" + detail,
+                        "RTL collector partial-load diagnostics:\n" + detail,
                         file=sys.stderr,
                     )
             if keep_inventory is not None:
                 destination = Path(keep_inventory).resolve()
                 try:
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(output_path, destination)
+                    _atomic_copy(output_path, destination)
                 except OSError as exc:
                     raise InventoryError(
-                        f"cannot keep NPI inventory at {destination}: {exc}"
+                        f"cannot keep RTL inventory at {destination}: {exc}"
                     ) from exc
             return inventory
     except OSError as exc:
-        raise InventoryError(f"cannot create or write temporary NPI files: {exc}") from exc
+        raise InventoryError(
+            f"cannot create or write temporary collector files: {exc}"
+        ) from exc

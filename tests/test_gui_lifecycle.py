@@ -59,6 +59,18 @@ class _FakeVar:
 
 
 class GuiLifecycleTests(unittest.TestCase):
+    def test_new_session_defaults_to_kdebug_collector_adapter(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app.project_root = Path(__file__).resolve().parents[1]
+        with patch("rscheck.gui.tk.StringVar", _FakeVar), patch(
+            "rscheck.gui.tk.BooleanVar", _FakeVar
+        ):
+            app._create_variables()
+
+        expected = app.project_root / "scripts" / "rs_kdebug_collector.py"
+        self.assertEqual(Path(app.collector_var.get()), expected)
+        self.assertTrue(expected.is_file())
+
     def _make_hardlink(self, source: Path, link: Path) -> None:
         try:
             os.link(source, link)

@@ -1,5 +1,7 @@
 # 任意 Excel 表头与列号映射 GUI/NPI 验证记录（2026-07-25）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.7.0`，被测功能提交为
 `25e941d15a08a9f20d5feb9dafc5dce90fb5c3a6`。本轮验证确认：
 

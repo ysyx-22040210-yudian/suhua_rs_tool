@@ -1,5 +1,7 @@
 # RTL RS_CRG_EN 匹配与 VM GUI 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.8.1`，完整被测功能提交为
 `a9a26869b99d69d3826ffb0071e967cfedbf5c92`。该提交先推送到 GitHub，再由 VM
 fresh-checkout 驱动重新 clone 并核对 40 位 SHA；没有复用 Windows 开发目录中的 Python

@@ -1,5 +1,7 @@
 # RS_CFG_EN don't-care 与 VM GUI 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.9.1`，被测功能与门禁提交为
 `37ccef3bbd15a1191e85664a00e165a296699d12`。核心判定首先在提交
 `396b3ee17162d00228e5027984ddaa0dbc62eb92` 中实现，随后在被测提交中加入可复现的

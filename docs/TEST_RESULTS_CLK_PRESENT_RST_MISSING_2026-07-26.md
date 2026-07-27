@@ -1,5 +1,7 @@
 # clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.9.0`，被测功能提交为
 `b3d701c2b95a4941fae398b4c2490c7f630127c3`。该提交先推送到 GitHub，随后由 VM
 fresh-checkout 驱动直接重新 clone、核对 40 位 SHA，并在 detached HEAD 上执行默认规模的

@@ -1,5 +1,7 @@
 # 有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.11.0`，最终 VM 签核固定到已推送 GitHub 的完整提交
 `b84be55638fd0af9fc9c3874bbc35786fd497a61`。该提交包含有界递归 CRG 来源追踪、inventory v3、report v4、GUI 深度配置、专项 smoke、当前 v3 压测 fixture，以及按完整实例 hierarchy 隔离 trace cache 和补齐 partial KDB 端口集合的修复与回归。
 
@@ -32,7 +34,7 @@ DISPLAY=:0（由实际桌面进程解析，不依赖 GNOME 或 gnome-session-bin
 正式运行前先用下列可直接复制的命令核对 GitHub `main`：
 
 ```bash
-ssh root@192.168.31.116 timeout 30 git -c http.version=HTTP/1.1 ls-remote https://github.com/ysyx-22040210-yudian/suhua_rs_tool.git refs/heads/main
+ssh root@<VM_HOST> timeout 30 git -c http.version=HTTP/1.1 ls-remote https://github.com/ysyx-22040210-yudian/suhua_rs_tool.git refs/heads/main
 ```
 
 核对结果为：
@@ -44,7 +46,7 @@ b84be55638fd0af9fc9c3874bbc35786fd497a61	refs/heads/main
 最终成功签核运行使用的原始命令为：
 
 ```bash
-ssh root@192.168.31.116 "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 bash /root/rscheck_bootstrap.2IAa7Gmi/repo/scripts/test_vm_fresh_checkout.sh --commit b84be55638fd0af9fc9c3874bbc35786fd497a61"
+ssh root@<VM_HOST> "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 bash /root/rscheck_bootstrap.2IAa7Gmi/repo/scripts/test_vm_fresh_checkout.sh --commit b84be55638fd0af9fc9c3874bbc35786fd497a61"
 ```
 
 `GIT_CONFIG_COUNT/KEY_0/VALUE_0` 只对这次远端进程及其 fresh clone 子进程临时强制 Git HTTP/1.1，没有修改 VM 或仓库的持久 Git 配置。clone 第 1 次成功，随后 detached HEAD 被严格核对为目标 40 位 SHA。

@@ -1,5 +1,7 @@
 # 完整 RS_inst 本地例化名与 GUI 压测验证记录（2026-07-25）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.6.0`，被测功能提交为
 `e4fd87a532d90cad59d13522f7e1366038bf653f`。本轮验证的核心变化是：Excel
 `RS_inst` 仍为非空必填项，但既可填写组前缀，也可直接填写完整的 NPI 本地例化名；实例名减去

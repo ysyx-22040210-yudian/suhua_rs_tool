@@ -4,9 +4,11 @@ import json
 import os
 import select
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from dataclasses import dataclass, field
@@ -114,6 +116,44 @@ def find_project_root() -> Path:
     return Path.cwd().resolve()
 
 
+def default_collector_path(project_root: str | Path | None = None) -> str:
+    root = Path(project_root) if project_root is not None else find_project_root()
+    source_adapter = root / "scripts" / "rs_kdebug_collector.py"
+    if source_adapter.is_file():
+        return str(source_adapter.resolve())
+
+    script_directories: list[str | Path | None] = []
+    try:
+        script_directories.append(sysconfig.get_path("scripts"))
+        for scheme in sysconfig.get_scheme_names():
+            if scheme.endswith("_user"):
+                script_directories.append(
+                    sysconfig.get_paths(scheme=scheme).get("scripts")
+                )
+    except (KeyError, OSError, TypeError, ValueError):
+        pass
+    script_directories.append(Path(sys.executable).resolve().parent)
+
+    seen_directories: set[str] = set()
+    for directory in script_directories:
+        if not directory:
+            continue
+        scripts_dir = Path(directory).expanduser().resolve()
+        identity = os.path.normcase(str(scripts_dir))
+        if identity in seen_directories:
+            continue
+        seen_directories.add(identity)
+        for name in ("rs-kdebug-collector", "rs-kdebug-collector.exe"):
+            candidate = scripts_dir / name
+            if candidate.is_file():
+                return str(candidate)
+
+    installed = shutil.which("rs-kdebug-collector")
+    if installed:
+        return str(Path(installed).resolve())
+    return "rs-kdebug-collector"
+
+
 def default_columns() -> dict[str, str]:
     return {name: str(index) for index, name in enumerate(FIELD_NAMES, start=1)}
 
@@ -156,7 +196,7 @@ def _validate_output_paths(
     if request.source_mode == INVENTORY_SOURCE:
         protected["inventory input"] = request.inventory_path
     elif request.source_mode == LIVE_SOURCE:
-        protected["NPI collector"] = request.collector_path
+        protected["RTL collector"] = request.collector_path
     protected_identities = {
         _path_identity(path): label for label, path in protected.items() if str(path).strip()
     }
@@ -172,7 +212,10 @@ def _validate_output_paths(
         )
     if request.source_mode == LIVE_SOURCE and request.npi_lib_dir.strip():
         protected_directories.append(
-            ("the NPI library directory", resolve_user_path(request.npi_lib_dir))
+            (
+                "the optional collector library directory",
+                resolve_user_path(request.npi_lib_dir),
+            )
         )
     for protected_label, protected_directory in protected_directories:
         for label, path in outputs.items():
@@ -287,13 +330,13 @@ def build_check_command(
         command.extend(["--crg-trace-max-depth", crg_trace_max_depth])
 
     if request.source_mode == LIVE_SOURCE:
-        collector = _required(request.collector_path, "NPI collector path")
+        collector = _required(request.collector_path, "RTL/kdebug collector path")
         elab_db = _required(request.elab_db_path, "Verdi elaborated KDB path")
         if Path(elab_db.rstrip("/\\")).name == "work.lib++":
             raise GuiInputError("work.lib++ is not an elaborated KDB")
         command.extend(["--collector", collector, "--elab-db", elab_db])
         npi_timeout = _positive_integer(
-            request.npi_timeout, "NPI timeout", optional=True
+            request.npi_timeout, "collector timeout", optional=True
         )
         if npi_timeout:
             command.extend(["--npi-timeout", npi_timeout])

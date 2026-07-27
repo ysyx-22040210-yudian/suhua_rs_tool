@@ -25,6 +25,7 @@ from rscheck.gui_backend import (
     ProcessController,
     build_check_command,
     build_validate_command,
+    default_collector_path,
     default_columns,
     load_report,
     load_validation_rows,
@@ -37,6 +38,53 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GuiBackendTests(unittest.TestCase):
+    def test_default_collector_uses_installed_entrypoint_without_source_script(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            installed = root / "bin" / "rs-kdebug-collector"
+            with patch("rscheck.gui_backend.shutil.which", return_value=str(installed)):
+                self.assertEqual(default_collector_path(root), str(installed.resolve()))
+
+    def test_default_collector_uses_sysconfig_user_scripts_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            user_scripts = root / "user scripts"
+            user_scripts.mkdir()
+            installed = user_scripts / "rs-kdebug-collector"
+            installed.write_text("", encoding="utf-8")
+            with patch(
+                "rscheck.gui_backend.shutil.which", return_value=None
+            ), patch(
+                "rscheck.gui_backend.sysconfig.get_path",
+                return_value=str(root / "missing scripts"),
+            ), patch(
+                "rscheck.gui_backend.sysconfig.get_scheme_names",
+                return_value=("posix_prefix", "posix_user"),
+            ), patch(
+                "rscheck.gui_backend.sysconfig.get_paths",
+                return_value={"scripts": str(user_scripts)},
+            ):
+                self.assertEqual(default_collector_path(root), str(installed.resolve()))
+
+    def test_current_python_collector_wins_over_stale_path_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            current_scripts = root / "current python scripts"
+            current_scripts.mkdir()
+            current = current_scripts / "rs-kdebug-collector"
+            current.write_text("", encoding="utf-8")
+            stale = root / "stale bin" / "rs-kdebug-collector"
+            with patch(
+                "rscheck.gui_backend.shutil.which", return_value=str(stale)
+            ), patch(
+                "rscheck.gui_backend.sysconfig.get_path",
+                return_value=str(current_scripts),
+            ), patch(
+                "rscheck.gui_backend.sysconfig.get_scheme_names",
+                return_value=(),
+            ):
+                self.assertEqual(default_collector_path(root), str(current.resolve()))
+
     def _request(self, **overrides: object) -> GuiRunRequest:
         request = GuiRunRequest(
             excel_path=str(ROOT / "tests" / "fixtures" / "specs.csv"),
@@ -267,7 +315,9 @@ class GuiBackendTests(unittest.TestCase):
                     )
                 )
 
-            with self.assertRaisesRegex(GuiInputError, "inside the NPI library"):
+            with self.assertRaisesRegex(
+                GuiInputError, "inside the optional collector library"
+            ):
                 build_check_command(
                     replace(
                         request,

@@ -1,5 +1,7 @@
 # RS_CFG_EN=NA 逐行跳过与 VM GUI 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.9.2`。`NA` 功能、测试、Excel 模板、GUI 压测入口和十日志门禁在提交
 `ddf2ade03f8530d8166e92434023afa0c05454cc` 引入；运行时版本号和包元数据一致性测试在提交
 `7570ed09879abc85c7b5e40de57fde735898e47f` 完成。两个提交均已推送至 GitHub `main`，最终 VM 签核固定到后一个完整 SHA。

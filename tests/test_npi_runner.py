@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -11,12 +12,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rscheck.model import InventoryError, ModuleRule, RtlConfig, SpecRow
-from rscheck.npi_runner import _collector_environment, collect_inventory
+from rscheck.npi_runner import _atomic_copy, _collector_environment, collect_inventory
 
 
 class NpiCollectorContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
+
+    def test_kept_inventory_copy_is_atomic_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source.json"
+            destination = root / "kept.json"
+            source.write_text("new inventory\n", encoding="utf-8")
+            destination.write_text("old inventory\n", encoding="utf-8")
+
+            with patch("rscheck.npi_runner.os.replace", side_effect=OSError("blocked")):
+                with self.assertRaisesRegex(OSError, "blocked"):
+                    _atomic_copy(source, destination)
+
+            self.assertEqual(destination.read_text("utf-8"), "old inventory\n")
+            self.assertEqual(list(root.glob(".kept.json.*.tmp")), [])
 
     def test_collector_has_bounded_module_hop_clock_tracing(self) -> None:
         source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
@@ -307,6 +323,44 @@ class NpiRunnerTests(unittest.TestCase):
             self.assertNotIn("--", command)
             self.assertFalse(inventory.positions["top.u"].found)
 
+    def test_python_collector_uses_the_current_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector.py"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "kdb.elab++"
+            elab_db.mkdir()
+
+            def completed(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 3,
+                            "positions": {
+                                "top.u": {"found": False, "instances": []}
+                            },
+                            "warnings": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with patch(
+                "rscheck.npi_runner.subprocess.run", side_effect=completed
+            ) as run:
+                collect_inventory(
+                    collector,
+                    [self._spec()],
+                    RtlConfig(),
+                    elab_db=elab_db,
+                )
+
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], [sys.executable, str(collector.resolve())])
+            self.assertEqual(command[2], "--positions")
+
     def test_trace_rules_use_module_specific_clock_port_and_depth(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
@@ -322,6 +376,9 @@ class NpiRunnerTests(unittest.TestCase):
                 observed["depth"] = command[
                     command.index("--trace-max-depth") + 1
                 ]
+                observed["timeout_env"] = kwargs["env"].get(
+                    "RSCHECK_COLLECTOR_TIMEOUT_SECONDS"
+                )
                 output = Path(command[command.index("--output") + 1])
                 output.write_text(
                     json.dumps(
@@ -350,9 +407,17 @@ class NpiRunnerTests(unittest.TestCase):
                     RtlConfig(crg_trace_max_depth=31),
                     {"rs_pipe": rule},
                     elab_db=elab_db,
+                    timeout_seconds=37,
                 )
 
-            self.assertEqual(observed, {"rules": "rs_pipe\tpipe_clock\n", "depth": "31"})
+            self.assertEqual(
+                observed,
+                {
+                    "rules": "rs_pipe\tpipe_clock\n",
+                    "depth": "31",
+                    "timeout_env": "37",
+                },
+            )
 
     def test_live_collector_legacy_inventory_schema_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -563,7 +628,9 @@ class NpiRunnerTests(unittest.TestCase):
                 "rscheck.npi_runner.tempfile.TemporaryDirectory",
                 side_effect=OSError("temporary storage unavailable"),
             ):
-                with self.assertRaisesRegex(InventoryError, "temporary NPI files"):
+                with self.assertRaisesRegex(
+                    InventoryError, "temporary collector files"
+                ):
                     collect_inventory(
                         collector,
                         [self._spec()],
@@ -583,7 +650,9 @@ class NpiRunnerTests(unittest.TestCase):
                 "rscheck.npi_runner.Path.write_text",
                 side_effect=OSError("temporary storage is full"),
             ), patch("rscheck.npi_runner.subprocess.run") as run:
-                with self.assertRaisesRegex(InventoryError, "temporary NPI files"):
+                with self.assertRaisesRegex(
+                    InventoryError, "temporary collector files"
+                ):
                     collect_inventory(
                         collector,
                         [self._spec()],

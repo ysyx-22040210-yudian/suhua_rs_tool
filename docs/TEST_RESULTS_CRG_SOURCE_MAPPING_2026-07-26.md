@@ -1,5 +1,7 @@
 # CRG_source 映射库与 VM GUI 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.10.0`，最终 VM 签核固定到 GitHub 提交
 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`。该提交同时包含 CRG Source 映射功能、测试、文档和
 CentOS/Python 3.8 下避免 Tk 工作线程 fork 死锁的 GUI 后台进程启动修复。

@@ -76,13 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser(
         "check",
         parents=[_common_parser()],
-        help="run checks with an existing inventory or the NPI collector",
+        help="run checks with an existing inventory or an RTL collector",
     )
     source = check.add_mutually_exclusive_group(required=True)
     source.add_argument(
-        "--inventory", help="existing schema_version=2 or 3 NPI inventory JSON"
+        "--inventory", help="existing schema_version=2 or 3 RTL inventory JSON"
     )
-    source.add_argument("--collector", help="NPI collector executable")
+    source.add_argument(
+        "--collector",
+        help="RTL inventory collector executable, including the kdebug adapter",
+    )
     check.add_argument(
         "--elab-db",
         help="existing Verdi elaborated database directory (required with --collector)",
@@ -91,17 +94,18 @@ def _build_parser() -> argparse.ArgumentParser:
     check.add_argument("--csv-report", help="write an Excel-friendly UTF-8 CSV report")
     check.add_argument(
         "--keep-inventory",
-        help="copy live NPI inventory to this path (only with --collector)",
+        help="copy the live RTL inventory to this path (only with --collector)",
     )
     check.add_argument(
         "--npi-timeout",
         type=int,
-        help="live NPI collection timeout in seconds",
+        help="live collector timeout in seconds",
     )
     check.add_argument(
         "--npi-lib-dir",
         help=(
-            "directory containing libNPI.so; defaults to "
+            "optional runtime directory containing libNPI.so for compatible collectors; "
+            "defaults to "
             "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
         ),
     )

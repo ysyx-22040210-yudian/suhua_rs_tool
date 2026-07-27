@@ -1,5 +1,7 @@
 # GUI 完整配置导入导出与 VM 压测验证记录（2026-07-26）
 
+> 复现边界：本文保留所列提交中的历史测试命令。复跑时必须 checkout 该提交并使用其中的旧 fresh driver；当前默认 kdebug 的 driver 需要额外固定 kverif commit 和 ELF SHA-256。
+
 本记录对应 `rtl-rs-check 0.8.0`，完整被测提交为
 `d416493648aaffd446ca46bad2f994e5a131d06d`。该提交已经推送到 GitHub，并由 VM
 fresh-checkout 驱动重新 clone 后验证，没有复用开发目录中的 Python 文件、collector 或 KDB。
