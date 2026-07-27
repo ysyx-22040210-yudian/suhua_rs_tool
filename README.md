@@ -19,6 +19,7 @@
 - [详细使用文档](docs/USAGE.md)
 - [kdebug RTL inventory 后端、双仓库构建与压测](docs/KDEBUG_BACKEND.md)
 - [完整测试指南](docs/TESTING.md)
+- [kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md)
 - [有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md)
 - [clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md)
 - [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)
@@ -415,7 +416,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前有界递归 CRG 追踪版本已在下列环境签核：
+当前 kdebug elaborated KDB 后端已在下列环境签核：
 
 ```text
 CentOS 7.9
@@ -424,6 +425,8 @@ GCC/G++ 11.2.1
 Verdi/NPI O-2018.09-SP2
 NPI_PLATFORM=LINUX64
 ```
+
+[kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md) 固定 `suhua_rs_tool` 提交 `dac071109808ea361c17bed68606a9c17e1d3553`、`kverif` 提交 `2b43b799c8f7f8586a9e6c2128335e74d971e633` 和 kdebug ELF SHA-256 `28c5068662f82201b91f988ca57461da278ea1e06ee92a22955625b06d95da25`；真实 clean/partial KDB、frontend cancellation、20 轮 KDB 重载、mapped Verdi/Tk、各专项 20 轮、100 轮稳定性和 10,000 行负载均通过。
 
 [有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，是旧 C++ NPI collector 的历史 baseline，不含 kdebug backend，不能替代本分支签核。该记录的 CentOS/Python 3.8 测试、partial/clean KDB、mapped Verdi/Tk、depth 3/2、100 轮稳定性和 10,000 行负载仍用于 A/B 对照。
 
