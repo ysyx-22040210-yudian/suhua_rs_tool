@@ -731,13 +731,14 @@ if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
   KDEBUG_BUILD_DIR="$(dirname "$KDEBUG_BIN")"
   KDEBUG_ENGINE_BIN="$KDEBUG_BUILD_DIR/libexec/kdebug-engine"
   KDEBUG_ENGINE_PY="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_engine.py"
-  KDEBUG_NPI_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_npi.tcl"
-  KDEBUG_RSCHECK_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/rscheck_inventory.tcl"
+  # Private kdebug runtime resources: rscheck never executes these Tcl files directly.
+  KDEBUG_INTERNAL_NPI_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_npi.tcl"
+  KDEBUG_INTERNAL_RSCHECK_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/rscheck_inventory.tcl"
   for required_kdebug_file in \
     "$KDEBUG_ENGINE_BIN" \
     "$KDEBUG_ENGINE_PY" \
-    "$KDEBUG_NPI_TCL" \
-    "$KDEBUG_RSCHECK_TCL"; do
+    "$KDEBUG_INTERNAL_NPI_TCL" \
+    "$KDEBUG_INTERNAL_RSCHECK_TCL"; do
     [ -f "$required_kdebug_file" ] ||
       fail "kdebug build tree is incomplete: $required_kdebug_file"
   done
@@ -796,8 +797,8 @@ if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
       "$KDEBUG_BIN" \
       "$KDEBUG_ENGINE_BIN" \
       "$KDEBUG_ENGINE_PY" \
-      "$KDEBUG_NPI_TCL" \
-      "$KDEBUG_RSCHECK_TCL" \
+      "$KDEBUG_INTERNAL_NPI_TCL" \
+      "$KDEBUG_INTERNAL_RSCHECK_TCL" \
       "$PROJECT_ROOT/rscheck/kdebug_collector.py" \
       "$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
   } >"$KDEBUG_MANIFEST"

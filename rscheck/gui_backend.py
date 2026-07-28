@@ -80,6 +80,7 @@ class GuiRunRequest:
     crg_trace_max_depth: str = ""
     source_mode: str = LIVE_SOURCE
     collector_path: str = ""
+    kdebug_bin_path: str = ""
     elab_db_path: str = ""
     inventory_path: str = ""
     npi_lib_dir: str = ""
@@ -169,6 +170,52 @@ def _path_identity(value: str | Path) -> str:
     return os.path.normcase(str(resolve_user_path(value)))
 
 
+def _is_kdebug_collector(collector_path: str) -> bool:
+    name = Path(collector_path.strip()).name.casefold()
+    return name in {
+        "rs_kdebug_collector.py",
+        "rs-kdebug-collector",
+        "rs-kdebug-collector.exe",
+    }
+
+
+def build_check_environment(request: GuiRunRequest) -> dict[str, str]:
+    if request.source_mode != LIVE_SOURCE or not _is_kdebug_collector(
+        request.collector_path
+    ):
+        return {}
+
+    configured = _required(request.kdebug_bin_path, "kdebug ELF path")
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        raise GuiInputError("kdebug ELF path must be an absolute path")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise GuiInputError(f"kdebug ELF path does not exist: {candidate}") from exc
+    except OSError as exc:
+        raise GuiInputError(
+            f"kdebug ELF path is not accessible: {candidate} ({exc})"
+        ) from exc
+    if not resolved.is_file():
+        raise GuiInputError(f"kdebug ELF path is not a regular file: {resolved}")
+    if not os.access(resolved, os.X_OK):
+        raise GuiInputError(f"kdebug ELF path is not executable: {resolved}")
+    try:
+        with resolved.open("rb") as stream:
+            magic = stream.read(4)
+    except OSError as exc:
+        raise GuiInputError(
+            f"kdebug ELF path cannot be inspected: {resolved} ({exc})"
+        ) from exc
+    if magic != b"\x7fELF":
+        raise GuiInputError(
+            "kdebug ELF path must point to a compiled Linux ELF executable: "
+            f"{resolved}"
+        )
+    return {"KDEBUG_BIN": str(resolved)}
+
+
 def _validate_output_paths(
     request: GuiRunRequest,
     *,
@@ -197,6 +244,8 @@ def _validate_output_paths(
         protected["inventory input"] = request.inventory_path
     elif request.source_mode == LIVE_SOURCE:
         protected["RTL collector"] = request.collector_path
+        if _is_kdebug_collector(request.collector_path):
+            protected["kdebug ELF"] = request.kdebug_bin_path
     protected_identities = {
         _path_identity(path): label for label, path in protected.items() if str(path).strip()
     }

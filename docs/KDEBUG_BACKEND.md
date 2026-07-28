@@ -45,6 +45,11 @@ Verdi elaborated KDB directory -> inventory v3 -> rscheck checker/report
 header、NPI 动态库、`ctypes` 或 `cffi`。它们只通过 `subprocess` 向独立 kdebug
 进程发送 JSON。NPI/Verdi 相关实现和兼容性留在 kdebug engine 边界内。
 
+**rscheck 的执行边界只有 `$KDEBUG_BIN --json -`。rscheck 不执行、不 source
+`kdebug_npi.tcl` 或 `rscheck_inventory.tcl`，也不会执行 kverif 的 C++ 源文件。**
+这两个 Tcl 文件由编译后的 kdebug ELF 在启动私有 engine 后间接交给 Verdi 使用，
+属于 kdebug 构建产物，不是 rscheck collector 入口。
+
 这项隔离不等于移除 Verdi 依赖。在线检查仍然需要：
 
 - Linux 上合法安装且与 KDB 兼容的 Verdi；
@@ -145,6 +150,30 @@ rscheck 和 kdebug action 消费的是最终 elaborated KDB，不负责重新编
 下面命令不包含主机地址、密码、token 或 license 值。在一个已经能运行 Verdi 的
 Linux shell 中设置实际 `VERDI_HOME` 后执行：
 
+只需构建 kdebug 时，推荐直接使用本仓库脚本。它固定 kverif 仓库、分支和提交，完成
+clone、编译、kverif `test-fast`、ELF/NPI 动态依赖检查、运行包展开复检，并生成包含
+`kdebug + libexec + LICENSE + BUILD_INFO + SHA256SUMS` 的运行包：
+
+```bash
+set -euo pipefail
+cd /absolute/path/to/suhua_rs_tool
+OUTPUT_BASE="$HOME/rscheck-kdebug-builds" \
+bash scripts/build_kdebug_from_kverif.sh
+```
+
+已有真实 elaborated KDB 时，建议在构建阶段直接验证打包后的 ELF、私有 engine 和
+Verdi KDB 链路：
+
+```bash
+OUTPUT_BASE="$HOME/rscheck-kdebug-builds" \
+bash scripts/build_kdebug_from_kverif.sh \
+  --smoke-elab-db /absolute/path/to/kdb.elab++ \
+  --smoke-position top.u_tile
+```
+
+脚本输出中的 `RUNTIME_KDEBUG_BIN` 才是目标设备应设置的 `KDEBUG_BIN`。运行包不能只留下
+ELF，必须整体携带相邻 `libexec`。下面是需要同时准备两个源码 checkout 时的手工流程：
+
 ```bash
 set -euo pipefail
 
@@ -169,8 +198,13 @@ export RSCHECK_ROOT="$WORK_ROOT/suhua_rs_tool"
 export PYTHON="$(command -v "$PYTHON_BIN")"
 export PATH="$VERDI_HOME/bin:$KVERIF_HOME/tools:$PATH"
 
+(cd "$KVERIF_HOME" && \
+  git checkout --detach 2b43b799c8f7f8586a9e6c2128335e74d971e633 && \
+  test "$(git rev-parse HEAD)" = 2b43b799c8f7f8586a9e6c2128335e74d971e633)
+
 make -C "$KVERIF_HOME/kdebug" clean
 make -C "$KVERIF_HOME/kdebug" -j2 all
+PYTHON="$PYTHON_BIN" make -C "$KVERIF_HOME/kdebug" test-fast
 
 export KDEBUG_BIN="$KVERIF_HOME/kdebug/kdebug"
 test -x "$KDEBUG_BIN"
@@ -187,17 +221,15 @@ test -x "$RSCHECK_ROOT/scripts/rs_kdebug_collector.py"
 
 `KDEBUG_BIN` 必须是绝对路径，并指向 `make -C kdebug all` 构建出的 Linux ELF
 `$KVERIF_HOME/kdebug/kdebug`。不能填写 `.c/.cc/.cpp/.cxx` 原始 C++ 文件，也不接受
-shell/Python 包装脚本。adapter 在加载 KDB 前检查常规文件、执行权限和 ELF 文件头，
+shell/Python/Tcl 包装脚本；也不能填写 `tools/kdebug`。adapter 不再从 PATH 猜测
+kdebug，必须显式设置 `KDEBUG_BIN`，并在加载 KDB 前检查常规文件、执行权限和 ELF 文件头，
 失败时返回 `error[KDEBUG_EXEC]`。`tools/kdebug` 可用于人工调用，但 rscheck 与 VM
 压测统一使用 ELF 路径，并依靠相邻目录定位配套 engine。不要只复制一个 kdebug
 文件到其他目录；必须保留同一构建树的 `kdebug/libexec`。
 
-需要固定 SHA 时，在 build 前增加：
-
-```bash
-(cd "$KVERIF_HOME" && git checkout --detach <KVERIF_SHA>)
-(cd "$RSCHECK_ROOT" && git checkout --detach <RSCHECK_SHA>)
-```
+`kdebug_npi.tcl` 是编译后 kdebug 的私有运行时资源，不是 rscheck 入口。若要求整个
+kdebug 运行时彻底不包含 Tcl，重新编译现有工程并不能做到，必须重写 kverif 的 Verdi
+访问后端；若直接改成 C++ NPI，则会违背本分支隔离直接 NPI 函数调用的目标。
 
 ## 6. 生成示例 elaborated KDB
 
@@ -287,22 +319,23 @@ adapter 再从环境变量 `KDEBUG_BIN` 定位 kdebug ELF。kdebug 后端通常�
 
 源码 checkout 中 GUI 新会话默认把 Collector 填为
 `scripts/rs_kdebug_collector.py`；pip/wheel 安装会解析同环境的
-`rs-kdebug-collector` console entry point。启动 GUI 前必须在同一个 shell 中导出
-`KDEBUG_BIN`：
+`rs-kdebug-collector` console entry point。可以直接在 GUI 的 `kdebug ELF` 行浏览选择
+编译后的绝对路径；也可以在启动前导出 `KDEBUG_BIN`，让新会话自动带入：
 
 ```bash
 set -euo pipefail
-: "${KDEBUG_BIN:?KDEBUG_BIN is required}"
 cd "$RSCHECK_ROOT"
 
-export KDEBUG_BIN
+# 可选：export KDEBUG_BIN=/absolute/path/to/kdebug-runtime/kdebug
 bash scripts/launch_rscheck_gui.sh --probe-only
 bash scripts/launch_rscheck_gui.sh
 ```
 
-在“检查配置”页选择 `$ELAB_DB`，保持默认 `RTL / kdebug Collector`，运行 RTL
-检查。`运行库目录（可选）` 对 kdebug 后端通常留空。GUI 只需要有效 X11/Xwayland
-DISPLAY 和 Tkinter，不要求 GNOME 或 `gnome-session-binary`。
+在“检查配置”页保持默认 `RTL Collector Adapter`，分别选择编译后的 `kdebug ELF` 和
+`$ELAB_DB`，再运行 RTL 检查。GUI 会校验 ELF 的绝对路径、执行权限和文件头，并只通过
+子进程环境变量 `KDEBUG_BIN` 传给 adapter；不会把 ELF 误当作 collector，也不会把设备
+路径写入配置导出。`运行库目录（可选）` 对 kdebug 后端通常留空。GUI 只需要有效
+X11/Xwayland DISPLAY 和 Tkinter，不要求 GNOME 或 `gnome-session-binary`。
 
 ## 9. 完整 VM/GUI 压测
 
@@ -423,5 +456,6 @@ NPI”的新架构目标。它只用于比较历史证据、定位版本差异�
 - `warning[NPI_LOAD_PARTIAL]`：按第 10 节继续检查所有硬证据，不要只删除日志。
 - `work.lib++ is ... not an elaborated KDB`：改传同一编译流程生成的 `*.elab++`
   目录。
-- GUI 能启动但在线检查找不到 kdebug：`KDEBUG_BIN` 必须在启动 GUI 的同一个 shell
-  中导出；配置导入/导出不会保存设备相关可执行路径和环境变量。
+- GUI 能启动但在线检查找不到 kdebug：在 `kdebug ELF` 行选择运行包内的绝对 ELF 路径，
+  或在启动 GUI 的同一个 shell 中导出 `KDEBUG_BIN`；配置导入/导出不会保存设备相关
+  可执行路径和环境变量。

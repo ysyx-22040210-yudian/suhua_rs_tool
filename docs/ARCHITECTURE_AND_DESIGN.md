@@ -12,13 +12,11 @@ kdebug/Verdi 采集链路、检查算法、图形界面、错误模型、进程�
 
 | 项目 | 版本 |
 | --- | --- |
-| `suhua_rs_tool` 功能签核提交 | `dac071109808ea361c17bed68606a9c17e1d3553` |
+| 工具实现分支 | `codex/kdebug-npi-backend`，以本文所在提交为准 |
 | `kverif` 功能签核提交 | `2b43b799c8f7f8586a9e6c2128335e74d971e633` |
 | RTL 清单 | 结构版本 v3 |
 | JSON 报告 | 结构版本 v4 |
 | Python 运行环境 | 3.8 或更高版本 |
-
-当前仓库后续提交只增加文档，不改变上述已签核业务行为。
 
 ## 2. 背景与目标
 
@@ -124,8 +122,8 @@ Excel 中，RTL 真实结构则存在于 Verdi 展开后的 KDB。人工检查�
 | `rscheck/gui.py` | Tkinter 页面、配置草稿、导入导出、执行和证据展示 |
 | `kdebug` C++ 前端 | 操作注册、公共请求封装/资源和基础必填项校验、引擎转发 |
 | `kdebug_engine.py` | 临时文件协议、Verdi 启动、部分加载判定和响应封装 |
-| `kdebug_npi.tcl` | Verdi 内 Tcl 操作分发和统一响应 |
-| `rscheck_inventory.tcl` | NPI 层次、端口、参数和时钟追踪采集 |
+| `kdebug_npi.tcl`（kdebug 私有运行时） | Verdi 内 Tcl 操作分发和统一响应；不是 rscheck 执行入口 |
+| `rscheck_inventory.tcl`（kdebug 私有运行时） | NPI 层次、端口、参数和时钟追踪采集；不是 rscheck 执行入口 |
 
 旧 `npi/rs_npi_collector.cpp` 只作为 A/B 对照基线保留，不是当前默认在线后端。
 
@@ -146,7 +144,9 @@ Excel 中，RTL 真实结构则存在于 Verdi 展开后的 KDB。人工检查�
 | `module_rules` | 模块的门控、拍数参数和形式端口规则 |
 
 图形界面完整导入/导出使用 `load_complete_config`，要求六个根全部存在，并覆盖三类规则库；
-导出内容不保存 `KDEBUG_BIN`、许可证信息或设备路径。普通 `load_config` 为旧配置保留兼容：
+在线页面把 collector adapter 与编译后的 `kdebug ELF` 分成两个输入框；新会话可从启动
+环境的 `KDEBUG_BIN` 带入 ELF 路径。该路径只属于本次运行，因此导出内容不保存
+`KDEBUG_BIN`、许可证信息或设备路径。普通 `load_config` 为旧配置保留兼容：
 `columns` 仍必须完整，其他缺省区段按默认值或空库补齐，规范化保存后会写出全部六个根。
 
 配置在内存中完成归一化校验后，写入同目录临时文件并用 `os.replace` 替换。图形界面保存单个
@@ -181,8 +181,7 @@ Excel 简写 --精确查表--> 完整 RTL 层次路径
 未命中       ---------> 按用户已经填写完整路径处理
 ```
 
-不做模糊匹配、前缀匹配或简写递归展开。`SpecRow` 同时保存简写和解析后的完整值，
-用于图形界面、JSON 和 CSV 展示。
+不做模糊、前缀或递归匹配；`SpecRow` 保留简写和完整值供 GUI、JSON、CSV 展示。
 
 ## 8. 核心数据模型
 
@@ -243,7 +242,8 @@ Excel 简写 --精确查表--> 完整 RTL 层次路径
 ### 10.3 Python 引擎到 Verdi
 
 Python 引擎在独立临时目录中创建 UTF-8 请求、层次位置、追踪规则和响应文件，
-通过受控环境变量把路径交给 Tcl，然后执行：
+通过受控环境变量把路径交给 Tcl。以下命令是编译后的 kdebug ELF 启动私有 engine 后
+在其内部执行的命令，不是 rscheck 的调用入口：
 
 ```bash
 verdi -batch -nologo -play <kdebug_npi.tcl> -elab <KDB>
@@ -252,6 +252,8 @@ verdi -batch -nologo -play <kdebug_npi.tcl> -elab <KDB>
 Tcl 分发器加载 `rscheck_inventory.tcl`，在 Verdi 进程内部调用 NPI。Tcl 生成内嵌的
 RTL 清单 v3；Python 引擎再执行顶层可查询门禁、部分加载判断和响应封装。适配器最后用
 主工具自己的 RTL 清单加载器再验证一次，采用临时文件和 `os.replace` 原子写出。
+rscheck 直接执行的唯一 kverif 命令始终是 `$KDEBUG_BIN --json -`；它不执行 Tcl 或
+C++ 源文件。
 
 ### 10.4 正常调用时序
 
@@ -382,6 +384,8 @@ RTL 清单 v3；Python 引擎再执行顶层可查询门禁、部分加载判断
 ### 14.1 状态管理
 
 - 图形界面为三类规则库维护内存草稿、加载基线和未保存修改状态。
+- 在线 kdebug 模式分别选择 collector adapter、编译后的 ELF 和 elaborated KDB。ELF 必须
+  是绝对、可执行的常规文件且具有 Linux ELF 文件头，不能误填到 collector 字段。
 - 配置路径改变后必须显式加载，避免使用旧内容写入新文件。
 - 完整导入先解析并验证候选配置，确认丢弃未保存草稿后再整体替换。
 - 导出前重新验证完整快照，并拒绝覆盖当前配置或输入/输出路径别名。
@@ -393,6 +397,8 @@ RTL 清单 v3；Python 引擎再执行顶层可查询门禁、部分加载判断
 图形界面不在 Tk 主线程运行检查。`gui_backend` 构造与命令行相同的命令，由
 `ProcessController` 启动独立进程组并并发读取标准输出和标准错误。图形界面线程只接收
 `WorkerOutcome`，更新日志、摘要、逐行检查项和证据视图。
+经过验证的 ELF 路径只以子进程环境变量 `KDEBUG_BIN` 传给 adapter，不进入命令参数，
+也不修改 GUI 进程的全局环境。
 
 Linux 图形界面探测可使用当前命令行会话的 X11，也可从桌面/Xwayland/VNC/XRDP 进程
 发现显示会话，不依赖 GNOME 或固定用户名。Windows/macOS 支持 `validate` 和离线检查；
@@ -479,8 +485,10 @@ Windows 图形界面使用 `taskkill /T /F` 清理子树；POSIX 使用稳定 PG
 
 当前有效签核结果：
 
-- 主工具本机：321 项测试通过，50 项因平台条件跳过；Python 二进制包/源码包和隔离用户
-  安装通过。
+- 主工具本机：342 项测试通过，52 项因平台或显式构建集成条件跳过；Python 二进制包/
+  源码包和隔离用户安装通过。
+- VM 主工具：335 项测试通过，默认仅跳过 1 项显式构建集成测试；单独启用该测试时
+  9/9 通过，覆盖固定 clone、build、package 和真实 KDB smoke。
 - VM kdebug：Python 35 项通过、Tcl 测试通过、182 个结构文件校验通过、175 个示例文件
   校验通过、C++ 单元测试通过、29 个运行时契约通过。
 - 真实 KDB：原始接口/适配器的正常和部分加载测试通过；两个层次位置、26 个实例，
@@ -505,7 +513,18 @@ rtl-rs-check-gui
 
 ### 20.2 kdebug 后端
 
-在对应 `kverif` 检出目录中：
+可以先由本仓库脚本下载固定 kverif 提交并编译、校验、打包：
+
+```bash
+OUTPUT_BASE="$HOME/rscheck-kdebug-builds" \
+bash scripts/build_kdebug_from_kverif.sh
+```
+
+已有真实 KDB 时可增加 `--smoke-elab-db /absolute/path/to/kdb.elab++` 和
+`--smoke-position <完整层次路径>`，让脚本直接验证打包后的 `kdebug --json -` inventory
+链路。脚本同时运行 kverif `test-fast`、展开运行包并复核内部 SHA-256 清单。
+
+或在对应 `kverif` 检出目录中手工构建：
 
 ```bash
 make -C kdebug -j2 all
@@ -516,6 +535,11 @@ export KDEBUG_BIN="$PWD/kdebug/kdebug"
 `KDEBUG_BIN` 只能指向上述构建生成的 Linux ELF 可执行文件，不能填写
 `.c/.cc/.cpp/.cxx` 原始 C++ 文件或 shell/Python 脚本。适配器在加载 KDB 前校验绝对
 路径、执行权限和 ELF 文件头，不满足时返回 `KDEBUG_EXEC`。
+
+部署时不能只复制 ELF；必须整体携带同一运行包中相邻的 `libexec/kdebug-engine` 和
+`libexec/tcl_engine`。rscheck 只启动 `$KDEBUG_BIN --json -`，Tcl 文件仅由 ELF 启动后的
+私有 engine 使用。若要求整个运行时彻底没有 Tcl，需要重写 kverif 后端，仅重新编译
+现有工程无法实现。
 
 `ldd "$KDEBUG_BIN"` 不得出现 `libNPI`、`libnpiL1` 或 `not found`。在线运行设备仍然
 必须安装合法且与 KDB 兼容的 Verdi/NPI 环境；隔离 NPI API 不等于消除 Verdi 依赖。

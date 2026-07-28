@@ -77,14 +77,16 @@ KDEBUG_BIN="$(cd "$(dirname "$KDEBUG_BIN")" && pwd -P)/$(basename "$KDEBUG_BIN")
 KDEBUG_BUILD_DIR="$(dirname "$KDEBUG_BIN")"
 KDEBUG_ENGINE="$KDEBUG_BUILD_DIR/libexec/kdebug-engine"
 KDEBUG_ENGINE_PY="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_engine.py"
-KDEBUG_NPI_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_npi.tcl"
-KDEBUG_RSCHECK_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/rscheck_inventory.tcl"
+# These are kdebug-private runtime resources used only for integrity and leak checks.
+# rscheck itself executes only KDEBUG_BIN --json - and never executes either Tcl file.
+KDEBUG_INTERNAL_NPI_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/kdebug_npi.tcl"
+KDEBUG_INTERNAL_RSCHECK_TCL="$KDEBUG_BUILD_DIR/libexec/tcl_engine/rscheck_inventory.tcl"
 COLLECTOR="$PROJECT_ROOT/scripts/rs_kdebug_collector.py"
 for path in \
   "$KDEBUG_ENGINE" \
   "$KDEBUG_ENGINE_PY" \
-  "$KDEBUG_NPI_TCL" \
-  "$KDEBUG_RSCHECK_TCL" \
+  "$KDEBUG_INTERNAL_NPI_TCL" \
+  "$KDEBUG_INTERNAL_RSCHECK_TCL" \
   "$COLLECTOR"; do
   [ -f "$path" ] || fail "required backend file not found: $path"
 done
@@ -169,7 +171,7 @@ backend_pids() {
     pid="${pid%/cmdline}"
     while IFS= read -r -d '' argument; do
       case "$argument" in
-        "$KDEBUG_BIN"|"$KDEBUG_ENGINE"|"$KDEBUG_ENGINE_PY"|"$KDEBUG_NPI_TCL")
+        "$KDEBUG_BIN"|"$KDEBUG_ENGINE"|"$KDEBUG_ENGINE_PY"|"$KDEBUG_INTERNAL_NPI_TCL")
           printf '%s\n' "$pid"
           break
           ;;
@@ -195,7 +197,7 @@ verdi_pids_for_tmpdir() {
     [ -r "$environ" ] || continue
     has_npi_tcl=0
     while IFS= read -r -d '' argument; do
-      if [ "$argument" = "$KDEBUG_NPI_TCL" ]; then
+      if [ "$argument" = "$KDEBUG_INTERNAL_NPI_TCL" ]; then
         has_npi_tcl=1
         break
       fi
@@ -464,8 +466,8 @@ PY
     "$KDEBUG_BIN" \
     "$KDEBUG_ENGINE" \
     "$KDEBUG_ENGINE_PY" \
-    "$KDEBUG_NPI_TCL" \
-    "$KDEBUG_RSCHECK_TCL" \
+    "$KDEBUG_INTERNAL_NPI_TCL" \
+    "$KDEBUG_INTERNAL_RSCHECK_TCL" \
     "$PROJECT_ROOT/rscheck/kdebug_collector.py" \
     "$COLLECTOR"
 } >"$RUN_ROOT/build_manifest.txt"

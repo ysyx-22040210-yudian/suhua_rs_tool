@@ -24,6 +24,7 @@ from rscheck.gui_backend import (
     GuiRunRequest,
     ProcessController,
     build_check_command,
+    build_check_environment,
     build_validate_command,
     default_collector_path,
     default_columns,
@@ -234,6 +235,124 @@ class GuiBackendTests(unittest.TestCase):
                         **contract_arguments,
                     )
                 )
+
+    def test_kdebug_environment_accepts_each_adapter_name_and_stays_out_of_command(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            executable = root / "kdebug"
+            executable.write_bytes(b"\x7fELF" + b"\0" * 64)
+            executable.chmod(0o755)
+
+            for adapter_name in (
+                "rs_kdebug_collector.py",
+                "rs-kdebug-collector",
+                "rs-kdebug-collector.exe",
+            ):
+                with self.subTest(adapter_name=adapter_name):
+                    request = self._request(
+                        collector_path=str(root / adapter_name),
+                        kdebug_bin_path=str(executable.resolve()),
+                    )
+                    self.assertEqual(
+                        build_check_environment(request),
+                        {"KDEBUG_BIN": str(executable.resolve())},
+                    )
+                    command = build_check_command(request)
+                    self.assertNotIn("KDEBUG_BIN", command)
+                    self.assertNotIn(str(executable.resolve()), command)
+
+    def test_kdebug_environment_rejects_missing_and_relative_paths(self) -> None:
+        adapter = str(ROOT / "scripts" / "rs_kdebug_collector.py")
+        with self.assertRaisesRegex(GuiInputError, "kdebug ELF path is required"):
+            build_check_environment(
+                self._request(collector_path=adapter, kdebug_bin_path="")
+            )
+        with self.assertRaisesRegex(GuiInputError, "absolute path"):
+            build_check_environment(
+                self._request(collector_path=adapter, kdebug_bin_path="kdebug")
+            )
+
+    def test_kdebug_environment_rejects_invalid_files(self) -> None:
+        adapter = str(ROOT / "scripts" / "rs_kdebug_collector.py")
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            missing = root / "missing-kdebug"
+            with self.assertRaisesRegex(GuiInputError, "does not exist"):
+                build_check_environment(
+                    self._request(
+                        collector_path=adapter,
+                        kdebug_bin_path=str(missing.resolve()),
+                    )
+                )
+
+            with self.assertRaisesRegex(GuiInputError, "not a regular file"):
+                build_check_environment(
+                    self._request(
+                        collector_path=adapter,
+                        kdebug_bin_path=str(root.resolve()),
+                    )
+                )
+
+            executable = root / "kdebug"
+            executable.write_bytes(b"\x7fELF" + b"\0" * 64)
+            executable.chmod(0o755)
+            with patch("rscheck.gui_backend.os.access", return_value=False), \
+                self.assertRaisesRegex(GuiInputError, "not executable"):
+                build_check_environment(
+                    self._request(
+                        collector_path=adapter,
+                        kdebug_bin_path=str(executable.resolve()),
+                    )
+                )
+
+            script = root / "kdebug-script"
+            script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            script.chmod(0o755)
+            with self.assertRaisesRegex(GuiInputError, "compiled Linux ELF"):
+                build_check_environment(
+                    self._request(
+                        collector_path=adapter,
+                        kdebug_bin_path=str(script.resolve()),
+                    )
+                )
+
+    def test_inventory_and_legacy_collectors_do_not_require_kdebug_elf(self) -> None:
+        self.assertEqual(
+            build_check_environment(
+                self._request(
+                    source_mode=INVENTORY_SOURCE,
+                    collector_path=str(ROOT / "scripts" / "rs_kdebug_collector.py"),
+                    kdebug_bin_path="",
+                )
+            ),
+            {},
+        )
+        self.assertEqual(
+            build_check_environment(
+                self._request(
+                    collector_path=str(ROOT / "npi" / "build" / "rs_npi_collector"),
+                    kdebug_bin_path="",
+                )
+            ),
+            {},
+        )
+
+    def test_report_output_cannot_overwrite_kdebug_elf(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            executable = Path(name) / "kdebug"
+            executable.write_bytes(b"\x7fELF" + b"\0" * 64)
+            executable.chmod(0o755)
+            request = self._request(
+                collector_path=str(ROOT / "scripts" / "rs_kdebug_collector.py"),
+                kdebug_bin_path=str(executable.resolve()),
+                json_report_path=str(executable.resolve()),
+                csv_report_path="",
+                keep_inventory_path="",
+            )
+            with self.assertRaisesRegex(GuiInputError, "overwrite kdebug ELF"):
+                build_check_command(request)
 
     def test_work_library_is_rejected_as_live_design(self) -> None:
         with self.assertRaisesRegex(GuiInputError, "work.lib\+\+"):

@@ -45,6 +45,7 @@ from .gui_backend import (
     ProcessController,
     ProcessResult,
     build_check_command,
+    build_check_environment,
     build_validate_command,
     default_collector_path,
     default_columns,
@@ -333,6 +334,9 @@ class RsCheckApp:
 
         self.source_mode_var = tk.StringVar(value=LIVE_SOURCE)
         self.collector_var = tk.StringVar(value=collector)
+        self.kdebug_bin_var = tk.StringVar(
+            value=os.environ.get("KDEBUG_BIN", "").strip()
+        )
         self.elab_db_var = tk.StringVar()
         self.inventory_var = tk.StringVar()
         self.npi_lib_var = tk.StringVar()
@@ -500,41 +504,48 @@ class RsCheckApp:
         self._compact_path_row(
             self.live_frame,
             0,
-            "RTL / kdebug Collector",
+            "RTL Collector Adapter",
             self.collector_var,
             lambda: self._choose_file(self.collector_var, (("可执行文件", "*"),)),
         )
         self._compact_path_row(
             self.live_frame,
             1,
+            "kdebug ELF",
+            self.kdebug_bin_var,
+            lambda: self._choose_file(self.kdebug_bin_var, (("Linux ELF", "*"),)),
+        )
+        self._compact_path_row(
+            self.live_frame,
+            2,
             "Elab KDB",
             self.elab_db_var,
             lambda: self._choose_directory(self.elab_db_var),
         )
         self._compact_path_row(
             self.live_frame,
-            2,
+            3,
             "运行库目录（可选）",
             self.npi_lib_var,
             lambda: self._choose_directory(self.npi_lib_var),
         )
         self._compact_path_row(
             self.live_frame,
-            3,
+            4,
             "保存 Inventory",
             self.keep_inventory_var,
             lambda: self._choose_save(
                 self.keep_inventory_var, ".json", (("JSON", "*.json"),)
             ),
         )
-        ttk.Label(self.live_frame, text="超时（秒）").grid(row=4, column=0, sticky="w", pady=5)
+        ttk.Label(self.live_frame, text="超时（秒）").grid(row=5, column=0, sticky="w", pady=5)
         tk.Spinbox(
             self.live_frame,
             from_=1,
             to=86400,
             textvariable=self.npi_timeout_var,
             width=10,
-        ).grid(row=4, column=1, sticky="w", padx=(8, 0), pady=5)
+        ).grid(row=5, column=1, sticky="w", padx=(8, 0), pady=5)
 
         self.inventory_frame = ttk.Frame(self.source_group)
         self.inventory_frame.columnconfigure(1, weight=1)
@@ -1879,6 +1890,7 @@ class RsCheckApp:
             crg_trace_max_depth=self.crg_trace_max_depth_var.get(),
             source_mode=self.source_mode_var.get(),
             collector_path=self.collector_var.get(),
+            kdebug_bin_path=self.kdebug_bin_var.get(),
             elab_db_path=self.elab_db_var.get(),
             inventory_path=self.inventory_var.get(),
             npi_lib_dir=self.npi_lib_var.get(),
@@ -1934,6 +1946,10 @@ class RsCheckApp:
             if action == "validate":
                 build_validate_command(request)
             else:
+                environment = build_check_environment(request)
+                if "KDEBUG_BIN" in environment:
+                    self.kdebug_bin_var.set(environment["KDEBUG_BIN"])
+                    request = self._request()
                 command = build_check_command(
                     request, internal_json_report=request.json_report_path or "report.json"
                 )
@@ -1977,7 +1993,9 @@ class RsCheckApp:
                 if action == "validate":
                     command = build_validate_command(request)
                     report_path: Path | None = None
+                    environment: Mapping[str, str] | None = None
                 else:
+                    environment = build_check_environment(request)
                     report_path = (
                         Path(request.json_report_path).expanduser()
                         if request.json_report_path.strip()
@@ -1990,7 +2008,11 @@ class RsCheckApp:
                 if self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action))
                     return
-                process = self.controller.run(command, cwd=self.project_root)
+                process = self.controller.run(
+                    command,
+                    cwd=self.project_root,
+                    environment=environment,
+                )
                 if process.cancelled or self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action, process=process))
                     return

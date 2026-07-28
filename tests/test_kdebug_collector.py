@@ -122,6 +122,15 @@ class KdebugCollectorTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "KDEBUG_EXEC")
         self.assertIn("absolute path", raised.exception.message)
 
+    def test_resolve_kdebug_requires_explicit_kdebug_bin(self) -> None:
+        with patch.dict("os.environ", {}, clear=True), self.assertRaises(
+            CollectorFailure
+        ) as raised:
+            _resolve_kdebug()
+
+        self.assertEqual(raised.exception.code, "KDEBUG_EXEC")
+        self.assertIn("KDEBUG_BIN is required", raised.exception.message)
+
     def test_success_uses_one_json_action_and_writes_v3_inventory(self) -> None:
         with tempfile.TemporaryDirectory(prefix="kdebug contract with spaces ") as name:
             root = Path(name)

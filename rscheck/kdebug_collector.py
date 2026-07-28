@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import signal
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -183,32 +182,27 @@ def _resolve_elab_db(path: str | Path) -> Path:
 
 def _resolve_kdebug() -> str:
     configured = os.environ.get("KDEBUG_BIN", "").strip()
-    source = "KDEBUG_BIN" if configured else "PATH"
-    if configured:
-        candidate = Path(configured).expanduser()
-        if not candidate.is_absolute():
-            raise CollectorFailure(
-                KDEBUG_EXEC_ERROR,
-                "KDEBUG_EXEC",
-                "KDEBUG_BIN must be an absolute path to the compiled kdebug executable",
-            )
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError as exc:
-            raise CollectorFailure(
-                KDEBUG_EXEC_ERROR,
-                "KDEBUG_EXEC",
-                f"kdebug executable not found via KDEBUG_BIN: {candidate} ({exc})",
-            ) from exc
-    else:
-        discovered = shutil.which("kdebug")
-        if discovered is None:
-            raise CollectorFailure(
-                KDEBUG_EXEC_ERROR,
-                "KDEBUG_EXEC",
-                "kdebug executable not found via PATH: kdebug",
-            )
-        resolved = Path(discovered).resolve()
+    if not configured:
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            "KDEBUG_BIN is required and must be an absolute path to the compiled kdebug ELF",
+        )
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            "KDEBUG_BIN must be an absolute path to the compiled kdebug executable",
+        )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            f"kdebug executable not found via KDEBUG_BIN: {candidate} ({exc})",
+        ) from exc
 
     if resolved.suffix.lower() in C_CPP_SOURCE_SUFFIXES:
         raise CollectorFailure(
@@ -221,7 +215,7 @@ def _resolve_kdebug() -> str:
         raise CollectorFailure(
             KDEBUG_EXEC_ERROR,
             "KDEBUG_EXEC",
-            f"kdebug path resolved via {source} is not a regular file: {resolved}",
+            f"kdebug path resolved via KDEBUG_BIN is not a regular file: {resolved}",
         )
     if not os.access(resolved, os.X_OK):
         raise CollectorFailure(

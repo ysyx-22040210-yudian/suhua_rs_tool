@@ -208,7 +208,7 @@ Excel 中的简单 `clk`/`rst` 名称相对解析后的完整 `position` 解析�
 
 ## 工具自带桌面 GUI
 
-这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；Verdi elaborated KDB 在线采集只支持 Linux。源码 checkout 中 GUI 新会话默认选择 `scripts/rs_kdebug_collector.py`；pip/wheel 安装会自动选择同环境的 `rs-kdebug-collector` console entry point。在线启动前需导出指向配套 kverif ELF 的绝对 `KDEBUG_BIN`：
+这不是 Verdi GUI。它是 `rscheck` 自带的配置、执行和报告查看界面，和 CLI 使用同一套解析、检查及报告逻辑。Windows 和 macOS 可直接启动，用于 Excel 验证和离线 inventory 检查；Verdi elaborated KDB 在线采集只支持 Linux。源码 checkout 中 GUI 新会话默认选择 `scripts/rs_kdebug_collector.py`；pip/wheel 安装会自动选择同环境的 `rs-kdebug-collector` console entry point。在线检查时在 GUI 的 `kdebug ELF` 行选择编译后的绝对路径；若启动 shell 已设置 `KDEBUG_BIN`，新会话会自动带入该值。
 
 GUI 支持完整配置 JSON 的导入和导出，便于把列映射、`rtl.crg_trace_max_depth` 及三个数据库一起迁移到其他设备。
 
@@ -234,11 +234,11 @@ bash scripts/launch_rscheck_gui.sh
 
 “配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`crg_source_mappings`、`module_rules`。导出以当前界面的 Excel 选项和九列列号、已加载配置的完整 `rtl`、三个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
 
-“导入”严格要求候选文件包含上述六个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置省略 `position_mappings` 或 `crg_source_mappings` 的情况，其中缺少 `crg_source_mappings` 时按空库处理。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库、Position 映射库和 CRG Source 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后三个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
+“导入”严格要求候选文件包含上述六个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置省略 `position_mappings` 或 `crg_source_mappings` 的情况，其中缺少 `crg_source_mappings` 时按空库处理。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库、Position 映射库和 CRG Source 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后三个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、`kdebug ELF`、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
 
 RTL 数据源可选：
 
-- **在线 RTL Collector**：默认使用 kdebug adapter，填写 Verdi elaborated KDB、可选运行库目录、超时和 inventory 保存路径；
+- **在线 RTL Collector**：默认使用 kdebug adapter，分别选择 adapter 与编译后的 `kdebug ELF`，再填写 Verdi elaborated KDB、可选运行库目录、超时和 inventory 保存路径；
 - **离线 Inventory**：选择已有 inventory JSON，用于回归和问题复现。
 
 在线 GUI 与 CLI 的输入边界完全一致：只允许 collector 加 `elabcom` 生成的 elaborated KDB；不提供 RTL、filelist、top 或任意 Verdi 参数透传入口。JSON 报告必填，CSV 可选。“验证 Excel”只验证规格；“运行 RTL 检查”执行完整检查；“取消”会终止后台 CLI 及其 collector 子进程。
@@ -280,6 +280,26 @@ inventory v3 的 `clock_trace.modules` 记录上游模块完整 instance hierarc
 
 原版 kdebug 没有 rscheck inventory action，不能直接替换 collector。生产路径需要同时使用 kverif 分支 `codex/rscheck-elab-inventory` 和本仓库分支 `codex/kdebug-npi-backend`：
 
+在 Linux 设备上可直接让本仓库下载固定 kverif 提交、编译 ELF 并生成运行包：
+
+```bash
+export OUTPUT_BASE="$HOME/rscheck-kdebug-builds"
+bash scripts/build_kdebug_from_kverif.sh
+```
+
+脚本会运行 kverif 的 `test-fast`，再展开并复检生成的运行包。已有真实 KDB 时可同时
+验证完整 inventory 链路：
+
+```bash
+bash scripts/build_kdebug_from_kverif.sh \
+  --smoke-elab-db /absolute/path/to/kdb.elab++ \
+  --smoke-position top.u_tile
+```
+
+脚本最后打印源码树中的 `KDEBUG_BIN`、可搬运运行目录、压缩包和可直接复核的 SHA-256
+清单。跨设备部署应使用脚本输出的 `RUNTIME_KDEBUG_BIN`，并整体携带它所在的运行目录。
+如果只需要在一个已经固定到上述 kverif 提交的 checkout 中手工编译，可使用：
+
 ```bash
 export KVERIF_HOME=/absolute/path/to/kverif
 export VERDI_HOME=/absolute/path/to/verdi
@@ -298,7 +318,18 @@ test -x scripts/rs_kdebug_collector.py
 adapter 会在加载 KDB 前检查绝对路径、执行权限和 ELF 文件头，不符合时直接返回
 `KDEBUG_EXEC`。
 
-Python/GUI 仍使用兼容入口 `scripts/rs_kdebug_collector.py`，不能把 kdebug ELF 直接填入 `--collector`。kdebug frontend、`kdebug/libexec/kdebug-engine` 和 `tcl_engine` 文件必须来自同一构建树。在线运行仍需要合法 Verdi、兼容 KDB 和站点批准的 license；这套架构隔离了 rscheck Python 与 NPI API，并没有移除 Verdi 依赖。
+**rscheck 唯一执行的 kverif 程序是 `$KDEBUG_BIN --json -`。它不会执行或 source
+`kdebug_npi.tcl`，更不会执行 C++ 源文件。** Python/GUI 仍使用兼容入口
+`scripts/rs_kdebug_collector.py`，不能把 kdebug ELF 直接填入 `--collector`。
+
+编译后的 kdebug 不是单文件程序：ELF 启动后会自行定位同一构建树的
+`libexec/kdebug-engine` 和私有 Python/Tcl engine。`kdebug_npi.tcl` 出现在构建目录，
+只说明它是 kdebug 内部访问 Verdi 的运行时资源，不代表 rscheck 直接调用它。删除
+`libexec` 会使 `rscheck.inventory` 失败。在线运行仍需要合法 Verdi、兼容 KDB 和站点
+批准的 license；这套架构隔离了 rscheck Python 与 NPI API，并没有移除 Verdi 依赖。
+如果要求整个 kdebug 运行时在磁盘和进程中都完全不存在 Tcl，仅重新编译现有 kverif
+不能实现，必须重写 kverif 的 Verdi 访问后端；直接改为 C++ NPI 则会重新引入直接 NPI
+函数调用。
 
 完整双仓库 clone、固定 SHA、协议、partial-load 和压力测试命令见 [kdebug 后端指南](docs/KDEBUG_BACKEND.md)。`npi/build/rs_npi_collector` 仅保留为历史 A/B baseline。
 
@@ -436,6 +467,8 @@ NPI_PLATFORM=LINUX64
 ```
 
 [kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md) 固定 `suhua_rs_tool` 提交 `dac071109808ea361c17bed68606a9c17e1d3553`、`kverif` 提交 `2b43b799c8f7f8586a9e6c2128335e74d971e633` 和 kdebug ELF SHA-256 `28c5068662f82201b91f988ca57461da278ea1e06ee92a22955625b06d95da25`；真实 clean/partial KDB、frontend cancellation、20 轮 KDB 重载、mapped Verdi/Tk、各专项 20 轮、100 轮稳定性和 10,000 行负载均通过。
+
+[kverif 下载、kdebug ELF 构建与真实 KDB 压测记录（2026-07-29）](docs/TEST_RESULTS_KDEBUG_BUILD_2026-07-29.md) 记录固定源码下载、一键构建、确定性运行包、真实 KDB smoke、20/20 重载、取消/超时清理，以及本机/VM 完整回归。该记录明确区分 rscheck 的 ELF 入口和 kdebug 私有 Tcl 运行资源。
 
 [有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，是旧 C++ NPI collector 的历史 baseline，不含 kdebug backend，不能替代本分支签核。该记录的 CentOS/Python 3.8 测试、partial/clean KDB、mapped Verdi/Tk、depth 3/2、100 轮稳定性和 10,000 行负载仍用于 A/B 对照。
 

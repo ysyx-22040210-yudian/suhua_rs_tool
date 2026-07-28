@@ -62,13 +62,15 @@ class GuiLifecycleTests(unittest.TestCase):
     def test_new_session_defaults_to_kdebug_collector_adapter(self) -> None:
         app = object.__new__(RsCheckApp)
         app.project_root = Path(__file__).resolve().parents[1]
-        with patch("rscheck.gui.tk.StringVar", _FakeVar), patch(
-            "rscheck.gui.tk.BooleanVar", _FakeVar
-        ):
+        kdebug_bin = "/opt/kverif/runtime/kdebug"
+        with patch.dict(os.environ, {"KDEBUG_BIN": kdebug_bin}), patch(
+            "rscheck.gui.tk.StringVar", _FakeVar
+        ), patch("rscheck.gui.tk.BooleanVar", _FakeVar):
             app._create_variables()
 
         expected = app.project_root / "scripts" / "rs_kdebug_collector.py"
         self.assertEqual(Path(app.collector_var.get()), expected)
+        self.assertEqual(app.kdebug_bin_var.get(), kdebug_bin)
         self.assertTrue(expected.is_file())
 
     def _make_hardlink(self, source: Path, link: Path) -> None:
@@ -214,6 +216,7 @@ class GuiLifecycleTests(unittest.TestCase):
             export_app._module_rules_dirty = True
             export_app._position_mappings_dirty = True
             export_app._crg_source_mappings_dirty = True
+            export_app.kdebug_bin_var = _FakeVar("/machine/only/kdebug")
             before_export = self._config_state(export_app)
 
             with patch(
@@ -242,11 +245,13 @@ class GuiLifecycleTests(unittest.TestCase):
                 crg_source_mappings=exported_crg_sources,
             )
             self.assertEqual(read_config(export_path), expected)
+            self.assertNotIn("/machine/only/kdebug", export_path.read_text(encoding="utf-8"))
 
             old_config = self._complete_config(offset=2)
             import_app = self._app_with_config(
                 old_config, Path(temporary) / "old-current.json"
             )
+            import_app.kdebug_bin_var = _FakeVar("/other/machine/kdebug")
             with patch(
                 "rscheck.gui.filedialog.askopenfilename",
                 return_value=str(export_path),
@@ -265,6 +270,7 @@ class GuiLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 import_app._crg_source_mappings, dict(exported_crg_sources)
             )
+            self.assertEqual(import_app.kdebug_bin_var.get(), "/other/machine/kdebug")
             self.assertFalse(import_app._module_rules_dirty)
             self.assertFalse(import_app._position_mappings_dirty)
             self.assertFalse(import_app._crg_source_mappings_dirty)
@@ -1458,6 +1464,34 @@ class GuiLifecycleTests(unittest.TestCase):
         outcome = app.events.get_nowait()
         self.assertIsInstance(outcome, WorkerOutcome)
         self.assertIsNone(outcome.process)
+
+    def test_check_worker_passes_kdebug_elf_only_through_environment(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app.project_root = Path("/workspace")
+        app._cancel_requested = threading.Event()
+        app.events = queue.Queue()
+        process = SimpleNamespace(cancelled=False, returncode=2)
+        app.controller = SimpleNamespace(run=Mock(return_value=process))
+        request = GuiRunRequest(
+            excel_path="specs.xlsx",
+            config_path="config.json",
+            json_report_path="report.json",
+            kdebug_bin_path="/runtime/kdebug",
+        )
+        command = ["python", "-m", "rscheck", "check", "--json-report", "report.json"]
+
+        with patch(
+            "rscheck.gui.build_check_environment",
+            return_value={"KDEBUG_BIN": "/runtime/kdebug"},
+        ), patch("rscheck.gui.build_check_command", return_value=command):
+            app._run_worker("check", request)
+
+        app.controller.run.assert_called_once_with(
+            command,
+            cwd=app.project_root,
+            environment={"KDEBUG_BIN": "/runtime/kdebug"},
+        )
+        self.assertNotIn("/runtime/kdebug", command)
 
     def test_closing_waits_for_worker_outcome_before_destroying_root(self) -> None:
         app = object.__new__(RsCheckApp)

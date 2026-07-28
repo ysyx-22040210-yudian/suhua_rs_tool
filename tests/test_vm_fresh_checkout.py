@@ -261,6 +261,7 @@ class VmFreshCheckoutArgumentTests(unittest.TestCase):
     def test_relative_site_environment_file_fails_before_clone(self) -> None:
         assert BASH is not None
         environment = os.environ.copy()
+        environment["RSCHECK_COLLECTOR_BACKEND"] = "npi"
         environment["VERDI_ENV_FILE"] = "relative-site-env.sh"
         completed = subprocess.run(
             [BASH, str(SCRIPT)],
@@ -278,6 +279,7 @@ class VmFreshCheckoutArgumentTests(unittest.TestCase):
     def test_relative_run_base_fails_before_clone(self) -> None:
         assert BASH is not None
         environment = os.environ.copy()
+        environment["RSCHECK_COLLECTOR_BACKEND"] = "npi"
         environment["VM_RUN_BASE"] = "."
         completed = subprocess.run(
             [BASH, str(SCRIPT)],
@@ -365,6 +367,7 @@ class VmFreshCheckoutControllerIntegrationTests(unittest.TestCase):
         environment.update(
             {
                 "PATH": str(self.bin_dir) + os.pathsep + environment["PATH"],
+                "RSCHECK_COLLECTOR_BACKEND": "npi",
                 "VM_RUN_BASE": str(self.root),
                 "CLONE_TIMEOUT": "10",
                 "FAKE_CLONE_COUNTER": str(self.clone_counter),
