@@ -185,8 +185,10 @@ test -x "$RSCHECK_ROOT/scripts/rs_kdebug_collector.py"
 (cd "$RSCHECK_ROOT" && git rev-parse HEAD)
 ```
 
-`KDEBUG_BIN` 必须是绝对路径，并应指向构建出的 ELF
-`$KVERIF_HOME/kdebug/kdebug`。`tools/kdebug` 可用于人工调用，但 rscheck 与 VM
+`KDEBUG_BIN` 必须是绝对路径，并指向 `make -C kdebug all` 构建出的 Linux ELF
+`$KVERIF_HOME/kdebug/kdebug`。不能填写 `.c/.cc/.cpp/.cxx` 原始 C++ 文件，也不接受
+shell/Python 包装脚本。adapter 在加载 KDB 前检查常规文件、执行权限和 ELF 文件头，
+失败时返回 `error[KDEBUG_EXEC]`。`tools/kdebug` 可用于人工调用，但 rscheck 与 VM
 压测统一使用 ELF 路径，并依靠相邻目录定位配套 engine。不要只复制一个 kdebug
 文件到其他目录；必须保留同一构建树的 `kdebug/libexec`。
 

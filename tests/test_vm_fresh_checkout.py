@@ -94,6 +94,8 @@ class VmFreshCheckoutStaticContractTests(unittest.TestCase):
             'export RSCHECK_COLLECTOR_TIMEOUT_SECONDS="$NPI_TIMEOUT"', verdi_source
         )
         self.assertIn('ldd "$KDEBUG_BIN"', verdi_source)
+        self.assertIn('KDEBUG_MAGIC="$(LC_ALL=C od -An -tx1 -N4 "$KDEBUG_BIN"', verdi_source)
+        self.assertIn("compiled kdebug ELF executable, not source or a script", verdi_source)
         self.assertIn("kdebug frontend must have no direct NPI dependency", verdi_source)
         self.assertIn('KDEBUG_MANIFEST="$TEST_ROOT/kdebug_build_manifest.txt"', verdi_source)
         self.assertIn('export RSCHECK_KDEBUG_HOME="$TEST_ROOT/kdebug_home"', verdi_source)
@@ -158,6 +160,8 @@ class VmFreshCheckoutStaticContractTests(unittest.TestCase):
         self.assertIn("KDEBUG_TCL_RESPONSE_JSON=", pressure_source)
         self.assertIn("did not reach a live Verdi NPI action", pressure_source)
         self.assertIn("frontend cancellation left", pressure_source)
+        self.assertIn('KDEBUG_MAGIC="$(LC_ALL=C od -An -tx1 -N4 "$KDEBUG_BIN"', pressure_source)
+        self.assertIn("compiled kdebug ELF executable, not source or a script", pressure_source)
         self.assertIn('root.rglob("crash_marker*")', pressure_source)
         self.assertNotIn("--filelist", pressure_source)
         self.assertNotIn("--source", pressure_source)

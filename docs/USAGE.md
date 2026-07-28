@@ -797,7 +797,9 @@ test -f "$KVERIF_HOME/kdebug/libexec/tcl_engine/rscheck_inventory.tcl"
 test -x scripts/rs_kdebug_collector.py
 ```
 
-`KDEBUG_BIN` 必须指向该构建树中的绝对 ELF 路径。不要只复制 frontend；
+`KDEBUG_BIN` 必须指向该构建树中由 `make -C kdebug all` 生成的绝对 Linux ELF 路径，
+不能填写 `.c/.cc/.cpp/.cxx` 原始 C++ 文件或脚本。adapter 会在加载 KDB 前检查执行权限
+和 ELF 文件头。不要只复制 frontend；
 `kdebug/libexec/kdebug-engine` 和 `tcl_engine` 必须与它配套。adapter 本身不 import、
 link 或调用 NPI，只发送一个 `kdebug.v1 / rscheck.inventory` JSON action。该 action
 一次提交全部 positions 和 trace rules，并且一次 Verdi session 完成采集。
@@ -1014,7 +1016,7 @@ status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
 | `formula cells are not supported` / `Excel error value ... is not supported` | XLSX/XLSM 的映射字段是公式单元格或 Excel 错误值，包括 don't-care 或拟填写 `NA` 的 `RS_CFG_EN` | 将值固化为普通文本/数字；额外未映射列不受影响 |
 | collector executable not found | adapter 路径不对或 checkout 不完整 | kdebug 模式使用当前仓库的 `scripts/rs_kdebug_collector.py`，不要直接填 `$KDEBUG_BIN` |
-| `kdebug executable not found` | 未导出 `KDEBUG_BIN`、不是绝对路径或 ELF 不可执行 | 按第 8 节构建配套 kverif，并在启动 CLI/GUI 的同一 shell 导出 `$KVERIF_HOME/kdebug/kdebug` |
+| `KDEBUG_EXEC` / `kdebug executable not found` | 未导出 `KDEBUG_BIN`、不是绝对路径、不可执行，或误填了 C++ 源文件/脚本而不是 ELF | 按第 8 节构建配套 kverif，并在启动 CLI/GUI 的同一 shell 导出构建产物 `$KVERIF_HOME/kdebug/kdebug`；不要填写 `.cpp` |
 | `KDEBUG_RESPONSE` | 两仓库分支不配套、stdout 混入日志、response 或 inventory v3 非法 | 使用 `codex/rscheck-elab-inventory` + `codex/kdebug-npi-backend`；普通日志写 stderr，并按后端指南直接测试 adapter |
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
 | `unexpected argument` / `unrecognized arguments` | 仍在使用旧 `-- -f/-sv/-lib` 透传 | 删除透传，先在外部流程生成 KDB，再只传 `--elab-db` |

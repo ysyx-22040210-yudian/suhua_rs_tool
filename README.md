@@ -19,6 +19,7 @@
 - [详细使用文档](docs/USAGE.md)
 - [kdebug RTL inventory 后端、双仓库构建与压测](docs/KDEBUG_BACKEND.md)
 - [工具架构与设计方案（含流程图和架构框图）](docs/ARCHITECTURE_AND_DESIGN.md)
+- [工具架构与设计方案（中文 Word 版）](docs/RTL_RS_CHECK_TOOL_DESIGN_CN.docx)
 - [完整测试指南](docs/TESTING.md)
 - [本机用户 Prompts 与工具需求整理](docs/LOCAL_USER_PROMPTS_AND_REQUIREMENTS.md)
 - [kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md)
@@ -290,6 +291,11 @@ export KDEBUG_BIN="$KVERIF_HOME/kdebug/kdebug"
 test -x "$KDEBUG_BIN"
 test -x scripts/rs_kdebug_collector.py
 ```
+
+`KDEBUG_BIN` 必须指向 `make -C kdebug all` 生成的 Linux ELF 可执行文件，不能指向
+`kdebug` 的 `.c/.cc/.cpp/.cxx` 原始 C++ 文件，也不能使用 shell/Python 包装脚本冒充。
+adapter 会在加载 KDB 前检查绝对路径、执行权限和 ELF 文件头，不符合时直接返回
+`KDEBUG_EXEC`。
 
 Python/GUI 仍使用兼容入口 `scripts/rs_kdebug_collector.py`，不能把 kdebug ELF 直接填入 `--collector`。kdebug frontend、`kdebug/libexec/kdebug-engine` 和 `tcl_engine` 文件必须来自同一构建树。在线运行仍需要合法 Verdi、兼容 KDB 和站点批准的 license；这套架构隔离了 rscheck Python 与 NPI API，并没有移除 Verdi 依赖。
 

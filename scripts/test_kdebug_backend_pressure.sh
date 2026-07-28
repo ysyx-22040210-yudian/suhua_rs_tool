@@ -65,6 +65,9 @@ case "$PARTIAL_ELAB_DB" in
   *) fail "PARTIAL_ELAB_DB must be an absolute path" ;;
 esac
 [ -x "$KDEBUG_BIN" ] || fail "kdebug executable not found: $KDEBUG_BIN"
+KDEBUG_MAGIC="$(LC_ALL=C od -An -tx1 -N4 "$KDEBUG_BIN" 2>/dev/null | tr -d '[:space:]')"
+[ "$KDEBUG_MAGIC" = 7f454c46 ] ||
+  fail "KDEBUG_BIN must be the compiled kdebug ELF executable, not source or a script: $KDEBUG_BIN"
 [ -d "$CLEAN_ELAB_DB" ] || fail "clean elaborated KDB not found: $CLEAN_ELAB_DB"
 [ -d "$PARTIAL_ELAB_DB" ] || fail "partial elaborated KDB not found: $PARTIAL_ELAB_DB"
 [ "$(basename "$CLEAN_ELAB_DB")" != work.lib++ ] || fail "clean input is not elaborated"

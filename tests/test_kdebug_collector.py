@@ -20,6 +20,7 @@ from rscheck.kdebug_collector import (
     KDEBUG_EXEC_ERROR,
     POSIX_SIGKILL,
     _invoke_kdebug,
+    _resolve_kdebug,
     main,
 )
 
@@ -69,6 +70,57 @@ class KdebugCollectorTests(unittest.TestCase):
     @staticmethod
     def _response(**values: object) -> dict[str, object]:
         return {"api_version": API_VERSION, "action": ACTION, **values}
+
+    def test_resolve_kdebug_accepts_compiled_elf_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            executable = Path(name) / "kdebug"
+            executable.write_bytes(b"\x7fELF" + b"\0" * 64)
+            executable.chmod(0o755)
+
+            with patch.dict(
+                "os.environ", {"KDEBUG_BIN": str(executable.resolve())}, clear=False
+            ):
+                resolved = _resolve_kdebug()
+
+            self.assertEqual(resolved, str(executable.resolve()))
+
+    def test_resolve_kdebug_rejects_cpp_source_even_if_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name) / "kdebug.cpp"
+            source.write_text("int main() { return 0; }\n", encoding="utf-8")
+            source.chmod(0o755)
+
+            with patch.dict(
+                "os.environ", {"KDEBUG_BIN": str(source.resolve())}, clear=False
+            ), self.assertRaises(CollectorFailure) as raised:
+                _resolve_kdebug()
+
+            self.assertEqual(raised.exception.code, "KDEBUG_EXEC")
+            self.assertIn("compiled executable", raised.exception.message)
+            self.assertIn("not a C/C++ source file", raised.exception.message)
+
+    def test_resolve_kdebug_rejects_executable_script_or_text_file(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            script = Path(name) / "kdebug"
+            script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            script.chmod(0o755)
+
+            with patch.dict(
+                "os.environ", {"KDEBUG_BIN": str(script.resolve())}, clear=False
+            ), self.assertRaises(CollectorFailure) as raised:
+                _resolve_kdebug()
+
+            self.assertEqual(raised.exception.code, "KDEBUG_EXEC")
+            self.assertIn("compiled Linux ELF executable", raised.exception.message)
+
+    def test_resolve_kdebug_rejects_relative_kdebug_bin(self) -> None:
+        with patch.dict("os.environ", {"KDEBUG_BIN": "kdebug"}, clear=False), self.assertRaises(
+            CollectorFailure
+        ) as raised:
+            _resolve_kdebug()
+
+        self.assertEqual(raised.exception.code, "KDEBUG_EXEC")
+        self.assertIn("absolute path", raised.exception.message)
 
     def test_success_uses_one_json_action_and_writes_v3_inventory(self) -> None:
         with tempfile.TemporaryDirectory(prefix="kdebug contract with spaces ") as name:

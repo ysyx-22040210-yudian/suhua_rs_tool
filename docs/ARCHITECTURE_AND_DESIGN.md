@@ -513,6 +513,10 @@ PYTHON=python3 make -C kdebug test-fast
 export KDEBUG_BIN="$PWD/kdebug/kdebug"
 ```
 
+`KDEBUG_BIN` 只能指向上述构建生成的 Linux ELF 可执行文件，不能填写
+`.c/.cc/.cpp/.cxx` 原始 C++ 文件或 shell/Python 脚本。适配器在加载 KDB 前校验绝对
+路径、执行权限和 ELF 文件头，不满足时返回 `KDEBUG_EXEC`。
+
 `ldd "$KDEBUG_BIN"` 不得出现 `libNPI`、`libnpiL1` 或 `not found`。在线运行设备仍然
 必须安装合法且与 KDB 兼容的 Verdi/NPI 环境；隔离 NPI API 不等于消除 Verdi 依赖。
 

@@ -724,6 +724,9 @@ if [ "$RSCHECK_COLLECTOR_BACKEND" = kdebug ]; then
     *) fail "KDEBUG_BIN must be an absolute path" ;;
   esac
   [ -x "$KDEBUG_BIN" ] || fail "kdebug executable is not accessible: $KDEBUG_BIN"
+  KDEBUG_MAGIC="$(LC_ALL=C od -An -tx1 -N4 "$KDEBUG_BIN" 2>/dev/null | tr -d '[:space:]')"
+  [ "$KDEBUG_MAGIC" = 7f454c46 ] ||
+    fail "KDEBUG_BIN must be the compiled kdebug ELF executable, not source or a script: $KDEBUG_BIN"
   KDEBUG_BIN="$(cd "$(dirname "$KDEBUG_BIN")" && pwd -P)/$(basename "$KDEBUG_BIN")"
   KDEBUG_BUILD_DIR="$(dirname "$KDEBUG_BIN")"
   KDEBUG_ENGINE_BIN="$KDEBUG_BUILD_DIR/libexec/kdebug-engine"

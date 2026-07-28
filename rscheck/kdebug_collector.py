@@ -36,6 +36,10 @@ KDEBUG_KILL_WAIT_SECONDS = 0.2
 KDEBUG_DRAIN_WAIT_SECONDS = 0.1
 MAX_DIAGNOSTIC_LENGTH = 4000
 POSIX_SIGKILL = getattr(signal, "SIGKILL", 9)
+ELF_MAGIC = b"\x7fELF"
+C_CPP_SOURCE_SUFFIXES = frozenset(
+    {".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx"}
+)
 
 
 @dataclass(frozen=True)
@@ -179,16 +183,69 @@ def _resolve_elab_db(path: str | Path) -> Path:
 
 def _resolve_kdebug() -> str:
     configured = os.environ.get("KDEBUG_BIN", "").strip()
-    candidate = configured or "kdebug"
-    resolved = shutil.which(candidate)
-    if resolved is None:
-        source = "KDEBUG_BIN" if configured else "PATH"
+    source = "KDEBUG_BIN" if configured else "PATH"
+    if configured:
+        candidate = Path(configured).expanduser()
+        if not candidate.is_absolute():
+            raise CollectorFailure(
+                KDEBUG_EXEC_ERROR,
+                "KDEBUG_EXEC",
+                "KDEBUG_BIN must be an absolute path to the compiled kdebug executable",
+            )
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise CollectorFailure(
+                KDEBUG_EXEC_ERROR,
+                "KDEBUG_EXEC",
+                f"kdebug executable not found via KDEBUG_BIN: {candidate} ({exc})",
+            ) from exc
+    else:
+        discovered = shutil.which("kdebug")
+        if discovered is None:
+            raise CollectorFailure(
+                KDEBUG_EXEC_ERROR,
+                "KDEBUG_EXEC",
+                "kdebug executable not found via PATH: kdebug",
+            )
+        resolved = Path(discovered).resolve()
+
+    if resolved.suffix.lower() in C_CPP_SOURCE_SUFFIXES:
         raise CollectorFailure(
             KDEBUG_EXEC_ERROR,
             "KDEBUG_EXEC",
-            f"kdebug executable not found via {source}: {candidate}",
+            "kdebug must use the compiled executable, not a C/C++ source file: "
+            f"{resolved}",
         )
-    return str(Path(resolved).resolve())
+    if not resolved.is_file():
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            f"kdebug path resolved via {source} is not a regular file: {resolved}",
+        )
+    if not os.access(resolved, os.X_OK):
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            f"compiled kdebug executable is not executable: {resolved}",
+        )
+    try:
+        with resolved.open("rb") as stream:
+            magic = stream.read(len(ELF_MAGIC))
+    except OSError as exc:
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            f"cannot inspect compiled kdebug executable {resolved}: {exc}",
+        ) from exc
+    if magic != ELF_MAGIC:
+        raise CollectorFailure(
+            KDEBUG_EXEC_ERROR,
+            "KDEBUG_EXEC",
+            "kdebug must be the compiled Linux ELF executable from the kverif build; "
+            f"scripts, source files, and text files are not accepted: {resolved}",
+        )
+    return str(resolved)
 
 
 def _kdebug_environment(runtime_directory: Path) -> Mapping[str, str]:
