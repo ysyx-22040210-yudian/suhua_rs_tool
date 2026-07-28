@@ -23,6 +23,7 @@
 - [完整测试指南](docs/TESTING.md)
 - [本机用户 Prompts 与工具需求整理](docs/LOCAL_USER_PROMPTS_AND_REQUIREMENTS.md)
 - [kdebug elaborated KDB 后端与 VM GUI 压测签核记录（2026-07-27）](docs/TEST_RESULTS_KDEBUG_BACKEND_2026-07-27.md)
+- [kdebug 编译产物强制校验与 VM 压测记录（2026-07-28）](docs/TEST_RESULTS_KDEBUG_ELF_GUARD_2026-07-28.md)
 - [有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](docs/TEST_RESULTS_CRG_TRACE_2026-07-27.md)
 - [clk 存在、rst 缺失 finding 隔离与 VM GUI 压测验证记录（2026-07-26）](docs/TEST_RESULTS_CLK_PRESENT_RST_MISSING_2026-07-26.md)
 - [NPI partial-load 兼容与 GUI 压测验证记录（2026-07-25）](docs/TEST_RESULTS_NPI_PARTIAL_LOAD_2026-07-25.md)
