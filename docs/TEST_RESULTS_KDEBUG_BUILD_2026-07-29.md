@@ -136,7 +136,7 @@ adapter 启动命令仍固定为 `[KDEBUG_BIN, "--json", "-"]`。
 | 测试 | 结果 |
 | --- | --- |
 | Windows 本机完整 Python 回归 | `342` 项通过，`52` 项按平台/显式集成条件跳过 |
-| VM Linux 完整 Python 回归 | `335` 项通过，`1` 项显式构建集成测试按默认条件跳过 |
+| VM Linux 完整 Python 回归 | `342` 项通过，`1` 项显式构建集成测试按默认条件跳过 |
 | VM 显式构建集成测试 | `9/9 PASS`，包含 clone/build/package/live KDB smoke |
 | 新脚本 `bash -n` 和参数负例 | PASS |
 
