@@ -14,7 +14,8 @@
     "clk": 6,
     "rst": 7,
     "CRG_source": 8,
-    "RS_CFG_EN": 9
+    "RS_CFG_EN": 9,
+    "RS_route": 10
   },
   "position_mappings": {
     "tile_core": "top.u_tile"

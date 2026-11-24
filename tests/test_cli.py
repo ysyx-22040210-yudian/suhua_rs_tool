@@ -12,6 +12,7 @@ from unittest.mock import patch
 from rscheck.cli import main
 from rscheck.config import load_config
 from rscheck.inventory import load_inventory
+from rscheck.npi_runner import HierarchyScope, HierarchySearchResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,76 @@ class CliTests(unittest.TestCase):
             "--sheet",
             "1",
         ]
+
+    def test_hierarchy_search_is_independent_of_excel_and_config(self) -> None:
+        result = HierarchySearchResult(
+            query=r"^top\.u_",
+            limit=500,
+            matches=(
+                HierarchyScope(
+                    path="top.u_tile",
+                    name="u_tile",
+                    definition="tile",
+                    kind="module",
+                ),
+            ),
+            total_matches=1,
+            truncated=False,
+            index_truncated=False,
+            visited_scopes=8,
+        )
+        output = StringIO()
+        with patch("rscheck.cli.search_hierarchy", return_value=result) as search:
+            with redirect_stdout(output):
+                code = main(
+                    [
+                        "hierarchy-search",
+                        "--collector",
+                        "/opt/rs_npi_collector",
+                        "--elab-db",
+                        "/work/top.elab++",
+                        "--regex=^top\\.u_",
+                        "--limit",
+                        "500",
+                        "--npi-timeout",
+                        "60",
+                        "--npi-lib-dir",
+                        "/opt/verdi/lib",
+                        "--json",
+                    ]
+                )
+        self.assertEqual(code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["schema"], "rscheck.hierarchy-search")
+        self.assertEqual(payload["matches"][0]["path"], "top.u_tile")
+        search.assert_called_once_with(
+            "/opt/rs_npi_collector",
+            r"^top\.u_",
+            elab_db="/work/top.elab++",
+            limit=500,
+            timeout_seconds=60,
+            npi_lib_dir="/opt/verdi/lib",
+        )
+
+    def test_hierarchy_search_rejects_nonpositive_timeout(self) -> None:
+        error = StringIO()
+        with patch("rscheck.cli.search_hierarchy") as search:
+            with redirect_stderr(error):
+                code = main(
+                    [
+                        "hierarchy-search",
+                        "--collector",
+                        "collector",
+                        "--elab-db",
+                        "top.elab++",
+                        "--regex=tile",
+                        "--npi-timeout",
+                        "0",
+                    ]
+                )
+        self.assertEqual(code, 2)
+        self.assertIn("--npi-timeout must be >= 1", error.getvalue())
+        search.assert_not_called()
 
     def test_offline_check_writes_reports(self) -> None:
         with tempfile.TemporaryDirectory() as name:

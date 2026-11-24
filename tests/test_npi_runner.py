@@ -11,7 +11,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rscheck.model import InventoryError, ModuleRule, RtlConfig, SpecRow
-from rscheck.npi_runner import _collector_environment, collect_inventory
+from rscheck.npi_runner import (
+    _collector_environment,
+    collect_hierarchy,
+    collect_inventory,
+    search_hierarchy,
+)
 
 
 class NpiCollectorContractTests(unittest.TestCase):
@@ -56,6 +61,76 @@ class NpiCollectorContractTests(unittest.TestCase):
             '\\"excluded_inputs\\": [\\"clk\\", \\"rst_n\\"]', source
         )
         self.assertIn("result.clk_sources = result.clock_trace.modules", source)
+
+    def test_collector_has_bounded_hierarchy_listing_mode(self) -> None:
+        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('argument == "--list-hierarchy"', source)
+        self.assertIn("kMaxHierarchyDepth = 256", source)
+        self.assertIn("kMaxHierarchyScopeVisits = 1000000", source)
+        self.assertIn(
+            '"--list-hierarchy cannot be combined with --positions, "', source
+        )
+
+        start = source.index("class HierarchyCollector {")
+        end = source.index("class Collector {", start)
+        body = source[start:end]
+        self.assertIn("npi_iterate(npiInstance, NULL)", body)
+        self.assertIn("npi_iterate(npiInternalScope, scope)", body)
+        self.assertIn("const bool display_scope = supported_scope_type(type);", body)
+        self.assertIn("if (display_scope) {", body)
+        for scope_type in (
+            "npiModule",
+            "npiInterface",
+            "npiProgram",
+            "npiGenScope",
+        ):
+            self.assertIn(scope_type, body)
+        self.assertIn("std::sort(result_.scopes.begin()", body)
+        self.assertIn("std::unique(result_.scopes.begin()", body)
+        self.assertIn("NPI hierarchy has no queryable top scope", body)
+        self.assertIn("if (result_.scopes.empty()) {", body)
+        self.assertIn("scope_visit_limit_reached_ = true", body)
+        self.assertGreaterEqual(
+            body.count("npi_release_handle(iterator);"), 2
+        )
+        self.assertNotIn("build_instance(", body)
+        self.assertNotIn("collect_ports(", body)
+        self.assertNotIn("collect_parameters(", body)
+        self.assertNotIn("trace_clock(", body)
+
+        writer_start = source.index("bool write_hierarchy(")
+        writer_end = source.index("void write_string_array(", writer_start)
+        writer = source[writer_start:writer_end]
+        for field in (
+            '\\"schema\\": \\"rscheck.hierarchy\\"',
+            '\\"schema_version\\": 1',
+            '\\"scopes\\"',
+            '\\"path\\"',
+            '\\"name\\"',
+            '\\"definition\\"',
+            '\\"kind\\"',
+            '\\"warnings\\"',
+            '\\"notices\\"',
+            '\\"truncated\\"',
+            '\\"visited_scopes\\"',
+        ):
+            self.assertIn(field, writer)
+
+        run_start = source.index("int run(int argc, char** argv)")
+        run_body = source[run_start:]
+        self.assertIn("if (!options.list_hierarchy) {", run_body)
+        self.assertIn("if (options.list_hierarchy) {", run_body)
+        self.assertIn("HierarchyCollector hierarchy_collector;", run_body)
+        self.assertIn("write_hierarchy(options.output_path", run_body)
+        self.assertIn("bool partial_load = false;", run_body)
+        self.assertIn("if (partial_load) {", run_body)
+        self.assertIn("hierarchy.truncated = true;", run_body)
+        self.assertLess(
+            run_body.index("npi_load_design(npi_argc, npi_argv)"),
+            run_body.index("HierarchyCollector hierarchy_collector;"),
+        )
 
     def test_clock_trace_cache_isolated_by_instance_hierarchy(self) -> None:
         source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
@@ -127,6 +202,37 @@ class NpiCollectorContractTests(unittest.TestCase):
 
 
 class NpiRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _hierarchy_payload(*, truncated: bool = False) -> dict:
+        return {
+            "schema": "rscheck.hierarchy",
+            "schema_version": 1,
+            "scopes": [
+                {
+                    "path": "top.u_other",
+                    "name": "u_other",
+                    "definition": "other",
+                    "kind": "module",
+                },
+                {
+                    "path": "top.u_tile",
+                    "name": "u_tile",
+                    "definition": "tile",
+                    "kind": "module",
+                },
+                {
+                    "path": "top.u_tile.u_peer",
+                    "name": "u_peer",
+                    "definition": "peer",
+                    "kind": "module",
+                },
+            ],
+            "warnings": ["index is bounded"] if truncated else [],
+            "notices": [],
+            "truncated": truncated,
+            "visited_scopes": 3,
+        }
+
     def _spec(self) -> SpecRow:
         return SpecRow(
             source=Path("specs.csv"),
@@ -164,6 +270,266 @@ class NpiRunnerTests(unittest.TestCase):
                 os.path.normcase(entries[0]), os.path.normcase(str(library))
             )
             self.assertEqual(entries[1:], ["/existing/lib"])
+
+    def test_hierarchy_search_uses_dedicated_collector_mode_and_python_regex(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+            observed = {}
+
+            def completed(command, **kwargs):
+                observed["command"] = command
+                observed["kwargs"] = kwargs
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(self._hierarchy_payload()), encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=b"", stderr=b""
+                )
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                result = search_hierarchy(
+                    collector,
+                    r"(?i)U_(TILE|PEER)",
+                    elab_db=elab_db,
+                    limit=1,
+                    timeout_seconds=45,
+                )
+
+            self.assertEqual(result.total_matches, 2)
+            self.assertEqual([item.path for item in result.matches], ["top.u_tile"])
+            self.assertTrue(result.truncated)
+            self.assertFalse(result.index_truncated)
+            command = observed["command"]
+            self.assertEqual(
+                command,
+                [
+                    str(collector.resolve()),
+                    "--list-hierarchy",
+                    "--output",
+                    command[3],
+                    "--elab-db",
+                    str(elab_db.resolve()),
+                ],
+            )
+            self.assertNotIn("--positions", command)
+            self.assertEqual(observed["kwargs"]["timeout"], 45)
+            self.assertEqual(observed["kwargs"]["cwd"], str(Path(command[3]).parent))
+            self.assertFalse(observed["kwargs"].get("text", False))
+
+    def test_hierarchy_search_no_match_and_exact_limit_are_not_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+
+            def completed(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(self._hierarchy_payload()), encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                exact = search_hierarchy(
+                    collector, r"u_tile", elab_db=elab_db, limit=2
+                )
+                missing = search_hierarchy(
+                    collector, r"does_not_exist", elab_db=elab_db, limit=2
+                )
+            self.assertEqual(exact.total_matches, 2)
+            self.assertEqual(len(exact.matches), 2)
+            self.assertFalse(exact.truncated)
+            self.assertEqual(missing.matches, ())
+            self.assertFalse(missing.truncated)
+
+    def test_hierarchy_invalid_regex_fails_before_collector(self) -> None:
+        with patch("rscheck.npi_runner.collect_hierarchy") as collect:
+            for query in ("", "   ", "[", "line\nnext", "x" * 257):
+                with self.subTest(query=query), self.assertRaises(InventoryError):
+                    search_hierarchy(
+                        "collector", query, elab_db="design.elab++"
+                    )
+            collect.assert_not_called()
+
+    def test_hierarchy_index_rejects_unsorted_duplicate_or_malformed_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+            payload = self._hierarchy_payload()
+            payload["scopes"].reverse()
+
+            def completed(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(json.dumps(payload), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                with self.assertRaisesRegex(InventoryError, "sorted"):
+                    collect_hierarchy(collector, elab_db=elab_db)
+
+            payload = self._hierarchy_payload()
+            payload["scopes"][1] = dict(payload["scopes"][0])
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                with self.assertRaisesRegex(InventoryError, "sorted"):
+                    collect_hierarchy(collector, elab_db=elab_db)
+
+            payload = self._hierarchy_payload()
+            payload["scopes"][0]["kind"] = "net"
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                with self.assertRaisesRegex(InventoryError, "kind"):
+                    collect_hierarchy(collector, elab_db=elab_db)
+
+    def test_hierarchy_index_truncation_is_propagated_to_search(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+
+            def completed(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(self._hierarchy_payload(truncated=True)),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                result = search_hierarchy(
+                    collector, r"u_other", elab_db=elab_db, limit=500
+                )
+            self.assertEqual(result.total_matches, 1)
+            self.assertTrue(result.index_truncated)
+            self.assertTrue(result.truncated)
+            self.assertEqual(result.warnings, ("index is bounded",))
+
+    def test_hierarchy_collection_validates_live_inputs_before_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            missing_collector = root / "missing-collector"
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+            with patch("rscheck.npi_runner.subprocess.run") as run:
+                with self.assertRaisesRegex(InventoryError, "collector executable"):
+                    collect_hierarchy(missing_collector, elab_db=elab_db)
+                run.assert_not_called()
+
+            collector.write_text("", encoding="utf-8")
+            elab_file = root / "file.elab++"
+            elab_file.write_text("not a KDB", encoding="utf-8")
+            work_library = root / "work.lib++"
+            work_library.mkdir()
+            with patch("rscheck.npi_runner.subprocess.run") as run:
+                with self.assertRaisesRegex(InventoryError, "must be a directory"):
+                    collect_hierarchy(collector, elab_db=elab_file)
+                with self.assertRaisesRegex(InventoryError, "compiled Verdi library"):
+                    collect_hierarchy(collector, elab_db=work_library)
+                run.assert_not_called()
+
+            collector_resolved = collector.resolve()
+            with patch(
+                "rscheck.npi_runner.Path.resolve",
+                side_effect=[collector_resolved, OSError("symlink loop")],
+            ), patch("rscheck.npi_runner.subprocess.run") as run:
+                with self.assertRaisesRegex(
+                    InventoryError, "cannot resolve Verdi elaborated database"
+                ):
+                    collect_hierarchy(collector, elab_db=elab_db)
+                run.assert_not_called()
+
+    def test_hierarchy_collector_failures_are_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+
+            with patch(
+                "rscheck.npi_runner.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["collector"], 3),
+            ):
+                with self.assertRaisesRegex(InventoryError, "timed out after 3"):
+                    collect_hierarchy(
+                        collector, elab_db=elab_db, timeout_seconds=3
+                    )
+
+            failed = subprocess.CompletedProcess(
+                ["collector"], 11, stdout=b"load stdout", stderr=b"load stderr"
+            )
+            with patch("rscheck.npi_runner.subprocess.run", return_value=failed):
+                with self.assertRaisesRegex(InventoryError, "code 11") as raised:
+                    collect_hierarchy(collector, elab_db=elab_db)
+            self.assertIn("load stdout", str(raised.exception))
+            self.assertIn("load stderr", str(raised.exception))
+
+            succeeded = subprocess.CompletedProcess(
+                ["collector"], 0, stdout=b"", stderr=b""
+            )
+            with patch("rscheck.npi_runner.subprocess.run", return_value=succeeded):
+                with self.assertRaisesRegex(InventoryError, "did not create"):
+                    collect_hierarchy(collector, elab_db=elab_db)
+
+            def invalid_json(command, **kwargs):
+                output = Path(command[command.index("--output") + 1])
+                output.write_bytes(b"\xff")
+                return succeeded
+
+            with patch(
+                "rscheck.npi_runner.subprocess.run", side_effect=invalid_json
+            ):
+                with self.assertRaisesRegex(InventoryError, "cannot read"):
+                    collect_hierarchy(collector, elab_db=elab_db)
+
+    def test_hierarchy_partial_load_notice_preserves_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.write_text("", encoding="utf-8")
+            elab_db = root / "design.elab++"
+            elab_db.mkdir()
+            payload = self._hierarchy_payload()
+            payload["notices"] = ["top remains queryable after partial load"]
+
+            def completed(command, **kwargs):
+                temp_dir = Path(kwargs["cwd"])
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(json.dumps(payload), encoding="utf-8")
+                log_dir = temp_dir / "collectorLog"
+                log_dir.mkdir()
+                (log_dir / "compiler.log").write_text(
+                    "elaboration detail", encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout=b"partial stdout",
+                    stderr=b"warning[NPI_LOAD_PARTIAL]",
+                )
+
+            diagnostic = StringIO()
+            with patch(
+                "rscheck.npi_runner.subprocess.run", side_effect=completed
+            ), redirect_stderr(diagnostic):
+                hierarchy = collect_hierarchy(collector, elab_db=elab_db)
+            self.assertEqual(
+                hierarchy.notices, ("top remains queryable after partial load",)
+            )
+            self.assertIn("partial stdout", diagnostic.getvalue())
+            self.assertIn("warning[NPI_LOAD_PARTIAL]", diagnostic.getvalue())
+            self.assertIn("elaboration detail", diagnostic.getvalue())
 
     def test_lowercase_verdi_npi_library_is_discovered(self) -> None:
         with tempfile.TemporaryDirectory() as name:

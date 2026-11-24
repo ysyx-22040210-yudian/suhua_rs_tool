@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from .inventory import load_inventory
 from .model import (
@@ -18,6 +21,209 @@ from .model import (
     SpecRow,
     resolve_module_rule,
 )
+
+
+HIERARCHY_SCHEMA = "rscheck.hierarchy"
+HIERARCHY_SEARCH_SCHEMA = "rscheck.hierarchy-search"
+DEFAULT_HIERARCHY_SEARCH_LIMIT = 500
+MAX_HIERARCHY_SEARCH_LIMIT = 5000
+MAX_HIERARCHY_REGEX_LENGTH = 256
+HIERARCHY_SCOPE_KINDS = frozenset({"module", "interface", "program", "gen_scope"})
+
+
+@dataclass(frozen=True)
+class HierarchyScope:
+    path: str
+    name: str
+    definition: str
+    kind: str
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any], label: str) -> "HierarchyScope":
+        expected = {"path", "name", "definition", "kind"}
+        if set(value) != expected:
+            raise InventoryError(
+                f"{label} fields must be exactly: {', '.join(sorted(expected))}"
+            )
+        path = value.get("path")
+        name = value.get("name")
+        definition = value.get("definition")
+        kind = value.get("kind")
+        if not isinstance(path, str) or not path:
+            raise InventoryError(f"{label}.path must be a non-empty string")
+        if not isinstance(name, str):
+            raise InventoryError(f"{label}.name must be a string")
+        if not isinstance(definition, str):
+            raise InventoryError(f"{label}.definition must be a string")
+        if kind not in HIERARCHY_SCOPE_KINDS:
+            raise InventoryError(
+                f"{label}.kind must be one of: "
+                + ", ".join(sorted(HIERARCHY_SCOPE_KINDS))
+            )
+        return cls(path=path, name=name, definition=definition, kind=kind)
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "path": self.path,
+            "name": self.name,
+            "definition": self.definition,
+            "kind": self.kind,
+        }
+
+
+@dataclass(frozen=True)
+class HierarchyIndex:
+    scopes: tuple[HierarchyScope, ...]
+    warnings: tuple[str, ...]
+    notices: tuple[str, ...]
+    truncated: bool
+    visited_scopes: int
+
+
+@dataclass(frozen=True)
+class HierarchySearchResult:
+    query: str
+    limit: int
+    matches: tuple[HierarchyScope, ...]
+    total_matches: int
+    truncated: bool
+    index_truncated: bool
+    visited_scopes: int
+    warnings: tuple[str, ...] = ()
+    notices: tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any], label: str = "hierarchy search result"
+    ) -> "HierarchySearchResult":
+        expected = {
+            "schema",
+            "schema_version",
+            "query",
+            "limit",
+            "matches",
+            "total_matches",
+            "truncated",
+            "index_truncated",
+            "visited_scopes",
+            "warnings",
+            "notices",
+        }
+        if set(value) != expected:
+            raise InventoryError(
+                f"{label} fields must be exactly: {', '.join(sorted(expected))}"
+            )
+        if value.get("schema") != HIERARCHY_SEARCH_SCHEMA:
+            raise InventoryError(
+                f"{label}.schema must be {HIERARCHY_SEARCH_SCHEMA!r}"
+            )
+        if type(value.get("schema_version")) is not int or value.get(
+            "schema_version"
+        ) != 1:
+            raise InventoryError(f"{label}.schema_version must be integer 1")
+        query = value.get("query")
+        if not isinstance(query, str):
+            raise InventoryError(f"{label}.query must be a string")
+        normalized_query = normalize_hierarchy_query(query)
+        limit = validate_hierarchy_search_limit(value.get("limit"))
+        raw_matches = value.get("matches")
+        if not isinstance(raw_matches, list) or not all(
+            isinstance(item, Mapping) for item in raw_matches
+        ):
+            raise InventoryError(f"{label}.matches must be an array of objects")
+        matches = tuple(
+            HierarchyScope.from_mapping(item, f"{label}.matches[{index}]")
+            for index, item in enumerate(raw_matches)
+        )
+        paths = [item.path for item in matches]
+        if paths != sorted(paths) or len(paths) != len(set(paths)):
+            raise InventoryError(
+                f"{label}.matches must be sorted by unique hierarchy path"
+            )
+        if len(matches) > limit:
+            raise InventoryError(f"{label}.matches exceeds its declared limit")
+        total_matches = value.get("total_matches")
+        if type(total_matches) is not int or total_matches < len(matches):
+            raise InventoryError(
+                f"{label}.total_matches must be an integer >= returned matches"
+            )
+        if len(matches) != min(total_matches, limit):
+            raise InventoryError(
+                f"{label}.matches length is inconsistent with total_matches and limit"
+            )
+        truncated = value.get("truncated")
+        index_truncated = value.get("index_truncated")
+        if type(truncated) is not bool or type(index_truncated) is not bool:
+            raise InventoryError(
+                f"{label}.truncated and index_truncated must be booleans"
+            )
+        if truncated != (index_truncated or total_matches > len(matches)):
+            raise InventoryError(f"{label}.truncated is inconsistent with its evidence")
+        visited_scopes = value.get("visited_scopes")
+        if type(visited_scopes) is not int or visited_scopes < total_matches:
+            raise InventoryError(
+                f"{label}.visited_scopes must be an integer >= total_matches"
+            )
+        warnings = _string_array(value.get("warnings"), f"{label}.warnings")
+        notices = _string_array(value.get("notices"), f"{label}.notices")
+        return cls(
+            query=normalized_query,
+            limit=limit,
+            matches=matches,
+            total_matches=total_matches,
+            truncated=truncated,
+            index_truncated=index_truncated,
+            visited_scopes=visited_scopes,
+            warnings=warnings,
+            notices=notices,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema": HIERARCHY_SEARCH_SCHEMA,
+            "schema_version": 1,
+            "query": self.query,
+            "limit": self.limit,
+            "matches": [match.as_dict() for match in self.matches],
+            "total_matches": self.total_matches,
+            "truncated": self.truncated,
+            "index_truncated": self.index_truncated,
+            "visited_scopes": self.visited_scopes,
+            "warnings": list(self.warnings),
+            "notices": list(self.notices),
+        }
+
+
+def _string_array(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise InventoryError(f"{label} must be an array of strings")
+    return tuple(value)
+
+
+def normalize_hierarchy_query(value: str) -> str:
+    if not isinstance(value, str) or not value or value.isspace():
+        raise InventoryError("hierarchy regex must not be empty")
+    if any(character in value for character in "\x00\r\n"):
+        raise InventoryError("hierarchy regex must not contain NUL or newlines")
+    if len(value) > MAX_HIERARCHY_REGEX_LENGTH:
+        raise InventoryError(
+            "hierarchy regex must not exceed "
+            f"{MAX_HIERARCHY_REGEX_LENGTH} characters"
+        )
+    try:
+        re.compile(value)
+    except re.error as exc:
+        raise InventoryError(f"invalid hierarchy regex: {exc}") from exc
+    return value
+
+
+def validate_hierarchy_search_limit(value: Any) -> int:
+    if type(value) is not int or not 1 <= value <= MAX_HIERARCHY_SEARCH_LIMIT:
+        raise InventoryError(
+            "hierarchy search limit must be an integer between 1 and "
+            f"{MAX_HIERARCHY_SEARCH_LIMIT}"
+        )
+    return value
 
 
 def _verdi_npi_library_dir(environment: dict[str, str]) -> Path | None:
@@ -93,6 +299,203 @@ def _collector_diagnostics(
     return "\n".join(streams)
 
 
+def _resolve_live_paths(
+    collector: str | Path, elab_db: str | Path
+) -> tuple[Path, Path]:
+    try:
+        collector_path = Path(collector).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise InventoryError(f"cannot resolve NPI collector path: {exc}") from exc
+    if not collector_path.is_file():
+        raise InventoryError(f"NPI collector executable not found: {collector_path}")
+    try:
+        elab_db_path = Path(elab_db).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise InventoryError(
+            f"cannot resolve Verdi elaborated database path: {exc}"
+        ) from exc
+    if not elab_db_path.exists():
+        raise InventoryError(f"Verdi elaborated database not found: {elab_db_path}")
+    if not elab_db_path.is_dir():
+        raise InventoryError(
+            f"Verdi elaborated database must be a directory: {elab_db_path}"
+        )
+    if elab_db_path.name == "work.lib++":
+        raise InventoryError(
+            "work.lib++ is a compiled Verdi library, not an elaborated KDB"
+        )
+    return collector_path, elab_db_path
+
+
+def _load_hierarchy_index(path: str | Path) -> HierarchyIndex:
+    try:
+        with Path(path).open(encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise InventoryError(f"cannot read NPI hierarchy index: {exc}") from exc
+    if not isinstance(value, Mapping):
+        raise InventoryError("NPI hierarchy index root must be an object")
+    expected = {
+        "schema",
+        "schema_version",
+        "scopes",
+        "warnings",
+        "notices",
+        "truncated",
+        "visited_scopes",
+    }
+    if set(value) != expected:
+        raise InventoryError(
+            "NPI hierarchy index fields must be exactly: "
+            + ", ".join(sorted(expected))
+        )
+    if value.get("schema") != HIERARCHY_SCHEMA:
+        raise InventoryError(f"NPI hierarchy index schema must be {HIERARCHY_SCHEMA!r}")
+    if type(value.get("schema_version")) is not int or value.get(
+        "schema_version"
+    ) != 1:
+        raise InventoryError("NPI hierarchy index schema_version must be integer 1")
+    raw_scopes = value.get("scopes")
+    if not isinstance(raw_scopes, list) or not all(
+        isinstance(item, Mapping) for item in raw_scopes
+    ):
+        raise InventoryError("NPI hierarchy index scopes must be an array of objects")
+    scopes = tuple(
+        HierarchyScope.from_mapping(item, f"NPI hierarchy index scopes[{index}]")
+        for index, item in enumerate(raw_scopes)
+    )
+    paths = [scope.path for scope in scopes]
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise InventoryError(
+            "NPI hierarchy index scopes must be sorted by unique hierarchy path"
+        )
+    warnings = _string_array(value.get("warnings"), "NPI hierarchy index warnings")
+    notices = _string_array(value.get("notices"), "NPI hierarchy index notices")
+    truncated = value.get("truncated")
+    if type(truncated) is not bool:
+        raise InventoryError("NPI hierarchy index truncated must be a boolean")
+    visited_scopes = value.get("visited_scopes")
+    if type(visited_scopes) is not int or visited_scopes < len(scopes):
+        raise InventoryError(
+            "NPI hierarchy index visited_scopes must be an integer >= scopes length"
+        )
+    return HierarchyIndex(
+        scopes=scopes,
+        warnings=warnings,
+        notices=notices,
+        truncated=truncated,
+        visited_scopes=visited_scopes,
+    )
+
+
+def collect_hierarchy(
+    collector: str | Path,
+    *,
+    elab_db: str | Path,
+    timeout_seconds: int | None = None,
+    npi_lib_dir: str | Path | None = None,
+) -> HierarchyIndex:
+    collector_path, elab_db_path = _resolve_live_paths(collector, elab_db)
+    if timeout_seconds is not None and (
+        type(timeout_seconds) is not int or timeout_seconds < 1
+    ):
+        raise InventoryError("NPI hierarchy timeout must be a positive integer")
+    try:
+        with tempfile.TemporaryDirectory(prefix="rtl-rs-hierarchy-") as temp_name:
+            temp_dir = Path(temp_name)
+            output_path = temp_dir / "hierarchy.json"
+            command = [
+                str(collector_path),
+                "--list-hierarchy",
+                "--output",
+                str(output_path),
+                "--elab-db",
+                str(elab_db_path),
+            ]
+            try:
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    timeout=timeout_seconds,
+                    env=_collector_environment(npi_lib_dir),
+                    cwd=str(temp_dir),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise InventoryError(
+                    "NPI hierarchy collector timed out after "
+                    f"{timeout_seconds} second(s)"
+                ) from exc
+            except OSError as exc:
+                raise InventoryError(
+                    f"failed to start NPI hierarchy collector: {exc}"
+                ) from exc
+            except UnicodeError as exc:
+                raise InventoryError(
+                    f"failed to decode NPI hierarchy collector output: {exc}"
+                ) from exc
+            if completed.returncode != 0:
+                detail = _collector_diagnostics(completed, temp_dir)
+                raise InventoryError(
+                    "NPI hierarchy collector exited with code "
+                    f"{completed.returncode}"
+                    + (f":\n{detail}" if detail else "")
+                )
+            if not output_path.is_file():
+                raise InventoryError(
+                    "NPI hierarchy collector succeeded but did not create its output"
+                )
+            hierarchy = _load_hierarchy_index(output_path)
+            if hierarchy.notices:
+                detail = _collector_diagnostics(completed, temp_dir)
+                if detail:
+                    print(
+                        "NPI hierarchy partial-load diagnostics:\n" + detail,
+                        file=sys.stderr,
+                    )
+            return hierarchy
+    except OSError as exc:
+        raise InventoryError(
+            f"cannot create or write temporary NPI hierarchy files: {exc}"
+        ) from exc
+
+
+def search_hierarchy(
+    collector: str | Path,
+    query: str,
+    *,
+    elab_db: str | Path,
+    limit: int = DEFAULT_HIERARCHY_SEARCH_LIMIT,
+    timeout_seconds: int | None = None,
+    npi_lib_dir: str | Path | None = None,
+) -> HierarchySearchResult:
+    normalized_query = normalize_hierarchy_query(query)
+    normalized_limit = validate_hierarchy_search_limit(limit)
+    pattern = re.compile(normalized_query)
+    hierarchy = collect_hierarchy(
+        collector,
+        elab_db=elab_db,
+        timeout_seconds=timeout_seconds,
+        npi_lib_dir=npi_lib_dir,
+    )
+    matching = tuple(
+        scope for scope in hierarchy.scopes if pattern.search(scope.path) is not None
+    )
+    returned = matching[:normalized_limit]
+    truncated = hierarchy.truncated or len(matching) > len(returned)
+    return HierarchySearchResult(
+        query=normalized_query,
+        limit=normalized_limit,
+        matches=returned,
+        total_matches=len(matching),
+        truncated=truncated,
+        index_truncated=hierarchy.truncated,
+        visited_scopes=hierarchy.visited_scopes,
+        warnings=hierarchy.warnings,
+        notices=hierarchy.notices,
+    )
+
+
 def collect_inventory(
     collector: str | Path,
     specs: Iterable[SpecRow],
@@ -104,20 +507,7 @@ def collect_inventory(
     keep_inventory: str | Path | None = None,
     npi_lib_dir: str | Path | None = None,
 ) -> Inventory:
-    collector_path = Path(collector).resolve()
-    if not collector_path.is_file():
-        raise InventoryError(f"NPI collector executable not found: {collector_path}")
-    elab_db_path = Path(elab_db).expanduser().resolve()
-    if not elab_db_path.exists():
-        raise InventoryError(f"Verdi elaborated database not found: {elab_db_path}")
-    if not elab_db_path.is_dir():
-        raise InventoryError(
-            f"Verdi elaborated database must be a directory: {elab_db_path}"
-        )
-    if elab_db_path.name == "work.lib++":
-        raise InventoryError(
-            "work.lib++ is a compiled Verdi library, not an elaborated KDB"
-        )
+    collector_path, elab_db_path = _resolve_live_paths(collector, elab_db)
     if (
         type(config.crg_trace_max_depth) is not int
         or not 1 <= config.crg_trace_max_depth <= MAX_CRG_TRACE_DEPTH

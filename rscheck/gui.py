@@ -16,18 +16,18 @@ try:
     import tkinter as tk
     import tkinter.font as tkfont
     from tkinter import filedialog, messagebox, ttk
-    from tkinter.scrolledtext import ScrolledText
+    from . import gui_style as design
 except ImportError as exc:  # pragma: no cover - exercised on minimal Linux installs
     tk = None  # type: ignore[assignment]
     tkfont = None  # type: ignore[assignment]
     filedialog = None  # type: ignore[assignment]
     messagebox = None  # type: ignore[assignment]
     ttk = None  # type: ignore[assignment]
-    ScrolledText = None  # type: ignore[assignment]
     _TK_IMPORT_ERROR: Exception | None = exc
 else:
     _TK_IMPORT_ERROR = None
 
+from . import __version__
 from .config import (
     config_from_dict,
     config_to_dict,
@@ -45,14 +45,17 @@ from .gui_backend import (
     ProcessController,
     ProcessResult,
     build_check_command,
+    build_position_hierarchy_search_command,
     build_validate_command,
     default_columns,
     find_project_root,
     format_command,
     load_report,
+    load_position_hierarchy_search,
     load_validation_rows,
 )
 from .model import FIELD_NAMES, ModuleRule, RsCheckError, ToolConfig
+from .npi_runner import HierarchySearchResult
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class WorkerOutcome:
     action: str
     process: ProcessResult | None = None
     report: LoadedReport | None = None
+    hierarchy_search: HierarchySearchResult | None = None
     validation_rows: tuple[Mapping[str, Any], ...] = ()
     error: str = ""
 
@@ -70,11 +74,34 @@ def _evidence_payload(
     spec = record.get("spec", {})
     evidence: dict[str, Any] = {
         "spec": spec,
+        "instance_match": record.get("instance_match"),
         "module_rule": record.get("module_rule"),
         "step_check": record.get("step_check"),
         "crg_source_check": record.get("crg_source_check"),
         "matched_instances": record.get("matched_instances", []),
     }
+    match = record.get("instance_match")
+    if isinstance(match, Mapping):
+        if match.get("mode") == "RS_route":
+            explanation = (
+                f"RS_inst 为空。在 {match.get('position')} 中找到 {match.get('candidate_count')} 个 "
+                f"{match.get('RS_module')} 实例，仅用本地例化名与 {match.get('query')!r} 比较。"
+                "区分大小写，增、删、改一个字符各计 1，距离越小越接近。"
+            )
+            if match.get("status") == "position_not_found":
+                explanation = f"未找到层次 {match.get('position')}，未执行 RS_route 匹配。"
+            elif match.get("status") == "ambiguous":
+                explanation += f"最小距离 {match.get('best_distance')}，有 {match.get('tied_best_count')} 个并列，未选中。"
+            elif isinstance(match.get("selected"), Mapping):
+                explanation += f"唯一最近实例：{match['selected'].get('full_name')}（距离 {match.get('best_distance')}）。"
+            else:
+                explanation += "没有同模块候选，未选中。"
+            explanation += " top_candidates 最多列出前 5 项。"
+        else:
+            explanation = "已填写 RS_inst，按完整本地名称或前缀加配置的后缀规则匹配。"
+            if match.get("route_ignored"):
+                explanation += " 本行填写的 RS_route 不参与选择。"
+        evidence = {"例化匹配说明": explanation, **evidence}
     if isinstance(spec, Mapping):
         evidence["crg_source_resolution"] = _crg_source_display(spec)
     if finding is not None:
@@ -87,6 +114,76 @@ def _evidence_payload(
             "actual": finding.get("actual"),
         }
     return evidence
+
+
+def _instance_display(spec: Mapping[str, Any], record: Mapping[str, Any]) -> str:
+    if spec.get("RS_inst") or not spec.get("RS_route"):
+        return str(spec.get("RS_inst", ""))
+    match = record.get("instance_match")
+    label = f"RS_route: {spec['RS_route']}"
+    if not isinstance(match, Mapping):
+        return f"{label}（待 RTL 匹配）"
+    selected = match.get("selected")
+    if isinstance(selected, Mapping):
+        return f"{label} → {selected.get('name')}（距离 {selected.get('distance')}）"
+    reason = {"ambiguous": "最近候选并列", "no_candidates": "无同模块实例",
+              "position_not_found": "层次不存在"}.get(match.get("status"), "未选中")
+    return f"{label}（{reason}）"
+
+
+def _review_sections(
+    record: Mapping[str, Any], payload: Mapping[str, Any],
+    finding: Mapping[str, Any] | None = None,
+) -> list[tuple[str, str]]:
+    """Concise human-readable inspector; the original evidence remains available."""
+    spec = payload["spec"]
+    findings = record.get("findings", [])
+    is_global = spec.get("row") == "-" and spec.get("Intf_type") == "GLOBAL"
+    sections = []
+    if finding:
+        lines = [str(finding.get("message", ""))]
+        for key, label in (("expected", "期望"), ("actual", "实际")):
+            value = finding.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                lines.append(f"{label}：{value}")
+        sections.append((f"{str(finding.get('severity', '')).upper()}   /   {finding.get('code', '')}", "\n".join(lines)))
+    elif is_global:
+        sections.append(("全局诊断", "从左侧选择一项查看原因，原始 JSON 保留完整证据。"))
+    elif "passed" not in record:
+        sections.append(("Excel 已验证", "此步骤仅验证规格表。运行 RTL 检查后可查看拍数和实例证据。"))
+    else:
+        step = record.get("step_check") or {}
+        # Report v2 has only a physical count; mirror the legacy table column.
+        actual = step.get("effective_step", len(record.get("matched_instances", [])))
+        title = "需处理" if not record["passed"] else "有警告" if findings else "检查通过"
+        sections.append((title, f"实际 {'未确定' if actual is None else actual} / 期望 {spec.get('step', '—')} 拍"
+                         f"     ·     匹配 {len(record.get('matched_instances', []))} 个物理实例"))
+    if not is_global:
+        scope = _position_display(spec)
+        if scope:
+            sections.append(("检查对象", f"{spec.get('RS_module', '')}   /   {scope}"))
+        match = record.get("instance_match") or {}
+        if match.get("mode") == "RS_route":
+            selected = match.get("selected") or {}
+            result = selected.get("full_name") or {
+                "ambiguous": "最小距离并列，未选择实例", "position_not_found": "层次不存在",
+                "no_candidates": "无同模块候选",
+            }.get(match.get("status"), "未选中")
+            detail = f"{match.get('candidate_count', 0)} 个候选"
+            if match.get("best_distance") is not None:
+                detail += f"   ·   最小编辑距离 {match['best_distance']}   ·   最近候选 {match['tied_best_count']} 个"
+            sections.append(("例化匹配 · RS_route", f"{match['query']} → {result}\n{detail}"))
+        elif payload.get("例化匹配说明"):
+            sections.append(("例化匹配 · RS_inst", payload["例化匹配说明"]))
+        if match.get("top_candidates"):
+            sections.append(("最近候选 · 字符编辑距离", "\n".join(
+                f"{c['distance']}    {c['full_name']}" for c in match["top_candidates"])))
+        elif record.get("matched_instances"):
+            names = [i.get("full_name", "") for i in record["matched_instances"][:3]]
+            if len(record["matched_instances"]) > len(names):
+                names.append("更多实例见原始 JSON")
+            sections.append(("选中的实例", "\n".join(names)))
+    return sections
 
 
 def _parse_step_parameters(value: str) -> tuple[str, ...]:
@@ -222,10 +319,12 @@ class RsCheckApp:
         self.events: queue.Queue[WorkerOutcome] = queue.Queue()
         self._closing = False
         self._running = False
+        self._active_action = ""
         self._cancel_requested = threading.Event()
         self._cancel_guard = threading.Lock()
         self._result_records: dict[str, Mapping[str, Any]] = {}
         self._finding_records: dict[str, Mapping[str, Any]] = {}
+        self._issue_rows: set[str] = set()
         self._last_json_path = ""
         self._last_csv_path = ""
         self._saved_control_states: dict[Any, str] = {}
@@ -239,6 +338,10 @@ class RsCheckApp:
         self._position_mappings_dirty = False
         self._editing_position_alias = ""
         self._position_tree_aliases: dict[str, str] = {}
+        self._position_hierarchy_dialog: Any | None = None
+        self._position_hierarchy_tree: Any | None = None
+        self._position_hierarchy_paths: dict[str, str] = {}
+        self._position_hierarchy_close_pending = False
         self._crg_source_mappings: dict[str, str] = {}
         self._crg_source_mappings_dirty = False
         self._editing_crg_source_alias = ""
@@ -258,43 +361,15 @@ class RsCheckApp:
         return self._running
 
     def _configure_root(self) -> None:
-        self.root.title("RTL 打拍例化检查工具")
-        self.root.geometry("1180x780")
+        self.root.title("RS Studio · RTL 打拍例化检查工具")
+        # Leave room for the desktop panels on common 1366x768 VM desktops.
+        w = max(980, min(1240, self.root.winfo_screenwidth() - 44))
+        h = max(680, min(800, self.root.winfo_screenheight() - 84))
+        self.root.geometry(f"{w}x{h}")
         self.root.minsize(980, 680)
         self.root.option_add("*tearOff", False)
 
-        style = ttk.Style(self.root)
-        if "clam" in style.theme_names():
-            style.theme_use("clam")
-        style.configure("TFrame", background="#f4f6f8")
-        style.configure("TLabel", background="#f4f6f8", foreground="#20262d")
-        style.configure("TLabelframe", background="#f4f6f8", bordercolor="#c8d0d8")
-        style.configure(
-            "TLabelframe.Label",
-            background="#f4f6f8",
-            foreground="#20262d",
-            font=("TkDefaultFont", 10, "bold"),
-        )
-        style.configure("Primary.TButton", padding=(14, 7))
-        style.configure("Danger.TButton", padding=(14, 7), foreground="#9f1d20")
-        style.configure("Summary.TLabel", font=("TkDefaultFont", 10, "bold"))
-        style.configure("Treeview", rowheight=26, background="#ffffff", fieldbackground="#ffffff")
-        style.configure("Treeview.Heading", font=("TkDefaultFont", 9, "bold"))
-
-        try:
-            families = set(tkfont.families(self.root))
-            for candidate in (
-                "Microsoft YaHei UI",
-                "Noto Sans CJK SC",
-                "WenQuanYi Micro Hei",
-                "DejaVu Sans",
-            ):
-                if candidate in families:
-                    tkfont.nametofont("TkDefaultFont").configure(family=candidate, size=10)
-                    tkfont.nametofont("TkTextFont").configure(family=candidate, size=10)
-                    break
-        except Exception:
-            pass
+        self.ui = design.StudioTheme(self.root)
 
     def _create_variables(self) -> None:
         example_excel = self.project_root / "examples" / "specs.csv"
@@ -325,6 +400,8 @@ class RsCheckApp:
         self.position_alias_var = tk.StringVar()
         self.position_path_var = tk.StringVar()
         self.position_mapping_status_var = tk.StringVar(value="映射 0")
+        self.position_hierarchy_regex_var = tk.StringVar()
+        self.position_hierarchy_status_var = tk.StringVar(value="尚未查询")
         self.crg_source_search_var = tk.StringVar()
         self.crg_source_alias_var = tk.StringVar()
         self.crg_source_path_var = tk.StringVar()
@@ -341,6 +418,9 @@ class RsCheckApp:
         self.csv_report_var = tk.StringVar(value=str(output / "rs_report.csv"))
 
         self.status_var = tk.StringVar(value="就绪")
+        self.only_issues_var = tk.BooleanVar(value=False)
+        self.advanced_options_var = tk.BooleanVar(value=False)
+        self.result_count_var = tk.StringVar()
         self.summary_state_var = tk.StringVar(value="未运行")
         self.summary_rows_var = tk.StringVar(value="行数 0")
         self.summary_pass_var = tk.StringVar(value="通过 0")
@@ -349,25 +429,26 @@ class RsCheckApp:
         self.summary_warnings_var = tk.StringVar(value="警告 0")
 
     def _build_ui(self) -> None:
-        self.root.configure(background="#f4f6f8")
-        self.root.rowconfigure(0, weight=1)
-        self.root.columnconfigure(0, weight=1)
+        self.root.configure(background=design.PAGE)
+        self.root.rowconfigure(1, weight=1)
+        self.root.columnconfigure(1, weight=1)
 
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 4))
-
-        self.setup_tab = ttk.Frame(self.notebook, padding=12)
-        self.rules_tab = ttk.Frame(self.notebook, padding=10)
-        self.positions_tab = ttk.Frame(self.notebook, padding=10)
-        self.crg_sources_tab = ttk.Frame(self.notebook, padding=10)
-        self.results_tab = ttk.Frame(self.notebook, padding=10)
-        self.log_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.setup_tab, text="检查配置")
-        self.notebook.add(self.rules_tab, text="模块规则库")
-        self.notebook.add(self.positions_tab, text="Position 映射库")
-        self.notebook.add(self.crg_sources_tab, text="CRG Source映射库")
-        self.notebook.add(self.results_tab, text="检查结果")
-        self.notebook.add(self.log_tab, text="运行日志")
+        self.notebook = ttk.Notebook(self.root, style="Workspace.TNotebook", takefocus=False)
+        self.notebook.grid(row=1, column=1, sticky="nsew", padx=(16, 14), pady=(12, 10))
+        (self.setup_tab, self.rules_tab, self.positions_tab, self.crg_sources_tab,
+         self.results_tab, self.log_tab) = [ttk.Frame(self.notebook, style="Page.TFrame") for _ in range(6)]
+        self._pages = (
+            (self.setup_tab, "setup", "检查配置", "检查配置", "工作区", "配置规格表、列映射和 RTL 数据来源。"),
+            (self.results_tab, "results", "检查结果", "检查结果", "工作区", "查看有效拍数，定位异常并核对例化匹配证据。"),
+            (self.log_tab, "log", "运行日志", "运行日志", "工作区", "追溯本次会话的实际命令、输出和退出码。"),
+            (self.rules_tab, "rules", "模块规则库", "模块规则库", "数据库", "维护各类 RS 模块的端口、门控与拍数计算规则。"),
+            (self.positions_tab, "positions", "Position 映射库", "Position 映射", "数据库", "把 Excel 简写映射到 RTL 全路径，支持从 Verdi 查询。"),
+            (self.crg_sources_tab, "crg", "CRG Source映射库", "CRG 映射", "数据库", "维护时钟来源简称与 RTL 实例全路径的对应关系。"),
+        )
+        for page, _icon, title, *_ in self._pages:
+            self.notebook.add(page, text=title)
+        self._build_navigation()
+        self._build_page_header()
 
         self._build_setup_tab()
         self._build_rules_tab()
@@ -376,15 +457,85 @@ class RsCheckApp:
         self._build_results_tab()
         self._build_log_tab()
         self._build_status_bar()
+        self.notebook.bind("<<NotebookTabChanged>>", self._sync_navigation)
+        self._sync_navigation()
+
+    def _build_navigation(self) -> None:
+        rail = tk.Frame(self.root, width=166, background=design.NAV)
+        rail.grid(row=0, column=0, rowspan=3, sticky="nsew")
+        rail.pack_propagate(False)
+        brand = tk.Frame(rail, bg=design.NAV)
+        brand.pack(fill="x", padx=13, pady=(20, 0))
+        tk.Label(brand, image=self.ui.mark, bg=design.NAV, borderwidth=0).pack(side="left", padx=(0, 7))
+        tk.Label(brand, text="RS Studio", bg=design.NAV, fg=design.INK,
+                 font=(self.ui.wordmark, 16, "normal")).pack(side="left")
+        tk.Label(rail, text="RTL 验证工作台", bg=design.NAV, fg=design.MUTED,
+                 font=self.ui.f(9)).pack(anchor="w", padx=16, pady=(5, 16))
+        tk.Frame(rail, height=1, bg=design.LINE).pack(fill="x", padx=14)
+        self.nav_buttons = {}
+        last_group = None
+        for page, icon, _title, label, group, _hint in self._pages:
+            if group != last_group:
+                tk.Label(rail, text=group, bg=design.NAV, fg=design.MUTED, font=self.ui.f(9)).pack(
+                    anchor="w", padx=16, pady=(17, 5))
+                last_group = group
+            button = ttk.Button(rail, text=label, image=self.ui.icon(icon), compound="left",
+                                style="Nav.TButton", command=lambda p=page: self.notebook.select(p))
+            button.pack(fill="x", padx=7, pady=1)
+            self.nav_buttons[str(page)] = button
+        foot = tk.Frame(rail, bg=design.NAV)
+        foot.pack(side="bottom", fill="x", padx=15, pady=14)
+        scope = tk.Canvas(foot, bg=design.NAV, height=30, width=125, highlightthickness=0)
+        scope.pack(fill="x", pady=(0, 5))
+        for y in (6, 17, 27):
+            scope.create_line(0,y,136,y, fill=design.LINE, dash=(2,4))
+        scope.create_line(0,23,18,23,18,11,41,11,41,22,65,22,65,6,86,6,86,17,112,17,112,10,135,10,
+                          width=2, fill=design.CLAY)
+        tk.Label(foot, text="配置文件", bg=design.NAV, fg=design.MUTED, font=self.ui.f(9)).pack(anchor="w")
+        current = tk.Label(foot, bg=design.NAV, fg=design.INK, font=self.ui.code(9), anchor="w")
+        current.pack(fill="x", pady=(2, 5))
+        filename_font = tkfont.Font(root=self.root, font=self.ui.code(9))
+        def sync_file(*_):
+            name = Path(self.config_var.get()).name
+            tail = name
+            while tail and filename_font.measure(tail if tail == name else "…" + tail) > 126:
+                tail = tail[1:]
+            current.configure(text=(tail if tail == name else "…" + tail) or "未选择")
+        self.config_var.trace_add("write", sync_file)
+        sync_file()
+        tk.Frame(foot, height=1, bg=design.LINE).pack(fill="x", pady=(4, 7))
+        tk.Label(foot, text=f"RS CHECKER  /  v{__version__}", anchor="w",
+                 bg=design.NAV, fg=design.MUTED, font=self.ui.code(8)).pack(fill="x")
+
+    def _build_page_header(self) -> None:
+        head = ttk.Frame(self.root, style="Page.TFrame", padding=(20, 11, 18, 3))
+        head.grid(row=0, column=1, sticky="ew")
+        head.columnconfigure(0, weight=1)
+        self.page_group = ttk.Label(head, style="Page.Muted.TLabel")
+        self.page_group.grid(row=0, column=0, sticky="w")
+        self.page_title = ttk.Label(head, style="Page.Title.TLabel")
+        self.page_title.grid(row=1, column=0, sticky="w")
+        self.page_hint = ttk.Label(head, style="Page.Muted.TLabel")
+        self.page_hint.grid(row=2, column=0, sticky="w")
+        self.mode_badge = ttk.Label(head, style="Badge.TLabel")
+        self.mode_badge.grid(row=0, column=1, rowspan=3, sticky="e")
+
+    def _sync_navigation(self, _event=None) -> None:
+        selected = self.notebook.select()
+        for page, _icon, title, _label, group, hint in self._pages:
+            active = str(page) == selected
+            self.nav_buttons[str(page)].configure(style="Selected.Nav.TButton" if active else "Nav.TButton")
+            if active:
+                self.page_group.configure(text=f"RTL 检查   /   {group}")
+                self.page_title.configure(text=title.replace("Source映", "Source 映"))
+                self.page_hint.configure(text=hint)
 
     def _build_setup_tab(self) -> None:
-        tab = self.setup_tab
+        self.setup_form = design.ScrollForm(self.setup_tab)
+        tab = self.setup_form.body
         tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=1)
-        tab.rowconfigure(1, weight=1)
-
-        input_group = ttk.LabelFrame(tab, text="规格输入", padding=10)
-        input_group.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        sheet_card, input_group = self.ui.card(tab, "01", "规格与配置", "Excel / CSV / TSV")
+        sheet_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         input_group.columnconfigure(1, weight=1)
         self._path_row(
             input_group,
@@ -423,20 +574,20 @@ class RsCheckApp:
             row=0, column=1, sticky="w", padx=(8, 18)
         )
         ttk.Label(excel_options, text="表头行").grid(row=0, column=2, sticky="w")
-        tk.Spinbox(
+        ttk.Spinbox(
             excel_options,
             from_=1,
             to=100000,
             textvariable=self.header_row_var,
-            width=7,
+            width=5,
         ).grid(row=0, column=3, sticky="w", padx=(8, 18))
         ttk.Label(excel_options, text="数据起始行").grid(row=0, column=4, sticky="w")
-        tk.Spinbox(
+        ttk.Spinbox(
             excel_options,
             from_=1,
             to=100000,
             textvariable=self.data_start_row_var,
-            width=7,
+            width=5,
         ).grid(row=0, column=5, sticky="w", padx=(8, 18))
         ttk.Checkbutton(
             excel_options,
@@ -444,12 +595,11 @@ class RsCheckApp:
             variable=self.header_check_var,
         ).grid(row=0, column=6, sticky="e")
 
-        columns_group = ttk.LabelFrame(
-            tab,
-            text="内部属性 -> Excel 列号（从 1 开始）",
-            padding=10,
-        )
-        columns_group.grid(row=1, column=0, sticky="nsew", padx=(0, 5))
+        middle = ttk.Frame(tab, style="Page.TFrame")
+        middle.grid(row=1, column=0, sticky="ew")
+        middle.columnconfigure(0, weight=3)
+        middle.columnconfigure(1, weight=2)
+        columns_card, columns_group = self.ui.card(middle, "03", "列映射", "从 1 开始")
         columns_group.columnconfigure(1, weight=1)
         columns_group.columnconfigure(3, weight=1)
         rows_per_block = (len(FIELD_NAMES) + 1) // 2
@@ -457,37 +607,53 @@ class RsCheckApp:
             row = index % rows_per_block
             block = index // rows_per_block
             label_column = block * 2
-            ttk.Label(columns_group, text=name).grid(
+            ttk.Label(columns_group, text="RS_route（可选）" if name == "RS_route" else name).grid(
                 row=row,
                 column=label_column,
                 sticky="w",
                 padx=(0 if block == 0 else 18, 8),
-                pady=8,
+                pady=4,
             )
-            tk.Spinbox(
+            ttk.Spinbox(
                 columns_group,
                 from_=1,
                 to=16384,
                 textvariable=self.column_vars[name],
-                width=8,
-            ).grid(row=row, column=label_column + 1, sticky="w", pady=8)
+                width=4,
+            ).grid(row=row, column=label_column + 1, sticky="w", pady=4)
+        ttk.Label(columns_group, text="RS_inst 留空时使用 RS_route。", style="Muted.TLabel").grid(
+            row=rows_per_block, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
-        self.source_group = ttk.LabelFrame(tab, text="RTL 数据来源", padding=10)
-        self.source_group.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
+        source_card, self.source_group = self.ui.card(middle, "02", "RTL 数据来源")
+        def place_cards(_event=None):
+            # Test the viewport, not the card size: hiding the scrollbar must
+            # not cause a stack/unstack loop near the breakpoint.
+            minimum = max(780, source_card.winfo_reqwidth() + columns_card.winfo_reqwidth() + 28)
+            stacked = self.setup_tab.winfo_width() < minimum
+            source_card.grid(row=0, column=0, columnspan=2 if stacked else 1, sticky="nsew",
+                             padx=(0, 0 if stacked else 5))
+            columns_card.grid(row=1 if stacked else 0, column=0 if stacked else 1,
+                              columnspan=2 if stacked else 1, sticky="nsew",
+                              padx=(0 if stacked else 5, 0), pady=(10 if stacked else 0, 0))
+        self.setup_tab.bind("<Configure>", place_cards, add="+")
+        self._arrange_setup = place_cards
+        place_cards()
         self.source_group.columnconfigure(0, weight=1)
         self.source_group.rowconfigure(1, weight=1)
         mode_bar = ttk.Frame(self.source_group)
         mode_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ttk.Radiobutton(
             mode_bar,
-            text="在线 NPI（elaborated KDB）",
+            text="在线 NPI",
+            style="Segment.TRadiobutton",
             variable=self.source_mode_var,
             value=LIVE_SOURCE,
             command=self._update_source_mode,
-        ).pack(side="left", padx=(0, 16))
+        ).pack(side="left", padx=(0, 4))
         ttk.Radiobutton(
             mode_bar,
             text="离线 Inventory",
+            style="Segment.TRadiobutton",
             variable=self.source_mode_var,
             value=INVENTORY_SOURCE,
             command=self._update_source_mode,
@@ -510,30 +676,43 @@ class RsCheckApp:
             self.elab_db_var,
             lambda: self._choose_directory(self.elab_db_var),
         )
+        ttk.Label(self.live_frame, text="使用已展开的 *.elab++ 库", style="Muted.TLabel").grid(
+            row=2, column=1, columnspan=2, sticky="w", padx=(8,0))
+        advanced_toggle = ttk.Checkbutton(self.live_frame, text="高级采集设置", variable=self.advanced_options_var)
+        advanced_toggle.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8,2))
+        self.live_advanced = ttk.Frame(self.live_frame)
+        self.live_advanced.columnconfigure(1, weight=1)
         self._compact_path_row(
-            self.live_frame,
-            2,
+            self.live_advanced,
+            0,
             "NPI 库目录",
             self.npi_lib_var,
             lambda: self._choose_directory(self.npi_lib_var),
         )
         self._compact_path_row(
-            self.live_frame,
-            3,
+            self.live_advanced,
+            1,
             "保存 Inventory",
             self.keep_inventory_var,
             lambda: self._choose_save(
                 self.keep_inventory_var, ".json", (("JSON", "*.json"),)
             ),
         )
-        ttk.Label(self.live_frame, text="超时（秒）").grid(row=4, column=0, sticky="w", pady=5)
-        tk.Spinbox(
-            self.live_frame,
+        ttk.Label(self.live_advanced, text="超时（秒）").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Spinbox(
+            self.live_advanced,
             from_=1,
             to=86400,
             textvariable=self.npi_timeout_var,
             width=10,
-        ).grid(row=4, column=1, sticky="w", padx=(8, 0), pady=5)
+        ).grid(row=2, column=1, sticky="w", padx=(8, 0), pady=5)
+        def show_advanced(*_):
+            if self.advanced_options_var.get():
+                self.live_advanced.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2,0))
+            else:
+                self.live_advanced.grid_remove()
+            self.root.after_idle(place_cards)
+        self.advanced_options_var.trace_add("write", show_advanced)
 
         self.inventory_frame = ttk.Frame(self.source_group)
         self.inventory_frame.columnconfigure(1, weight=1)
@@ -546,11 +725,14 @@ class RsCheckApp:
                 self.inventory_var, (("Inventory JSON", "*.json"), ("所有文件", "*.*"))
             ),
         )
+        ttk.Button(self.inventory_frame, text="使用示例 Inventory", style="Quiet.TButton",
+                   command=lambda: self.inventory_var.set(str(self.project_root / "examples" / "inventory.json"))
+                   ).grid(row=1, column=1, sticky="w", pady=(0, 4))
 
         trace_options = ttk.Frame(self.source_group)
         trace_options.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(trace_options, text="CRG Trace 最大层数").pack(side="left")
-        tk.Spinbox(
+        ttk.Spinbox(
             trace_options,
             from_=1,
             to=256,
@@ -558,8 +740,8 @@ class RsCheckApp:
             width=8,
         ).pack(side="left", padx=(8, 0))
 
-        output_group = ttk.LabelFrame(tab, text="报告输出", padding=10)
-        output_group.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        output_card, output_group = self.ui.card(tab, "04", "报告输出")
+        output_card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         output_group.columnconfigure(1, weight=1)
         output_group.columnconfigure(4, weight=1)
         ttk.Label(output_group, text="JSON").grid(row=0, column=0, sticky="w")
@@ -585,53 +767,32 @@ class RsCheckApp:
             ),
         ).grid(row=0, column=5)
 
-        actions = ttk.Frame(tab)
-        actions.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        self.validate_button = ttk.Button(
-            actions,
-            text="验证 Excel",
-            command=lambda: self._start_operation("validate"),
-        )
-        self.validate_button.pack(side="left")
-        self.run_button = ttk.Button(
-            actions,
-            text="运行 RTL 检查",
-            style="Primary.TButton",
-            command=lambda: self._start_operation("check"),
-        )
-        self.run_button.pack(side="left", padx=8)
-        self.cancel_button = ttk.Button(
-            actions,
-            text="取消",
-            style="Danger.TButton",
-            state="disabled",
-            command=self._cancel_operation,
-        )
-        self.cancel_button.pack(side="left")
-        ttk.Button(actions, text="打开报告目录", command=self._open_report_directory).pack(
-            side="right"
-        )
+
+    def _database_list(self, tab, search_label, query, status):
+        edge = ttk.Frame(tab, style="Surface.TFrame", padding=(10, 8))
+        edge.grid(row=0, column=0, rowspan=2, sticky="nsew")
+        toolbar = ttk.Frame(edge, padding=(12, 8))
+        toolbar.pack(fill="x")
+        ttk.Label(toolbar, text=search_label, style="CardTitle.TLabel").pack(side="left")
+        ttk.Entry(toolbar, textvariable=query, width=26).pack(side="left", padx=9)
+        count = ttk.Label(toolbar, textvariable=status, style="Badge.TLabel")
+        count.pack(side="right")
+        status.trace_add("write", lambda *_: count.configure(
+            style="Dirty.Badge.TLabel" if "未保存" in status.get() else "Badge.TLabel"))
+        frame = ttk.Frame(edge)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        return frame
 
     def _build_rules_tab(self) -> None:
         tab = self.rules_tab
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(tab)
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        toolbar.columnconfigure(1, weight=1)
-        ttk.Label(toolbar, text="搜索模块").grid(row=0, column=0, sticky="w")
-        ttk.Entry(toolbar, textvariable=self.module_search_var).grid(
-            row=0, column=1, sticky="ew", padx=(8, 18)
+        tree_frame = self._database_list(
+            tab, "搜索模块", self.module_search_var, self.module_rule_status_var
         )
-        ttk.Label(toolbar, textvariable=self.module_rule_status_var).grid(
-            row=0, column=2, sticky="e"
-        )
-
-        tree_frame = ttk.Frame(tab)
-        tree_frame.grid(row=1, column=0, sticky="nsew")
-        tree_frame.rowconfigure(0, weight=1)
-        tree_frame.columnconfigure(0, weight=1)
         self.rule_tree = ttk.Treeview(
             tree_frame,
             columns=(
@@ -644,18 +805,20 @@ class RsCheckApp:
             show="headings",
             selectmode="browse",
         )
-        for name, title, width in (
-            ("module", "RS_module", 210),
-            ("rs_cfg_en", "RS_CRG_EN", 130),
-            ("clk_port", "clk 端口", 105),
-            ("rst_port", "rst 端口", 105),
-            ("step_parameters", "决定 step 的 parameters", 300),
+        # Start below the available width at 980px. Older ttk builds only
+        # expand a stretch column on first map; they won't shrink an oversized one.
+        for name, title, width, minimum in (
+            ("module", "RS_module", 180, 105),
+            ("rs_cfg_en", "RS_CRG_EN", 110, 85),
+            ("clk_port", "clk 端口", 95, 70),
+            ("rst_port", "rst 端口", 95, 70),
+            ("step_parameters", "决定 step 的 parameters", 225, 135),
         ):
-            self.rule_tree.heading(name, text=title)
+            self.rule_tree.heading(name, text=title, anchor="w")
             self.rule_tree.column(
                 name,
                 width=width,
-                minwidth=100,
+                minwidth=minimum,
                 stretch=name == "step_parameters",
             )
         rule_scroll = ttk.Scrollbar(
@@ -666,8 +829,8 @@ class RsCheckApp:
         rule_scroll.grid(row=0, column=1, sticky="ns")
         self.rule_tree.bind("<<TreeviewSelect>>", self._on_rule_selected)
 
-        editor = ttk.LabelFrame(tab, text="规则编辑", padding=10)
-        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        edge, editor = self.ui.card(tab, "DB", "规则编辑", "应用修改后，再保存到配置")
+        edge.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         editor.columnconfigure(1, weight=1)
         editor.columnconfigure(3, weight=1)
         ttk.Label(editor, text="RS_module").grid(row=0, column=0, sticky="w")
@@ -698,14 +861,14 @@ class RsCheckApp:
             row=2, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
 
-        actions = ttk.Frame(tab)
+        actions = ttk.Frame(tab, style="Page.TFrame")
         actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="新建", command=self._new_rule).pack(side="left")
-        ttk.Button(actions, text="应用修改", command=self._apply_rule).pack(
+        ttk.Button(actions, text="新建", style="Page.TButton", command=self._new_rule).pack(side="left")
+        ttk.Button(actions, text="应用修改", style="Page.TButton", command=self._apply_rule).pack(
             side="left", padx=8
         )
-        ttk.Button(actions, text="删除", command=self._delete_rule).pack(side="left")
-        ttk.Button(actions, text="保存规则库", command=self._save_module_rules).pack(
+        ttk.Button(actions, text="删除", style="Page.Danger.TButton", command=self._delete_rule).pack(side="left")
+        ttk.Button(actions, text="保存规则库", style="Page.Primary.TButton", command=self._save_module_rules).pack(
             side="right"
         )
         self.module_search_var.trace_add("write", lambda *_: self._render_rule_tree())
@@ -715,21 +878,9 @@ class RsCheckApp:
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(tab)
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        toolbar.columnconfigure(1, weight=1)
-        ttk.Label(toolbar, text="搜索 position").grid(row=0, column=0, sticky="w")
-        ttk.Entry(toolbar, textvariable=self.position_search_var).grid(
-            row=0, column=1, sticky="ew", padx=(8, 18)
+        tree_frame = self._database_list(
+            tab, "搜索 Position", self.position_search_var, self.position_mapping_status_var
         )
-        ttk.Label(toolbar, textvariable=self.position_mapping_status_var).grid(
-            row=0, column=2, sticky="e"
-        )
-
-        tree_frame = ttk.Frame(tab)
-        tree_frame.grid(row=1, column=0, sticky="nsew")
-        tree_frame.rowconfigure(0, weight=1)
-        tree_frame.columnconfigure(0, weight=1)
         self.position_tree = ttk.Treeview(
             tree_frame,
             columns=("alias", "rtl_path"),
@@ -740,7 +891,7 @@ class RsCheckApp:
             ("alias", "position 简写", 280, False),
             ("rtl_path", "RTL 层次全路径", 1200, False),
         ):
-            self.position_tree.heading(name, text=title)
+            self.position_tree.heading(name, text=title, anchor="w")
             self.position_tree.column(
                 name, width=width, minwidth=140, stretch=stretch
             )
@@ -759,8 +910,8 @@ class RsCheckApp:
         position_xscroll.grid(row=1, column=0, sticky="ew")
         self.position_tree.bind("<<TreeviewSelect>>", self._on_position_selected)
 
-        editor = ttk.LabelFrame(tab, text="Position 映射编辑", padding=10)
-        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        edge, editor = self.ui.card(tab, "DB", "Position 映射编辑", "选中表格行即可编辑")
+        edge.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         editor.columnconfigure(1, weight=1)
         editor.columnconfigure(3, weight=3)
         ttk.Label(editor, text="position 简写").grid(row=0, column=0, sticky="w")
@@ -769,49 +920,276 @@ class RsCheckApp:
         )
         ttk.Label(editor, text="RTL 层次全路径").grid(row=0, column=2, sticky="w")
         ttk.Entry(editor, textvariable=self.position_path_var).grid(
-            row=0, column=3, sticky="ew", padx=(8, 0)
+            row=0, column=3, sticky="ew", padx=(8, 8)
+        )
+        self.position_hierarchy_pick_button = ttk.Button(
+            editor,
+            text="从 Verdi 选择",
+            style="Quiet.TButton",
+            command=self._open_position_hierarchy_search,
+        )
+        self.position_hierarchy_pick_button.grid(
+            row=0, column=4, sticky="e"
         )
 
-        actions = ttk.Frame(tab)
+        actions = ttk.Frame(tab, style="Page.TFrame")
         actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="新建", command=self._new_position_mapping).pack(
+        ttk.Button(actions, text="新建", style="Page.TButton", command=self._new_position_mapping).pack(
             side="left"
         )
         ttk.Button(
-            actions, text="应用修改", command=self._apply_position_mapping
+            actions, text="应用修改", style="Page.TButton", command=self._apply_position_mapping
         ).pack(side="left", padx=8)
         ttk.Button(
-            actions, text="删除", command=self._delete_position_mapping
+            actions, text="删除", style="Page.Danger.TButton", command=self._delete_position_mapping
         ).pack(side="left")
         ttk.Button(
-            actions, text="保存映射库", command=self._save_position_mappings
+            actions, text="保存映射库", style="Page.Primary.TButton", command=self._save_position_mappings
         ).pack(side="right")
         self.position_search_var.trace_add(
             "write", lambda *_: self._render_position_tree()
         )
+
+    def _open_position_hierarchy_search(self) -> None:
+        if self.running or self.controller.is_running:
+            return
+        existing = self._position_hierarchy_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except tk.TclError:
+                pass
+
+        dialog = tk.Toplevel(self.root)
+        self._position_hierarchy_dialog = dialog
+        self._position_hierarchy_close_pending = False
+        self._position_hierarchy_paths.clear()
+        self.position_hierarchy_status_var.set("尚未查询")
+        dialog.title("从 Verdi 选择 Position 全路径")
+        dialog.geometry("980x560")
+        dialog.minsize(760, 420)
+        dialog.configure(background=design.PAGE)
+        dialog.transient(self.root)
+        dialog.rowconfigure(2, weight=1)
+        dialog.columnconfigure(0, weight=1)
+        dialog.protocol("WM_DELETE_WINDOW", self._close_position_hierarchy_search)
+
+        header = ttk.Frame(dialog, style="Page.TFrame", padding=(18, 12))
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text="选择 Position 全路径", style="Page.Title.TLabel").pack(anchor="w")
+        ttk.Label(header, text="输入名称片段或正则，双击候选可回填；映射仍需应用并保存。",
+                  style="Page.Muted.TLabel").pack(anchor="w")
+        toolbar = ttk.Frame(dialog, style="Surface.TFrame", padding=(15, 11))
+        toolbar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Label(toolbar, text="全路径正则").grid(row=0, column=0, sticky="w")
+        self.position_hierarchy_query_entry = ttk.Entry(
+            toolbar, textvariable=self.position_hierarchy_regex_var
+        )
+        self.position_hierarchy_query_entry.grid(
+            row=0, column=1, sticky="ew", padx=(8, 8)
+        )
+        self.position_hierarchy_query_entry.bind(
+            "<Return>", lambda _event: self._start_position_hierarchy_search()
+        )
+        self.position_hierarchy_search_button = ttk.Button(
+            toolbar, text="查询", command=self._start_position_hierarchy_search
+        )
+        self.position_hierarchy_search_button.grid(row=0, column=2)
+        ttk.Label(toolbar, textvariable=self.position_hierarchy_status_var, style="Badge.TLabel").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(8, 0)
+        )
+
+        tree_frame = ttk.Frame(dialog, style="Surface.TFrame", padding=10)
+        tree_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=("path", "definition", "kind"),
+            show="headings",
+            selectmode="browse",
+        )
+        self._position_hierarchy_tree = tree
+        for name, title, width in (
+            ("path", "RTL 层次全路径", 720),
+            ("definition", "模块定义", 180),
+            ("kind", "类型", 100),
+        ):
+            tree.heading(name, text=title, anchor="w")
+            tree.column(name, width=width, minwidth=90, stretch=False)
+        vertical = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        horizontal = ttk.Scrollbar(
+            tree_frame, orient="horizontal", command=tree.xview
+        )
+        tree.configure(
+            yscrollcommand=vertical.set,
+            xscrollcommand=horizontal.set,
+        )
+        tree.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        tree.bind(
+            "<<TreeviewSelect>>", self._on_position_hierarchy_candidate_selected
+        )
+        tree.bind(
+            "<Double-1>", lambda _event: self._use_selected_position_hierarchy()
+        )
+
+        actions = ttk.Frame(dialog, padding=10)
+        actions.grid(row=3, column=0, sticky="ew")
+        self.position_hierarchy_cancel_button = ttk.Button(
+            actions,
+            text="取消查询",
+            state="disabled",
+            command=self._cancel_operation,
+        )
+        self.position_hierarchy_cancel_button.pack(side="left")
+        self.position_hierarchy_close_button = ttk.Button(
+            actions, text="关闭", command=self._close_position_hierarchy_search
+        )
+        self.position_hierarchy_close_button.pack(side="right")
+        self.position_hierarchy_use_button = ttk.Button(
+            actions,
+            text="使用所选路径",
+            state="disabled",
+            style="Primary.TButton",
+            command=self._use_selected_position_hierarchy,
+        )
+        self.position_hierarchy_use_button.pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+        self.position_hierarchy_query_entry.focus_set()
+
+    def _destroy_position_hierarchy_search(self) -> None:
+        dialog = self._position_hierarchy_dialog
+        self._position_hierarchy_dialog = None
+        self._position_hierarchy_tree = None
+        self._position_hierarchy_paths.clear()
+        self._position_hierarchy_close_pending = False
+        if dialog is None:
+            return
+        try:
+            if dialog.winfo_exists():
+                dialog.grab_release()
+                dialog.destroy()
+        except tk.TclError:
+            pass
+
+    def _close_position_hierarchy_search(self) -> None:
+        if self.running or self.controller.is_running:
+            self._position_hierarchy_close_pending = True
+            dialog = self._position_hierarchy_dialog
+            if dialog is not None:
+                try:
+                    dialog.grab_release()
+                    dialog.withdraw()
+                except tk.TclError:
+                    pass
+            self._cancel_operation()
+            return
+        self._destroy_position_hierarchy_search()
+
+    def _set_position_hierarchy_search_running(self, running: bool) -> None:
+        dialog = self._position_hierarchy_dialog
+        if dialog is None:
+            return
+        try:
+            if not dialog.winfo_exists():
+                return
+            self.position_hierarchy_query_entry.configure(
+                state="disabled" if running else "normal"
+            )
+            self.position_hierarchy_search_button.configure(
+                state="disabled" if running else "normal"
+            )
+            self.position_hierarchy_cancel_button.configure(
+                state="normal" if running else "disabled"
+            )
+            self.position_hierarchy_close_button.configure(
+                state="disabled" if running else "normal"
+            )
+            if running:
+                self.position_hierarchy_use_button.configure(state="disabled")
+            else:
+                self._on_position_hierarchy_candidate_selected()
+        except tk.TclError:
+            pass
+
+    def _clear_position_hierarchy_candidates(self) -> None:
+        tree = self._position_hierarchy_tree
+        self._position_hierarchy_paths.clear()
+        if tree is None:
+            return
+        for item in tree.get_children():
+            tree.delete(item)
+        self.position_hierarchy_use_button.configure(state="disabled")
+
+    def _render_position_hierarchy_candidates(
+        self, result: HierarchySearchResult
+    ) -> None:
+        tree = self._position_hierarchy_tree
+        if tree is None:
+            return
+        self._clear_position_hierarchy_candidates()
+        for index, match in enumerate(result.matches):
+            iid = f"position-hierarchy-{index}"
+            self._position_hierarchy_paths[iid] = match.path
+            tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(match.path, match.definition, match.kind),
+            )
+        if result.matches:
+            first = "position-hierarchy-0"
+            tree.selection_set(first)
+            tree.see(first)
+        status = f"匹配 {result.total_matches}，显示 {len(result.matches)}"
+        if result.index_truncated:
+            status += " · 层次索引不完整"
+        elif result.truncated:
+            status += " · 请收窄正则"
+        if result.notices:
+            status += " · KDB 部分加载"
+        self.position_hierarchy_status_var.set(status)
+        self._on_position_hierarchy_candidate_selected()
+
+    def _on_position_hierarchy_candidate_selected(self, _event: Any = None) -> None:
+        tree = self._position_hierarchy_tree
+        if tree is None:
+            return
+        selected = tree.selection()
+        enabled = bool(selected and selected[0] in self._position_hierarchy_paths)
+        self.position_hierarchy_use_button.configure(
+            state="normal" if enabled and not self.running else "disabled"
+        )
+
+    def _use_selected_position_hierarchy(self) -> None:
+        tree = self._position_hierarchy_tree
+        if tree is None:
+            return
+        selected = tree.selection()
+        if not selected:
+            return
+        path = self._position_hierarchy_paths.get(selected[0])
+        if not path:
+            return
+        self.position_path_var.set(path)
+        self.status_var.set("已选择 Verdi Position 全路径")
+        self._destroy_position_hierarchy_search()
 
     def _build_crg_sources_tab(self) -> None:
         tab = self.crg_sources_tab
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(tab)
-        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        toolbar.columnconfigure(1, weight=1)
-        ttk.Label(toolbar, text="搜索 CRG_source").grid(
-            row=0, column=0, sticky="w"
+        tree_frame = self._database_list(
+            tab, "搜索 CRG Source", self.crg_source_search_var, self.crg_source_mapping_status_var
         )
-        ttk.Entry(toolbar, textvariable=self.crg_source_search_var).grid(
-            row=0, column=1, sticky="ew", padx=(8, 18)
-        )
-        ttk.Label(toolbar, textvariable=self.crg_source_mapping_status_var).grid(
-            row=0, column=2, sticky="e"
-        )
-
-        tree_frame = ttk.Frame(tab)
-        tree_frame.grid(row=1, column=0, sticky="nsew")
-        tree_frame.rowconfigure(0, weight=1)
-        tree_frame.columnconfigure(0, weight=1)
         self.crg_source_tree = ttk.Treeview(
             tree_frame,
             columns=("alias", "rtl_path"),
@@ -822,7 +1200,7 @@ class RsCheckApp:
             ("alias", "CRG Source简称", 280, False),
             ("rtl_path", "RTL完整路径", 1200, False),
         ):
-            self.crg_source_tree.heading(name, text=title)
+            self.crg_source_tree.heading(name, text=title, anchor="w")
             self.crg_source_tree.column(
                 name, width=width, minwidth=140, stretch=stretch
             )
@@ -843,8 +1221,8 @@ class RsCheckApp:
             "<<TreeviewSelect>>", self._on_crg_source_selected
         )
 
-        editor = ttk.LabelFrame(tab, text="CRG Source 映射编辑", padding=10)
-        editor.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        edge, editor = self.ui.card(tab, "DB", "CRG Source 映射编辑", "选中表格行即可编辑")
+        edge.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         editor.columnconfigure(1, weight=1)
         editor.columnconfigure(3, weight=3)
         ttk.Label(editor, text="CRG Source简称").grid(
@@ -860,20 +1238,21 @@ class RsCheckApp:
             row=0, column=3, sticky="ew", padx=(8, 0)
         )
 
-        actions = ttk.Frame(tab)
+        actions = ttk.Frame(tab, style="Page.TFrame")
         actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="新建", command=self._new_crg_source_mapping).pack(
+        ttk.Button(actions, text="新建", style="Page.TButton", command=self._new_crg_source_mapping).pack(
             side="left"
         )
         ttk.Button(
-            actions, text="应用修改", command=self._apply_crg_source_mapping
+            actions, text="应用修改", style="Page.TButton", command=self._apply_crg_source_mapping
         ).pack(side="left", padx=8)
         ttk.Button(
-            actions, text="删除", command=self._delete_crg_source_mapping
+            actions, text="删除", style="Page.Danger.TButton", command=self._delete_crg_source_mapping
         ).pack(side="left")
         ttk.Button(
             actions,
             text="保存映射库",
+            style="Page.Primary.TButton",
             command=self._save_crg_source_mappings,
         ).pack(side="right")
         self.crg_source_search_var.trace_add(
@@ -886,27 +1265,49 @@ class RsCheckApp:
         tab.rowconfigure(2, weight=2)
         tab.columnconfigure(0, weight=1)
 
-        summary = ttk.Frame(tab)
+        summary = ttk.Frame(tab, style="Page.TFrame")
         summary.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        summary.columnconfigure(6, weight=1)
-        for index, variable in enumerate(
-            (
-                self.summary_state_var,
-                self.summary_rows_var,
-                self.summary_pass_var,
-                self.summary_fail_var,
-                self.summary_errors_var,
-                self.summary_warnings_var,
-            )
-        ):
-            ttk.Label(summary, textvariable=variable, style="Summary.TLabel").grid(
-                row=0, column=index, sticky="w", padx=(0, 22)
-            )
+        metrics = ((self.summary_state_var, "检查状态", design.INK),
+                   (self.summary_rows_var, "规格行", design.INK),
+                   (self.summary_pass_var, "通过行", design.SUCCESS),
+                   (self.summary_fail_var, "失败行", design.RED),
+                   (self.summary_errors_var, "错误", design.RED),
+                   (self.summary_warnings_var, "警告", design.AMBER))
+        self.metric_values = []
+        for i, (var, caption, color) in enumerate(metrics):
+            summary.columnconfigure(i, weight=1, uniform="metrics")
+            tile = ttk.Frame(summary, style="Metric.TFrame", padding=(8, 4))
+            tile.grid(row=0, column=i, sticky="nsew", padx=(0 if not i else 3, 0 if i == 5 else 3))
+            ttk.Label(tile, text=caption, style="Muted.TLabel").pack(anchor="w", padx=3, pady=(2,0))
+            val = tk.Label(tile, bg=design.PAPER, fg=color, font=self.ui.f(15, "bold"), anchor="w", pady=0)
+            val.pack(anchor="w", padx=3, pady=(0,2))
+            self.metric_values.append(val)
+        def refresh(*_):
+            state = self.summary_state_var.get()
+            ready = state in {"PASS", "FAIL", "VALID"}
+            for i, (var, _, color) in enumerate(metrics):
+                display = var.get().rsplit(" ", 1)[-1] if ready else "—"
+                if i == 0:
+                    display = {"未运行": "待运行", "RUNNING": "运行中", "CANCELLED": "已取消",
+                               "ERROR": "执行错误"}.get(state, state)
+                    color = {"PASS": design.SUCCESS, "FAIL": design.RED, "ERROR": design.RED}.get(state, design.INK)
+                elif not ready or display == "0":
+                    color = design.MUTED
+                self.metric_values[i].configure(text=display, fg=color)
+        for var, _, _ in metrics:
+            var.trace_add("write", refresh)
+        refresh()
 
-        result_frame = ttk.Frame(tab)
+        result_frame = ttk.Frame(tab, style="Surface.TFrame", padding=(9, 6, 9, 7))
         result_frame.grid(row=1, column=0, sticky="nsew")
-        result_frame.rowconfigure(0, weight=1)
+        result_frame.rowconfigure(1, weight=1)
         result_frame.columnconfigure(0, weight=1)
+        bar = ttk.Frame(result_frame, padding=(10, 5))
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        ttk.Label(bar, text="检查明细", style="CardTitle.TLabel").pack(side="left")
+        ttk.Label(bar, textvariable=self.result_count_var, style="Muted.TLabel").pack(side="left", padx=9)
+        ttk.Checkbutton(bar, text="仅看问题", variable=self.only_issues_var,
+                        command=self._filter_results).pack(side="right")
         columns = (
             "status",
             "row",
@@ -923,6 +1324,9 @@ class RsCheckApp:
         self.result_tree = ttk.Treeview(
             result_frame,
             columns=columns,
+            displaycolumns=("status", "row", "interface", "rs_inst", "effective_step", "physical_instances",
+                            "findings", "crg_trace", "position", "crg_source", "rs_cfg_en"),
+            height=4,
             show="headings",
             selectmode="browse",
         )
@@ -933,7 +1337,7 @@ class RsCheckApp:
             "position": "Position",
             "crg_source": "CRG Source",
             "crg_trace": "CRG Trace",
-            "rs_inst": "RS_inst",
+            "rs_inst": "例化匹配",
             "rs_cfg_en": "RS_CFG_EN",
             "physical_instances": "匹配实例",
             "effective_step": "实际/期望拍",
@@ -941,21 +1345,22 @@ class RsCheckApp:
         }
         widths = {
             "status": 65,
-            "row": 60,
+            "row": 74,
             "interface": 85,
             "position": 520,
             "crg_source": 520,
             "crg_trace": 90,
-            "rs_inst": 120,
+            "rs_inst": 253,
             "rs_cfg_en": 90,
             "physical_instances": 75,
             "effective_step": 95,
             "findings": 80,
         }
         for name in columns:
-            self.result_tree.heading(name, text=headings[name])
+            anchor = "center" if name in {"row","physical_instances","effective_step","findings","crg_trace"} else "w"
+            self.result_tree.heading(name, text=headings[name], anchor=anchor)
             self.result_tree.column(
-                name, width=widths[name], minwidth=55, stretch=False
+                name, width=widths[name], minwidth=55, stretch=False, anchor=anchor
             )
         result_scroll = ttk.Scrollbar(result_frame, orient="vertical", command=self.result_tree.yview)
         result_xscroll = ttk.Scrollbar(
@@ -965,24 +1370,31 @@ class RsCheckApp:
             yscrollcommand=result_scroll.set,
             xscrollcommand=result_xscroll.set,
         )
-        self.result_tree.grid(row=0, column=0, sticky="nsew")
-        result_scroll.grid(row=0, column=1, sticky="ns")
-        result_xscroll.grid(row=1, column=0, sticky="ew")
-        self.result_tree.tag_configure("pass", foreground="#176b3a")
-        self.result_tree.tag_configure("fail", foreground="#a02124")
-        self.result_tree.tag_configure("warning", foreground="#8a5a00")
+        self.result_tree.grid(row=1, column=0, sticky="nsew")
+        result_scroll.grid(row=1, column=1, sticky="ns")
+        result_xscroll.grid(row=2, column=0, sticky="ew")
+        self.result_tree.tag_configure("pass", foreground=design.INK)
+        self.result_tree.tag_configure("fail", foreground=design.RED, background=design.FAIL_WASH)
+        self.result_tree.tag_configure("warning", foreground=design.AMBER, background=design.WARN_WASH)
+        self.result_empty = ttk.Label(self.result_tree, style="Muted.TLabel", justify="center", anchor="center")
+        self._show_result_empty("还没有检查结果\n验证 Excel 或运行 RTL 检查后，明细将显示在这里。")
         self.result_tree.bind("<<TreeviewSelect>>", self._on_result_selected)
 
         detail_pane = ttk.Panedwindow(tab, orient="horizontal")
         detail_pane.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
 
-        findings_frame = ttk.Frame(detail_pane)
-        findings_frame.rowconfigure(0, weight=1)
+        findings_frame = ttk.Frame(detail_pane, style="Surface.TFrame", padding=(8, 6), width=285, height=185)
+        findings_frame.grid_propagate(False)
+        findings_frame.rowconfigure(1, weight=1)
         findings_frame.columnconfigure(0, weight=1)
+        ttk.Label(findings_frame, text="诊断项", style="CardTitle.TLabel", padding=(10,5)).grid(
+            row=0, column=0, sticky="w")
         finding_columns = ("severity", "code", "instance", "message")
         self.finding_tree = ttk.Treeview(
             findings_frame,
             columns=finding_columns,
+            displaycolumns=("severity", "code", "message", "instance"),
+            height=3,
             show="headings",
             selectmode="browse",
         )
@@ -992,53 +1404,133 @@ class RsCheckApp:
             ("instance", "实例", 230),
             ("message", "说明", 420),
         ):
-            self.finding_tree.heading(name, text=title)
+            self.finding_tree.heading(name, text=title, anchor="w")
             self.finding_tree.column(name, width=width, minwidth=60, stretch=name == "message")
         finding_scroll = ttk.Scrollbar(
             findings_frame, orient="vertical", command=self.finding_tree.yview
         )
         self.finding_tree.configure(yscrollcommand=finding_scroll.set)
-        self.finding_tree.grid(row=0, column=0, sticky="nsew")
-        finding_scroll.grid(row=0, column=1, sticky="ns")
+        self.finding_tree.grid(row=1, column=0, sticky="nsew")
+        finding_scroll.grid(row=1, column=1, sticky="ns")
+        fx = ttk.Scrollbar(findings_frame, orient="horizontal", command=self.finding_tree.xview)
+        self.finding_tree.configure(xscrollcommand=fx.set)
+        fx.grid(row=2, column=0, sticky="ew")
+        self.finding_empty = ttk.Label(self.finding_tree, text="请选择一条检查结果", style="Muted.TLabel")
+        self.finding_empty.place(relx=.5, rely=.62, anchor="center")
         self.finding_tree.bind("<<TreeviewSelect>>", self._on_finding_selected)
 
-        evidence_frame = ttk.Frame(detail_pane)
-        evidence_frame.rowconfigure(0, weight=1)
+        evidence_frame = ttk.Frame(detail_pane, style="Surface.TFrame", padding=(8, 6), width=430, height=185)
+        evidence_frame.grid_propagate(False)
+        evidence_frame.rowconfigure(1, weight=1)
         evidence_frame.columnconfigure(0, weight=1)
-        self.evidence_text = ScrolledText(
-            evidence_frame,
+        inspector_bar = ttk.Frame(evidence_frame, padding=(10, 1, 4, 1))
+        inspector_bar.grid(row=0, column=0, sticky="ew")
+        ttk.Label(inspector_bar, text="检查证据", style="CardTitle.TLabel").pack(side="left")
+        ttk.Button(inspector_bar, text="复制 JSON", style="Quiet.TButton",
+                   command=lambda: self._copy_text(self.evidence_text, "证据 JSON")).pack(side="right")
+        self.inspector_tabs = ttk.Notebook(evidence_frame)
+        self.inspector_tabs.grid(row=1, column=0, sticky="nsew")
+        summary_view, raw_view = ttk.Frame(self.inspector_tabs), ttk.Frame(self.inspector_tabs)
+        self.inspector_tabs.add(summary_view, text="诊断摘要")
+        self.inspector_tabs.add(raw_view, text="原始 JSON")
+        box, self.review_text = self.ui.text_panel(
+            summary_view, wrap="word", width=1, height=2, font=self.ui.f(10), bg=design.PAPER,
+            fg=design.INK, padx=10, pady=4, highlightthickness=0, relief="flat", borderwidth=0)
+        box.pack(fill="both", expand=True)
+        self.review_text.tag_configure("heading", foreground=design.CLAY_INK, font=self.ui.f(10,"bold"),
+                                       spacing1=3, spacing3=1)
+        self.review_text.tag_configure("body", spacing3=4)
+        self.review_text.tag_configure("problem", foreground=design.RED)
+        self.review_text.tag_configure("caution", foreground=design.AMBER)
+        self.review_text.configure(state="disabled")
+        box, self.evidence_text = self.ui.text_panel(
+            raw_view,
             wrap="word",
-            height=9,
-            font=("TkFixedFont", 9),
-            background="#ffffff",
-            foreground="#20262d",
+            width=1, height=2, padx=9, pady=6, relief="flat", highlightthickness=0, borderwidth=0,
+            font=self.ui.code(10), background=design.PAPER, foreground=design.INK,
         )
-        self.evidence_text.grid(row=0, column=0, sticky="nsew")
+        box.pack(fill="both", expand=True)
         self.evidence_text.configure(state="disabled")
-        detail_pane.add(findings_frame, weight=3)
-        detail_pane.add(evidence_frame, weight=2)
+        detail_pane.add(findings_frame, weight=2)
+        detail_pane.add(evidence_frame, weight=3)
+        self._display_evidence(None)
 
     def _build_log_tab(self) -> None:
         self.log_tab.rowconfigure(0, weight=1)
         self.log_tab.columnconfigure(0, weight=1)
-        self.log_text = ScrolledText(
-            self.log_tab,
+        panel = ttk.Frame(self.log_tab, style="Surface.TFrame", padding=(12, 8, 12, 12))
+        panel.grid(row=0, column=0, sticky="nsew")
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(1, weight=1)
+        bar = ttk.Frame(panel, padding=(2, 4))
+        bar.grid(row=0, column=0, sticky="ew")
+        ttk.Label(bar, text="会话输出", style="CardTitle.TLabel").pack(side="left")
+        ttk.Label(bar, text="STDOUT  /  STDERR", style="Muted.TLabel").pack(side="left", padx=10)
+        ttk.Button(bar, text="复制日志", style="Quiet.TButton",
+                   command=lambda: self._copy_text(self.log_text, "运行日志")).pack(side="right")
+        console = ttk.Frame(panel, style="Console.TFrame", padding=8)
+        console.grid(row=1, column=0, sticky="nsew")
+        box, self.log_text = self.ui.text_panel(
+            console,
             wrap="word",
-            font=("TkFixedFont", 9),
-            background="#111820",
-            foreground="#d8e0e8",
-            insertbackground="#d8e0e8",
+            font=self.ui.code(10), borderwidth=0, highlightthickness=0, relief="flat", padx=12, pady=10,
+            background=design.MONITOR,
+            foreground="#eee9e0",
+            insertbackground="#eee9e0",
         )
-        self.log_text.grid(row=0, column=0, sticky="nsew")
+        box.pack(fill="both", expand=True)
+        self.log_text.tag_configure("command", foreground="#efb89b")
+        self.log_text.tag_configure("exit", foreground="#c6d2ad")
         self.log_text.configure(state="disabled")
+        self.log_empty = tk.Label(self.log_text, text="等待首次运行\n运行验证或检查后，可在此追溯实际命令与输出。",
+                                  justify="left", bg=design.MONITOR, fg="#c3bcb0", font=self.ui.f(10))
+        self.log_empty.place(x=14, y=12)
+
+    def _copy_text(self, widget, label) -> None:
+        value = widget.get("1.0", "end-1c")
+        if not value:
+            self.status_var.set(f"暂无{label}可复制")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(value)
+        except tk.TclError:
+            self.status_var.set("当前显示环境无法使用剪贴板")
+        else:
+            self.status_var.set(f"已复制{label}")
 
     def _build_status_bar(self) -> None:
-        status = ttk.Frame(self.root, padding=(12, 4, 12, 8))
-        status.grid(row=1, column=0, sticky="ew")
-        status.columnconfigure(0, weight=1)
-        ttk.Label(status, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-        self.progress = ttk.Progressbar(status, mode="indeterminate", length=180)
-        self.progress.grid(row=0, column=1, sticky="e")
+        edge = tk.Frame(self.root, bg=design.LINE, pady=1)
+        edge.grid(row=2, column=1, sticky="ew")
+        actions = ttk.Frame(edge, padding=(16, 7))
+        actions.pack(fill="x")
+        actions.columnconfigure(1, weight=1)
+        self.status_light = tk.Canvas(actions, width=12, height=12, highlightthickness=0, bg=design.PAPER)
+        self.status_light.grid(row=0, column=0, padx=(0, 5))
+        self.status_dot = self.status_light.create_oval(2, 2, 10, 10, fill=design.SUCCESS, outline="")
+        status = ttk.Label(actions, textvariable=self.status_var, width=1, style="Muted.TLabel")
+        status.grid(row=0, column=1, sticky="ew")
+        self.progress = ttk.Progressbar(actions, mode="indeterminate", length=68)
+        self.progress.grid(row=0, column=2, padx=6)
+        self.progress.grid_remove()
+        ttk.Button(actions, text="报告目录", command=self._open_report_directory,
+                   style="Quiet.TButton").grid(row=0, column=3, padx=(3, 10))
+        self.cancel_button = ttk.Button(actions, text="取消", style="Danger.TButton", state="disabled",
+                                        command=self._cancel_operation)
+        self.cancel_button.grid(row=0, column=4, padx=(0, 6))
+        self.validate_button = ttk.Button(actions, text="验证 Excel", command=lambda: self._start_operation("validate"))
+        self.validate_button.grid(row=0, column=5, padx=(0, 6))
+        self.run_button = ttk.Button(actions, text="运行 RTL 检查", style="Primary.TButton",
+                                     command=lambda: self._start_operation("check"))
+        self.run_button.grid(row=0, column=6)
+        self.summary_state_var.trace_add("write", lambda *_: self._status_color())
+
+    def _status_color(self) -> None:
+        state = self.summary_state_var.get()
+        color = design.BLUE if self.running else (
+            design.RED if state in {"FAIL", "ERROR"} else design.AMBER if state == "CANCELLED" else design.SUCCESS
+        )
+        self.status_light.itemconfigure(self.status_dot, fill=color)
 
     def _path_row(
         self,
@@ -1264,7 +1756,7 @@ class RsCheckApp:
         self.header_check_var.set(config.excel.validate_headers)
         self.crg_trace_max_depth_var.set(str(config.rtl.crg_trace_max_depth))
         for name in FIELD_NAMES:
-            self.column_vars[name].set(str(config.excel.columns[name]))
+            self.column_vars[name].set(str(config.excel.columns.get(name, "")))
         self._loaded_config = config
         self._loaded_config_path = resolved_path
         self._module_rules = dict(config.module_rules)
@@ -1308,6 +1800,7 @@ class RsCheckApp:
         excel["validate_headers"] = bool(self.header_check_var.get())
         raw["columns"] = {
             name: self.column_vars[name].get().strip() for name in FIELD_NAMES
+            if name != "RS_route" or self.column_vars[name].get().strip()
         }
         raw["rtl"]["crg_trace_max_depth"] = (
             self.crg_trace_max_depth_var.get().strip()
@@ -1335,7 +1828,7 @@ class RsCheckApp:
         ):
             return True
         return any(
-            self.column_vars[name].get().strip() != str(loaded.columns[name])
+            self.column_vars[name].get().strip() != str(loaded.columns.get(name, ""))
             for name in FIELD_NAMES
         )
 
@@ -1851,11 +2344,14 @@ class RsCheckApp:
 
     def _update_source_mode(self) -> None:
         if self.source_mode_var.get() == LIVE_SOURCE:
+            self.mode_badge.configure(text="数据源  /  在线 NPI", style="Live.Badge.TLabel")
             self.inventory_frame.grid_remove()
             self.live_frame.grid(row=1, column=0, sticky="nsew")
         else:
+            self.mode_badge.configure(text="数据源  /  离线 Inventory", style="Offline.Badge.TLabel")
             self.live_frame.grid_remove()
             self.inventory_frame.grid(row=1, column=0, sticky="nsew")
+        self.root.after_idle(self._arrange_setup)
 
     def _sheet_override_from_form(self) -> str:
         value = self.sheet_var.get()
@@ -1886,6 +2382,37 @@ class RsCheckApp:
             json_report_path=self.json_report_var.get(),
             csv_report_path=self.csv_report_var.get(),
         )
+
+    def _start_position_hierarchy_search(self) -> None:
+        if self.running or self.controller.is_running:
+            return
+        request = self._request()
+        query = self.position_hierarchy_regex_var.get()
+        try:
+            build_position_hierarchy_search_command(request, query)
+        except GuiInputError as exc:
+            messagebox.showerror(
+                "查询输入错误",
+                str(exc),
+                parent=self._position_hierarchy_dialog or self.root,
+            )
+            return
+
+        with self._cancel_guard:
+            self._cancel_requested.clear()
+        self._clear_position_hierarchy_candidates()
+        self.position_hierarchy_status_var.set("正在查询 Verdi 层次")
+        self._active_action = "hierarchy-search"
+        self._set_running(True)
+        self.status_var.set("正在查询 Verdi Position 层次")
+        self._append_log("\n" + "=" * 72 + "\n")
+        worker = threading.Thread(
+            target=self._run_worker,
+            args=("hierarchy-search", request, query),
+            name="rscheck-gui-hierarchy-search",
+            daemon=True,
+        )
+        worker.start()
 
     def _start_operation(self, action: str) -> None:
         if self.running or self.controller.is_running:
@@ -1956,6 +2483,7 @@ class RsCheckApp:
             self._cancel_requested.clear()
         self._clear_results()
         self._reset_summary("RUNNING")
+        self._active_action = action
         self._set_running(True)
         self.status_var.set("正在验证 Excel" if action == "validate" else "正在检查 RTL")
         self._append_log("\n" + "=" * 72 + "\n")
@@ -1967,8 +2495,33 @@ class RsCheckApp:
         )
         worker.start()
 
-    def _run_worker(self, action: str, request: GuiRunRequest) -> None:
+    def _run_worker(
+        self, action: str, request: GuiRunRequest, hierarchy_query: str = ""
+    ) -> None:
         try:
+            if action == "hierarchy-search":
+                if self._cancel_requested.is_set():
+                    self.events.put(WorkerOutcome(action=action))
+                    return
+                command = build_position_hierarchy_search_command(
+                    request, hierarchy_query
+                )
+                process = self.controller.run(command, cwd=self.project_root)
+                if process.cancelled or self._cancel_requested.is_set():
+                    self.events.put(WorkerOutcome(action=action, process=process))
+                    return
+                if process.returncode == 0:
+                    result = load_position_hierarchy_search(process.stdout)
+                    self.events.put(
+                        WorkerOutcome(
+                            action=action,
+                            process=process,
+                            hierarchy_search=result,
+                        )
+                    )
+                    return
+                self.events.put(WorkerOutcome(action=action, process=process))
+                return
             with tempfile.TemporaryDirectory(prefix="rscheck-gui-") as temp_name:
                 if self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action))
@@ -2029,8 +2582,17 @@ class RsCheckApp:
     def _cancel_operation(self) -> None:
         with self._cancel_guard:
             self._cancel_requested.set()
-        self.status_var.set("正在取消")
+        if self._active_action == "hierarchy-search":
+            self.status_var.set("正在取消层次查询")
+            self.position_hierarchy_status_var.set("正在取消")
+        else:
+            self.status_var.set("正在取消")
         self.cancel_button.configure(state="disabled")
+        if self._position_hierarchy_dialog is not None:
+            try:
+                self.position_hierarchy_cancel_button.configure(state="disabled")
+            except tk.TclError:
+                pass
         threading.Thread(target=self._cancel_when_started, daemon=True).start()
 
     def _cancel_when_started(self) -> None:
@@ -2059,31 +2621,74 @@ class RsCheckApp:
 
     def _handle_outcome(self, outcome: WorkerOutcome) -> None:
         self._set_running(False)
+        self._active_action = ""
+        hierarchy_action = outcome.action == "hierarchy-search"
         process = outcome.process
         if process is not None:
             self._append_log("$ " + format_command(process.command) + "\n")
-            if process.stdout:
+            if process.stdout and not hierarchy_action:
                 self._append_log(process.stdout.rstrip() + "\n")
             if process.stderr:
                 self._append_log(process.stderr.rstrip() + "\n")
             self._append_log(f"[exit {process.returncode}]\n")
             if process.cancelled:
-                self._reset_summary("CANCELLED")
-                self.status_var.set("已取消")
+                if hierarchy_action:
+                    self.position_hierarchy_status_var.set("查询已取消")
+                    self.status_var.set("Verdi Position 层次查询已取消")
+                    if self._position_hierarchy_close_pending:
+                        self._destroy_position_hierarchy_search()
+                else:
+                    self._reset_summary("CANCELLED")
+                    self.status_var.set("已取消")
                 return
         if self._cancel_requested.is_set():
-            self._reset_summary("CANCELLED")
-            self.status_var.set("已取消")
+            if hierarchy_action:
+                self.position_hierarchy_status_var.set("查询已取消")
+                self.status_var.set("Verdi Position 层次查询已取消")
+                if self._position_hierarchy_close_pending:
+                    self._destroy_position_hierarchy_search()
+            else:
+                self._reset_summary("CANCELLED")
+                self.status_var.set("已取消")
             return
         if outcome.error:
-            self._reset_summary("ERROR")
-            self.status_var.set("执行失败")
             self._append_log(outcome.error + "\n")
-            messagebox.showerror("执行失败", outcome.error, parent=self.root)
+            if hierarchy_action:
+                self.position_hierarchy_status_var.set("查询失败")
+                self.status_var.set("Verdi Position 层次查询失败")
+                messagebox.showerror(
+                    "层次查询失败",
+                    outcome.error,
+                    parent=self._position_hierarchy_dialog or self.root,
+                )
+            else:
+                self._reset_summary("ERROR")
+                self.status_var.set("执行失败")
+                messagebox.showerror("执行失败", outcome.error, parent=self.root)
             return
         if process is None:
-            self._reset_summary("ERROR")
-            self.status_var.set("执行失败")
+            if hierarchy_action:
+                self.position_hierarchy_status_var.set("查询失败")
+                self.status_var.set("Verdi Position 层次查询失败")
+            else:
+                self._reset_summary("ERROR")
+                self.status_var.set("执行失败")
+            return
+        if hierarchy_action and process.returncode == 0 and outcome.hierarchy_search:
+            result = outcome.hierarchy_search
+            self._render_position_hierarchy_candidates(result)
+            self._append_log(
+                "[hierarchy-search "
+                f"matches={result.total_matches} displayed={len(result.matches)} "
+                f"visited={result.visited_scopes} truncated={str(result.truncated).lower()}]\n"
+            )
+            for notice in result.notices:
+                self._append_log(f"[hierarchy notice] {notice}\n")
+            for warning in result.warnings:
+                self._append_log(f"[hierarchy warning] {warning}\n")
+            self.status_var.set(
+                f"Verdi Position 层次查询完成，匹配 {result.total_matches} 条"
+            )
             return
         if outcome.action == "validate" and process.returncode == 0:
             self._render_validation(outcome.validation_rows)
@@ -2098,10 +2703,19 @@ class RsCheckApp:
             self.notebook.select(self.results_tab)
             return
 
-        self.status_var.set("执行失败")
-        self._reset_summary("ERROR")
         detail = process.stderr.strip() or process.stdout.strip() or f"退出码 {process.returncode}"
-        messagebox.showerror("执行失败", detail[-4000:], parent=self.root)
+        if hierarchy_action:
+            self.position_hierarchy_status_var.set("查询失败")
+            self.status_var.set("Verdi Position 层次查询失败")
+            messagebox.showerror(
+                "层次查询失败",
+                detail[-4000:],
+                parent=self._position_hierarchy_dialog or self.root,
+            )
+        else:
+            self.status_var.set("执行失败")
+            self._reset_summary("ERROR")
+            messagebox.showerror("执行失败", detail[-4000:], parent=self.root)
 
     def _set_running(self, running: bool) -> None:
         self._running = running
@@ -2110,10 +2724,14 @@ class RsCheckApp:
         self.validate_button.configure(state=state)
         self.run_button.configure(state=state)
         self.cancel_button.configure(state="normal" if running else "disabled")
+        self._set_position_hierarchy_search_running(running)
         if running:
+            self.progress.grid()
             self.progress.start(12)
         else:
             self.progress.stop()
+            self.progress.grid_remove()
+        self._status_color()
 
     def _set_setup_controls_disabled(self, disabled: bool) -> None:
         interactive = {
@@ -2156,16 +2774,53 @@ class RsCheckApp:
         self._saved_control_states.clear()
 
     def _clear_results(self) -> None:
-        for item in self.result_tree.get_children():
-            self.result_tree.delete(item)
+        # Filtering detaches items; they must also be deleted before reusing IDs.
+        if self._result_records:
+            self.result_tree.delete(*self._result_records)
         for item in self.finding_tree.get_children():
             self.finding_tree.delete(item)
         self._result_records.clear()
         self._finding_records.clear()
+        self._issue_rows.clear()
+        self.result_count_var.set("")
+        self._show_result_empty("等待检查结果")
+        self.finding_empty.configure(text="请选择一条检查结果")
+        self.finding_empty.place(relx=.5, rely=.62, anchor="center")
         self.result_tree.column("position", width=520, stretch=False)
         self.result_tree.column("crg_source", width=520, stretch=False)
         self.result_tree.xview_moveto(0)
-        self._set_evidence("")
+        self._display_evidence(None)
+
+    def _show_result_empty(self, message: str) -> None:
+        if message:
+            self.result_empty.configure(text=message)
+            self.result_empty.place(relx=.5, rely=.63, anchor="center")
+        else:
+            self.result_empty.place_forget()
+
+    def _filter_results(self) -> None:
+        selection = self.result_tree.selection()
+        only = self.only_issues_var.get()
+        ids = [i for i in self._result_records if not only or i in self._issue_rows]
+        self.result_tree.set_children("", *ids)
+        total = len(self._result_records)
+        self.result_count_var.set(f"显示 {len(ids)} / {total} 项" if total else "")
+        if ids:
+            self._show_result_empty("")
+            iid = selection[0] if selection and selection[0] in ids else ids[0]
+            self.result_tree.selection_set(iid)
+            self.result_tree.see(iid)
+            self._on_result_selected()
+        else:
+            if selection:
+                self.result_tree.selection_remove(*selection)
+            self.finding_tree.delete(*self.finding_tree.get_children())
+            self._finding_records.clear()
+            self.finding_empty.configure(text="无选中行")
+            self.finding_empty.place(relx=.5, rely=.62, anchor="center")
+            self._display_evidence(None)
+            self._show_result_empty("没有错误或警告行\n关闭「仅看问题」可查看全部记录。"
+                                    if total else "尚无检查结果")
 
     def _fit_result_position_column(self, value: str) -> None:
         try:
@@ -2195,6 +2850,12 @@ class RsCheckApp:
 
     def _reset_summary(self, state: str) -> None:
         self.summary_state_var.set(state)
+        if not self._result_records:
+            self._show_result_empty({
+                "RUNNING": "任务运行中，完成后在此显示结果。",
+                "ERROR": "未生成检查结果，请查看运行日志。",
+                "CANCELLED": "本次任务已取消。",
+            }.get(state, "尚无检查结果"))
         self.summary_rows_var.set("行数 0")
         self.summary_pass_var.set("通过 0")
         self.summary_fail_var.set("失败 0")
@@ -2227,7 +2888,7 @@ class RsCheckApp:
                     position_text,
                     crg_source_text,
                     "N/A",
-                    spec.get("RS_inst", ""),
+                    _instance_display(spec, {}),
                     spec.get("RS_CFG_EN", ""),
                     "-",
                     f"-/{spec.get('step', '')}",
@@ -2235,9 +2896,7 @@ class RsCheckApp:
                 ),
                 tags=("pass",),
             )
-        children = self.result_tree.get_children()
-        if children:
-            self.result_tree.selection_set(children[0])
+        self._filter_results()
 
     def _render_report(self, report: LoadedReport) -> None:
         self._clear_results()
@@ -2270,9 +2929,7 @@ class RsCheckApp:
             self._insert_result_record("global", global_record)
         for index, row in enumerate(report.rows):
             self._insert_result_record(f"row-{index}", row)
-        children = self.result_tree.get_children()
-        if children:
-            self.result_tree.selection_set(children[0])
+        self._filter_results()
 
     def _insert_result_record(self, iid: str, record: Mapping[str, Any]) -> None:
         spec = record.get("spec", {})
@@ -2290,6 +2947,8 @@ class RsCheckApp:
         )
         passed = bool(record.get("passed", not errors))
         status = "WARNING" if passed and warnings else ("PASS" if passed else "FAIL")
+        if status != "PASS":
+            self._issue_rows.add(iid)
         tag = "warning" if passed and warnings else ("pass" if passed else "fail")
         step_check = record.get("step_check", {})
         if not isinstance(step_check, Mapping):
@@ -2314,7 +2973,7 @@ class RsCheckApp:
                 position_text,
                 crg_source_text,
                 _crg_trace_display(record),
-                spec.get("RS_inst", ""),
+                _instance_display(spec, record),
                 spec.get("RS_CFG_EN", ""),
                 physical_instances,
                 f"{effective_text}/{expected_step}",
@@ -2352,10 +3011,14 @@ class RsCheckApp:
                     finding.get("message", ""),
                 ),
             )
-        self._show_record_evidence(record)
+        self._display_evidence(record)
         children = self.finding_tree.get_children()
         if children:
+            self.finding_empty.place_forget()
             self.finding_tree.selection_set(children[0])
+        else:
+            self.finding_empty.configure(text="本行没有错误或警告" if "passed" in record else "此步骤仅验证 Excel")
+            self.finding_empty.place(relx=.5, rely=.62, anchor="center")
 
     def _on_finding_selected(self, _event: Any = None) -> None:
         selection = self.finding_tree.selection()
@@ -2370,18 +3033,22 @@ class RsCheckApp:
             if result_selection
             else {}
         )
-        self._set_evidence(
-            json.dumps(
-                _evidence_payload(record, finding),
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
+        self._display_evidence(record, finding)
 
-    def _show_record_evidence(self, record: Mapping[str, Any]) -> None:
-        self._set_evidence(
-            json.dumps(_evidence_payload(record), ensure_ascii=False, indent=2)
-        )
+    def _display_evidence(self, record, finding=None) -> None:
+        payload = _evidence_payload(record, finding) if record else {}
+        sections = _review_sections(record, payload, finding) if record else [
+            ("尚未选择结果", "选中结果行可查看拍数、实例匹配和诊断原因。")]
+        self.review_text.configure(state="normal")
+        self.review_text.delete("1.0", "end")
+        for heading, body in sections:
+            tags = ("heading", "problem") if heading.startswith(("ERROR", "需处理")) else (
+                ("heading", "caution") if heading.startswith(("WARNING", "有警告")) else ("heading",))
+            self.review_text.insert("end", heading + "\n", tags)
+            self.review_text.insert("end", body + "\n", "body")
+        self.review_text.configure(state="disabled")
+        self.review_text.yview_moveto(0)
+        self._set_evidence(json.dumps(payload, ensure_ascii=False, indent=2) if payload else "")
 
     def _set_evidence(self, value: str) -> None:
         self.evidence_text.configure(state="normal")
@@ -2390,8 +3057,10 @@ class RsCheckApp:
         self.evidence_text.configure(state="disabled")
 
     def _append_log(self, value: str) -> None:
+        self.log_empty.place_forget()
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", value)
+        tag = "command" if value.startswith("$ ") else "exit" if value.startswith("[exit ") else ""
+        self.log_text.insert("end", value, tag)
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 

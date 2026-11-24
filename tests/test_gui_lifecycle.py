@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import queue
 import tempfile
@@ -24,7 +25,7 @@ from rscheck.gui import (
     _position_mapping_from_form,
     _same_config_path,
 )
-from rscheck.gui_backend import GuiInputError, GuiRunRequest
+from rscheck.gui_backend import GuiInputError, GuiRunRequest, ProcessResult
 from rscheck.model import (
     ConfigError,
     ExcelConfig,
@@ -33,6 +34,7 @@ from rscheck.model import (
     RtlConfig,
     ToolConfig,
 )
+from rscheck.npi_runner import HierarchyScope, HierarchySearchResult
 
 
 class _FakeRoot:
@@ -56,6 +58,39 @@ class _FakeVar:
 
     def set(self, value) -> None:
         self.value = value
+
+
+class _FakeWidget:
+    def __init__(self) -> None:
+        self.state = "normal"
+
+    def configure(self, **options) -> None:
+        if "state" in options:
+            self.state = options["state"]
+
+
+class _FakeTree:
+    def __init__(self) -> None:
+        self.items = {}
+        self.selected = ()
+
+    def get_children(self):
+        return tuple(self.items)
+
+    def delete(self, item) -> None:
+        self.items.pop(item, None)
+
+    def insert(self, _parent, _index, *, iid, values) -> None:
+        self.items[iid] = tuple(values)
+
+    def selection(self):
+        return self.selected
+
+    def selection_set(self, item) -> None:
+        self.selected = (item,)
+
+    def see(self, _item) -> None:
+        return None
 
 
 class GuiLifecycleTests(unittest.TestCase):
@@ -831,6 +866,220 @@ class GuiLifecycleTests(unittest.TestCase):
             _position_display({"position_alias": "", "position": "tb.dut"}),
             "tb.dut",
         )
+
+    def test_position_hierarchy_candidate_selection_only_fills_editor_path(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._running = False
+        app._position_hierarchy_tree = _FakeTree()
+        app._position_hierarchy_paths = {}
+        app.position_hierarchy_use_button = _FakeWidget()
+        app.position_hierarchy_status_var = _FakeVar("尚未查询")
+        app.position_alias_var = _FakeVar("my_alias")
+        app.position_path_var = _FakeVar("manually.entered")
+        app.status_var = _FakeVar("ready")
+        app._position_mappings = {"existing": "top.u_existing"}
+        app._position_mappings_dirty = False
+        app._destroy_position_hierarchy_search = Mock()
+        result = HierarchySearchResult(
+            query="u_tile",
+            limit=500,
+            matches=(
+                HierarchyScope(
+                    path="top.u_tile",
+                    name="u_tile",
+                    definition="tile",
+                    kind="module",
+                ),
+            ),
+            total_matches=1,
+            truncated=False,
+            index_truncated=False,
+            visited_scopes=8,
+        )
+
+        app._render_position_hierarchy_candidates(result)
+
+        self.assertEqual(
+            app._position_hierarchy_tree.items["position-hierarchy-0"],
+            ("top.u_tile", "tile", "module"),
+        )
+        self.assertEqual(app.position_hierarchy_use_button.state, "normal")
+        self.assertEqual(app.position_path_var.get(), "manually.entered")
+
+        app._use_selected_position_hierarchy()
+
+        self.assertEqual(app.position_path_var.get(), "top.u_tile")
+        self.assertEqual(app.position_alias_var.get(), "my_alias")
+        self.assertEqual(app._position_mappings, {"existing": "top.u_existing"})
+        self.assertFalse(app._position_mappings_dirty)
+        app._destroy_position_hierarchy_search.assert_called_once_with()
+
+    def test_position_hierarchy_empty_selection_keeps_current_path(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._position_hierarchy_tree = _FakeTree()
+        app._position_hierarchy_paths = {"candidate": "top.u_tile"}
+        app.position_path_var = _FakeVar("top.manual")
+        app._destroy_position_hierarchy_search = Mock()
+
+        app._use_selected_position_hierarchy()
+
+        self.assertEqual(app.position_path_var.get(), "top.manual")
+        app._destroy_position_hierarchy_search.assert_not_called()
+
+    def test_closing_running_hierarchy_search_releases_modal_grab(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._running = True
+        app.controller = SimpleNamespace(is_running=True)
+        app._position_hierarchy_close_pending = False
+        app._position_hierarchy_dialog = Mock()
+        app._cancel_operation = Mock()
+
+        app._close_position_hierarchy_search()
+
+        self.assertTrue(app._position_hierarchy_close_pending)
+        app._position_hierarchy_dialog.grab_release.assert_called_once_with()
+        app._position_hierarchy_dialog.withdraw.assert_called_once_with()
+        app._cancel_operation.assert_called_once_with()
+
+    def test_position_hierarchy_search_start_allows_dirty_mapping_draft(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app._running = False
+        app.controller = SimpleNamespace(is_running=False)
+        app._position_mappings_dirty = True
+        request = GuiRunRequest(
+            excel_path="",
+            config_path="",
+            source_mode="live",
+            collector_path="collector",
+            elab_db_path="top.elab++",
+            npi_timeout="60",
+        )
+        app._request = Mock(return_value=request)
+        app.position_hierarchy_regex_var = _FakeVar("u_tile")
+        app._cancel_guard = threading.Lock()
+        app._cancel_requested = threading.Event()
+        app._clear_position_hierarchy_candidates = Mock()
+        app.position_hierarchy_status_var = _FakeVar("尚未查询")
+        app._set_running = Mock()
+        app.status_var = _FakeVar("ready")
+        app._append_log = Mock()
+        app._clear_results = Mock()
+        app._active_action = ""
+        app.root = _FakeRoot()
+        worker = Mock()
+
+        with patch(
+            "rscheck.gui.build_position_hierarchy_search_command",
+            return_value=["python", "-m", "rscheck", "hierarchy-search"],
+        ), patch("rscheck.gui.threading.Thread", return_value=worker):
+            app._start_position_hierarchy_search()
+
+        app._request.assert_called_once_with()
+        app._clear_position_hierarchy_candidates.assert_called_once_with()
+        app._clear_results.assert_not_called()
+        app._set_running.assert_called_once_with(True)
+        self.assertEqual(app._active_action, "hierarchy-search")
+        worker.start.assert_called_once_with()
+        self.assertTrue(app._position_mappings_dirty)
+
+    def test_position_hierarchy_worker_parses_structured_result(self) -> None:
+        app = object.__new__(RsCheckApp)
+        app.project_root = Path.cwd()
+        app._cancel_requested = threading.Event()
+        app.events = queue.Queue()
+        payload = {
+            "schema": "rscheck.hierarchy-search",
+            "schema_version": 1,
+            "query": "u_tile",
+            "limit": 500,
+            "matches": [
+                {
+                    "path": "top.u_tile",
+                    "name": "u_tile",
+                    "definition": "tile",
+                    "kind": "module",
+                }
+            ],
+            "total_matches": 1,
+            "truncated": False,
+            "index_truncated": False,
+            "visited_scopes": 8,
+            "warnings": [],
+            "notices": [],
+        }
+        process = ProcessResult(
+            command=("python", "-m", "rscheck", "hierarchy-search"),
+            returncode=0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+        app.controller = SimpleNamespace(run=Mock(return_value=process))
+        request = GuiRunRequest(excel_path="", config_path="")
+
+        with patch(
+            "rscheck.gui.build_position_hierarchy_search_command",
+            return_value=list(process.command),
+        ):
+            app._run_worker("hierarchy-search", request, "u_tile")
+
+        outcome = app.events.get_nowait()
+        self.assertEqual(outcome.action, "hierarchy-search")
+        self.assertEqual(outcome.hierarchy_search.matches[0].path, "top.u_tile")
+        app.controller.run.assert_called_once_with(
+            list(process.command), cwd=app.project_root
+        )
+
+    def test_position_hierarchy_outcomes_preserve_previous_check_summary(self) -> None:
+        result = HierarchySearchResult(
+            query="u_tile",
+            limit=500,
+            matches=(),
+            total_matches=0,
+            truncated=False,
+            index_truncated=False,
+            visited_scopes=8,
+        )
+        app = object.__new__(RsCheckApp)
+        app._set_running = Mock()
+        app._active_action = "hierarchy-search"
+        app._append_log = Mock()
+        app._cancel_requested = threading.Event()
+        app._reset_summary = Mock()
+        app.status_var = _FakeVar("previous PASS")
+        app.position_hierarchy_status_var = _FakeVar("querying")
+        app._render_position_hierarchy_candidates = Mock()
+        app._position_hierarchy_close_pending = False
+        app.root = _FakeRoot()
+        process = ProcessResult(
+            command=("python", "-m", "rscheck", "hierarchy-search"),
+            returncode=0,
+            stdout="large structured output",
+            stderr="",
+        )
+
+        app._handle_outcome(
+            WorkerOutcome(
+                action="hierarchy-search",
+                process=process,
+                hierarchy_search=result,
+            )
+        )
+
+        app._reset_summary.assert_not_called()
+        app._render_position_hierarchy_candidates.assert_called_once_with(result)
+        self.assertNotIn(
+            "large structured output",
+            "".join(call.args[0] for call in app._append_log.call_args_list),
+        )
+
+        app._position_hierarchy_close_pending = True
+        app._destroy_position_hierarchy_search = Mock()
+        cancelled = replace(process, returncode=-15, stdout="", cancelled=True)
+        app._handle_outcome(
+            WorkerOutcome(action="hierarchy-search", process=cancelled)
+        )
+        app._reset_summary.assert_not_called()
+        app._destroy_position_hierarchy_search.assert_called_once_with()
 
     def test_crg_source_mapping_form_trims_and_requires_both_values(self) -> None:
         alias, rtl_path = _crg_source_mapping_from_form(

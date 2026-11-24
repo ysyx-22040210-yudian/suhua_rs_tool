@@ -253,10 +253,12 @@ class ExcelReaderTests(unittest.TestCase):
                     "crg_source",
                     "crg_source_alias",
                     "rs_cfg_en",
+                    "rs_route",
                 )
             )
 
         self.assertEqual([values(row) for row in xlsx_rows], [values(row) for row in csv_rows])
+        self.assertEqual([row.rs_route for row in xlsx_rows], ["", "CTRL_RS_DO"])
         self.assertTrue(
             all(
                 row.position == "top.u_tile" and row.position_alias == "tile_core"
@@ -371,6 +373,7 @@ class ExcelReaderTests(unittest.TestCase):
                 "复位连接",
                 "时钟源模块",
                 "假门控标记",
+                "例化参考名",
             ],
             "xl/tables/table2.xml": [
                 "默认列",

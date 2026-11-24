@@ -11,7 +11,6 @@ from typing import Iterable, Iterator, Mapping
 from xml.etree import ElementTree as ET
 
 from .model import (
-    FIELD_NAMES,
     REQUIRED_ROW_FIELDS,
     ExcelConfig,
     SpecRow,
@@ -107,7 +106,7 @@ def _rows_to_specs(
 
     specs: list[SpecRow] = []
     errors: list[str] = []
-    seen: dict[tuple[str, str], tuple[int, str]] = {}
+    seen: dict[tuple[str, ...], tuple[int, str]] = {}
     for row_number, cells in materialised:
         if row_number < config.data_start_row:
             continue
@@ -120,6 +119,8 @@ def _rows_to_specs(
         missing = [
             field_name for field_name in REQUIRED_ROW_FIELDS if not values[field_name]
         ]
+        if not values["RS_inst"] and not values.get("RS_route"):
+            missing.append("RS_inst or RS_route (provide at least one)")
         if missing:
             errors.append(f"row {row_number}: blank required fields: {', '.join(missing)}")
             continue
@@ -150,6 +151,7 @@ def _rows_to_specs(
             intf_type=values["Intf_type"],
             rs_module=values["RS_module"],
             rs_inst=values["RS_inst"],
+            rs_route=values.get("RS_route", ""),
             position=position,
             step=step,
             clk=values["clk"],
@@ -168,7 +170,7 @@ def _rows_to_specs(
         if spec.key in seen:
             first_row, first_position_input = seen[spec.key]
             errors.append(
-                f"row {row_number}: duplicate group ({spec.position}, {spec.rs_inst}) "
+                f"row {row_number}: duplicate group ({spec.position}, {spec.selector_label}) "
                 f"after position resolution from {position_input!r}; first defined "
                 f"from {first_position_input!r} at row {first_row}"
             )

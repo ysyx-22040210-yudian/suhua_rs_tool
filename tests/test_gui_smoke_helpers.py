@@ -19,6 +19,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GuiSmokeHelperTests(unittest.TestCase):
+    def test_position_hierarchy_smoke_has_bounded_visible_contract(self) -> None:
+        source = (
+            ROOT / "scripts" / "test_position_hierarchy_gui_smoke.py"
+        ).read_text(encoding="utf-8")
+
+        for argument in (
+            "--collector",
+            "--elab-db",
+            "--regex",
+            "--expected-path",
+            "--timeout",
+            "--iterations",
+            "--visible-seconds",
+        ):
+            self.assertIn(argument, source)
+        self.assertIn("if args.timeout < 1:", source)
+        self.assertIn("if args.iterations < 1:", source)
+        self.assertIn("if args.visible_seconds < 0:", source)
+        self.assertIn("dialog.winfo_ismapped()", source)
+        self.assertIn("POSITION_HIERARCHY_GUI_PASS", source)
+        self.assertIn("dialog=mapped", source)
+
     def test_common_smoke_uses_current_v3_inventory_and_keeps_legacy_v2(self) -> None:
         sample_path = _current_sample_inventory_path(ROOT)
         sample_raw = json.loads(sample_path.read_text(encoding="utf-8"))

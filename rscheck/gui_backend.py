@@ -18,7 +18,16 @@ from .model import (
     CRG_TRACE_EXCLUDED_INPUTS,
     CRG_TRACE_STATUSES,
     FIELD_NAMES,
+    REQUIRED_COLUMN_FIELDS,
+    ROUTE_CANDIDATE_LIMIT,
+    InventoryError,
     MAX_CRG_TRACE_DEPTH,
+)
+from .npi_runner import (
+    DEFAULT_HIERARCHY_SEARCH_LIMIT,
+    HierarchySearchResult,
+    normalize_hierarchy_query,
+    validate_hierarchy_search_limit,
 )
 
 
@@ -215,7 +224,7 @@ def _bounded_positive_integer(
 def _common_arguments(request: GuiRunRequest) -> list[str]:
     excel_path = _required(request.excel_path, "Excel path")
     config_path = _required(request.config_path, "configuration path")
-    missing = [name for name in FIELD_NAMES if name not in request.columns]
+    missing = [name for name in REQUIRED_COLUMN_FIELDS if name not in request.columns]
     extra = [name for name in request.columns if name not in FIELD_NAMES]
     if missing:
         raise GuiInputError("missing column mappings: " + ", ".join(missing))
@@ -225,9 +234,12 @@ def _common_arguments(request: GuiRunRequest) -> list[str]:
     columns: dict[str, str] = {}
     reverse: dict[str, list[str]] = {}
     for field_name in FIELD_NAMES:
-        column = _positive_integer(request.columns[field_name], f"column {field_name}")
+        column = _positive_integer(
+            request.columns.get(field_name, ""), f"column {field_name}", optional=field_name == "RS_route"
+        )
         columns[field_name] = column
-        reverse.setdefault(column, []).append(field_name)
+        if column:
+            reverse.setdefault(column, []).append(field_name)
     collisions = {column: names for column, names in reverse.items() if len(names) > 1}
     if collisions:
         detail = "; ".join(
@@ -267,6 +279,49 @@ def build_validate_command(
 ) -> list[str]:
     python = python_executable or sys.executable
     return [python, "-m", "rscheck", "validate", *_common_arguments(request), "--json"]
+
+
+def build_position_hierarchy_search_command(
+    request: GuiRunRequest,
+    query: str,
+    *,
+    limit: int = DEFAULT_HIERARCHY_SEARCH_LIMIT,
+    python_executable: str | None = None,
+) -> list[str]:
+    if request.source_mode != LIVE_SOURCE:
+        raise GuiInputError("Verdi hierarchy search requires the live NPI source")
+    collector = _required(request.collector_path, "NPI collector path")
+    elab_db = _required(request.elab_db_path, "Verdi elaborated KDB path")
+    if Path(elab_db.rstrip("/\\")).name == "work.lib++":
+        raise GuiInputError("work.lib++ is not an elaborated KDB")
+    try:
+        normalized_query = normalize_hierarchy_query(query)
+        normalized_limit = validate_hierarchy_search_limit(limit)
+    except InventoryError as exc:
+        raise GuiInputError(str(exc)) from exc
+    npi_timeout = _positive_integer(
+        request.npi_timeout, "NPI timeout", optional=True
+    )
+    python = python_executable or sys.executable
+    command = [
+        python,
+        "-m",
+        "rscheck",
+        "hierarchy-search",
+        "--collector",
+        collector,
+        "--elab-db",
+        elab_db,
+        f"--regex={normalized_query}",
+        "--limit",
+        str(normalized_limit),
+    ]
+    if npi_timeout:
+        command.extend(["--npi-timeout", npi_timeout])
+    if request.npi_lib_dir.strip():
+        command.extend(["--npi-lib-dir", request.npi_lib_dir.strip()])
+    command.append("--json")
+    return command
 
 
 def build_check_command(
@@ -350,7 +405,7 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, list):
         raise GuiReportError("validation output must be a JSON array")
     rows: list[Mapping[str, Any]] = []
-    required = {"row", *FIELD_NAMES}
+    required = {"row", *REQUIRED_COLUMN_FIELDS}
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
             raise GuiReportError(f"validation row {index + 1} must be an object")
@@ -359,10 +414,28 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
             raise GuiReportError(
                 f"validation row {index + 1} is missing: {', '.join(missing)}"
             )
+        if not isinstance(item.get("RS_route", ""), str):
+            raise GuiReportError(f"validation row {index + 1}.RS_route must be a string")
         _validate_position_resolution(item, f"validation row {index + 1}")
         _validate_crg_source_resolution(item, f"validation row {index + 1}")
         rows.append(dict(item))
     return tuple(rows)
+
+
+def load_position_hierarchy_search(stdout: str) -> HierarchySearchResult:
+    try:
+        value = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise GuiReportError(
+            "hierarchy search output is not JSON: "
+            f"line {exc.lineno}, column {exc.colno}"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise GuiReportError("hierarchy search output root must be an object")
+    try:
+        return HierarchySearchResult.from_mapping(value)
+    except InventoryError as exc:
+        raise GuiReportError(str(exc)) from exc
 
 
 def _validate_position_resolution(value: Mapping[str, Any], name: str) -> None:
@@ -399,6 +472,49 @@ def _validate_finding_severities(
             raise GuiReportError(
                 f"{name} item {index}.severity must be 'error' or 'warning'"
             )
+
+
+def _validate_instance_match(
+    row: Mapping[str, Any], spec: Mapping[str, Any],
+    instances: tuple[Mapping[str, Any], ...], row_number: int,
+) -> None:
+    # Older reports have neither RS_route nor selection evidence.
+    if "instance_match" not in row and (spec.get("RS_inst") or not spec.get("RS_route")):
+        return
+    match = row.get("instance_match")
+    label = f"report row {row_number}.instance_match"
+    if not isinstance(match, Mapping):
+        raise GuiReportError(f"{label} must be an object")
+    mode = "RS_inst" if spec["RS_inst"] else "RS_route"
+    if (match.get("mode") != mode or match.get("query") != spec.get(mode)
+            or match.get("position") != spec["position"] or match.get("RS_module") != spec["RS_module"]):
+        raise GuiReportError(f"{label} does not match the specification")
+    if mode == "RS_inst":
+        if match.get("matched_count") != len(instances):
+            raise GuiReportError(f"{label}.matched_count does not match the instances")
+        return
+    count, ties = match.get("candidate_count"), match.get("tied_best_count")
+    status = match.get("status")
+    if (type(count) is not int or type(ties) is not int or not 0 <= ties <= count
+            or match.get("metric") != "case_sensitive_levenshtein"
+            or status not in ("matched", "ambiguous", "no_candidates", "position_not_found")):
+        raise GuiReportError(f"{label} has invalid route diagnostics")
+    top = _mapping_array(match.get("top_candidates"), f"{label}.top_candidates")
+    if len(top) != min(ROUTE_CANDIDATE_LIMIT, count) or any(
+        type(item.get("distance")) is not int or item["distance"] < 0
+        or not isinstance(item.get("name"), str) or not isinstance(item.get("full_name"), str)
+        for item in top
+    ):
+        raise GuiReportError(f"{label} has invalid ranked candidates")
+    if match.get("best_distance") != (top[0]["distance"] if top else None):
+        raise GuiReportError(f"{label}.best_distance does not match the ranking")
+    if status == "matched":
+        if (ties != 1 or len(instances) != 1 or match.get("selected") != top[0]
+                or top[0]["full_name"] != instances[0].get("full_name")):
+            raise GuiReportError(f"{label} selected instance does not match the ranking or inventory")
+    elif (instances or match.get("selected") is not None
+            or (status == "ambiguous" and ties < 2) or (status != "ambiguous" and count)):
+        raise GuiReportError(f"{label} is inconsistent with an unselected route")
 
 
 def _validate_v3_row(
@@ -920,11 +1036,13 @@ def load_report(path: str | Path) -> LoadedReport:
         spec = row.get("spec")
         if not isinstance(spec, Mapping):
             raise GuiReportError(f"report row {index + 1}.spec must be an object")
-        missing = [name for name in ("row",) + FIELD_NAMES if name not in spec]
+        missing = [name for name in ("row",) + REQUIRED_COLUMN_FIELDS if name not in spec]
         if missing:
             raise GuiReportError(
                 f"report row {index + 1}.spec is missing: {', '.join(missing)}"
             )
+        if not isinstance(spec.get("RS_route", ""), str):
+            raise GuiReportError(f"report row {index + 1}.spec.RS_route must be a string")
         if not isinstance(spec["RS_CFG_EN"], str):
             raise GuiReportError(
                 f"report row {index + 1}.spec.RS_CFG_EN must be a string"
@@ -938,6 +1056,7 @@ def load_report(path: str | Path) -> LoadedReport:
             row.get("matched_instances"),
             f"report row {index + 1}.matched_instances",
         )
+        _validate_instance_match(row, spec, matched_instances, index + 1)
         for instance_index, instance in enumerate(matched_instances, start=1):
             parameters = instance.get("parameters")
             if not isinstance(parameters, Mapping):

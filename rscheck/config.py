@@ -12,6 +12,7 @@ from .model import (
     DEFAULT_CRG_TRACE_MAX_DEPTH,
     ExcelConfig,
     FIELD_NAMES,
+    REQUIRED_COLUMN_FIELDS,
     MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     RtlConfig,
@@ -282,14 +283,17 @@ def config_from_dict(raw: Any) -> ToolConfig:
         "rtl",
     )
 
-    missing = [name for name in FIELD_NAMES if name not in columns_raw]
+    missing = [name for name in REQUIRED_COLUMN_FIELDS if name not in columns_raw]
     extra = [str(name) for name in columns_raw if name not in FIELD_NAMES]
     if missing:
         raise ConfigError("missing column mappings: " + ", ".join(missing))
     if extra:
         raise ConfigError("unknown column mappings: " + ", ".join(extra))
 
-    columns = {name: _positive_int(columns_raw[name], f"columns.{name}") for name in FIELD_NAMES}
+    columns = {
+        name: _positive_int(columns_raw[name], f"columns.{name}")
+        for name in FIELD_NAMES if name in columns_raw
+    }
     reverse: dict[int, list[str]] = {}
     for name, index in columns.items():
         reverse.setdefault(index, []).append(name)

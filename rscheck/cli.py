@@ -22,7 +22,12 @@ from .model import (
     RsCheckError,
     ToolConfig,
 )
-from .npi_runner import collect_inventory
+from .npi_runner import (
+    DEFAULT_HIERARCHY_SEARCH_LIMIT,
+    MAX_HIERARCHY_SEARCH_LIMIT,
+    collect_inventory,
+    search_hierarchy,
+)
 from .reporting import format_console_report, write_csv_report, write_json_report
 
 
@@ -36,7 +41,7 @@ def _common_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="FIELD=INDEX",
-        help="map an internal field to a 1-based input column; may be repeated",
+        help="map an internal field to a 1-based column; RS_route= disables the optional mapping",
     )
     parser.add_argument("--header-row", type=int, help="override header row")
     parser.add_argument("--data-start-row", type=int, help="override first data row")
@@ -114,6 +119,45 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    hierarchy_search = subparsers.add_parser(
+        "hierarchy-search",
+        help="search position scope paths in a Verdi elaborated KDB",
+    )
+    hierarchy_search.add_argument(
+        "--collector", required=True, help="NPI collector executable"
+    )
+    hierarchy_search.add_argument(
+        "--elab-db", required=True, help="Verdi elaborated database directory"
+    )
+    hierarchy_search.add_argument(
+        "--regex",
+        required=True,
+        help="Python regular expression matched against full hierarchy paths",
+    )
+    hierarchy_search.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_HIERARCHY_SEARCH_LIMIT,
+        help=(
+            "maximum displayed matches "
+            f"(1..{MAX_HIERARCHY_SEARCH_LIMIT}, default "
+            f"{DEFAULT_HIERARCHY_SEARCH_LIMIT})"
+        ),
+    )
+    hierarchy_search.add_argument(
+        "--npi-timeout", type=int, help="hierarchy collection timeout in seconds"
+    )
+    hierarchy_search.add_argument(
+        "--npi-lib-dir",
+        help=(
+            "directory containing libNPI.so; defaults to "
+            "$VERDI_HOME/share/NPI/lib/$NPI_PLATFORM"
+        ),
+    )
+    hierarchy_search.add_argument(
+        "--json", action="store_true", help="print structured search results"
+    )
+
     position_db = subparsers.add_parser(
         "position-db",
         help="manage Excel position shorthand to RTL hierarchy mappings",
@@ -187,8 +231,8 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _column_overrides(values: Sequence[str]) -> dict[str, int]:
-    result: dict[str, int] = {}
+def _column_overrides(values: Sequence[str]) -> dict[str, int | None]:
+    result: dict[str, int | None] = {}
     for value in values:
         if "=" not in value:
             raise ConfigError(f"invalid --column {value!r}; expected FIELD=INDEX")
@@ -197,6 +241,9 @@ def _column_overrides(values: Sequence[str]) -> dict[str, int]:
             raise ConfigError(
                 f"unknown --column field {field_name!r}; expected one of {', '.join(FIELD_NAMES)}"
             )
+        if field_name == "RS_route" and not raw_index:
+            result[field_name] = None
+            continue
         try:
             index = int(raw_index)
         except ValueError as exc:
@@ -209,7 +256,11 @@ def _column_overrides(values: Sequence[str]) -> dict[str, int]:
 
 def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig:
     columns = dict(config.excel.columns)
-    columns.update(_column_overrides(args.column))
+    for name, index in _column_overrides(args.column).items():
+        if index is None:
+            columns.pop(name, None)
+        else:
+            columns[name] = index
     reverse: dict[int, list[str]] = {}
     for field_name, column in columns.items():
         reverse.setdefault(column, []).append(field_name)
@@ -271,7 +322,7 @@ def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
             if spec.crg_source_alias:
                 crg_source = f"{spec.crg_source_alias} -> {spec.crg_source}"
             print(
-                f"row {spec.row_number}: {position} / {spec.rs_inst} "
+                f"row {spec.row_number}: {position} / {spec.selector_label} "
                 f"module={spec.rs_module} step={spec.step} "
                 f"CRG_source={crg_source}"
             )
@@ -333,6 +384,31 @@ def _check_command(
         output = write_csv_report(report, args.csv_report)
         print(f"CSV report: {output}")
     return 0 if report.passed else 1
+
+
+def _hierarchy_search_command(args: argparse.Namespace) -> int:
+    if args.npi_timeout is not None and args.npi_timeout < 1:
+        raise ConfigError("--npi-timeout must be >= 1")
+    result = search_hierarchy(
+        args.collector,
+        args.regex,
+        elab_db=args.elab_db,
+        limit=args.limit,
+        timeout_seconds=args.npi_timeout,
+        npi_lib_dir=args.npi_lib_dir,
+    )
+    if args.json:
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+        return 0
+    suffix = " (results truncated)" if result.truncated else ""
+    print(
+        f"HIERARCHY_SEARCH: {result.total_matches} match(es), "
+        f"showing {len(result.matches)}{suffix}"
+    )
+    for match in result.matches:
+        definition = f" [{match.definition}]" if match.definition else ""
+        print(f"{match.path} | {match.kind}{definition}")
+    return 0
 
 
 def _position_db_command(args: argparse.Namespace) -> int:
@@ -454,6 +530,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return gui_main()
     try:
+        if args.command == "hierarchy-search":
+            return _hierarchy_search_command(args)
         if args.command == "position-db":
             return _position_db_command(args)
         if args.command == "crg-source-db":

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-FIELD_NAMES = (
+REQUIRED_COLUMN_FIELDS = (
     "Intf_type",
     "RS_module",
     "RS_inst",
@@ -17,7 +17,11 @@ FIELD_NAMES = (
     "RS_CFG_EN",
 )
 
-REQUIRED_ROW_FIELDS = tuple(name for name in FIELD_NAMES if name != "RS_CFG_EN")
+FIELD_NAMES = REQUIRED_COLUMN_FIELDS + ("RS_route",)
+REQUIRED_ROW_FIELDS = tuple(
+    name for name in REQUIRED_COLUMN_FIELDS if name not in {"RS_inst", "RS_CFG_EN"}
+)
+ROUTE_CANDIDATE_LIMIT = 5
 
 DEFAULT_CRG_TRACE_MAX_DEPTH = 16
 MAX_CRG_TRACE_DEPTH = 256
@@ -124,10 +128,17 @@ class SpecRow:
     rs_cfg_en: str
     position_alias: str = ""
     crg_source_alias: str = ""
+    rs_route: str = ""
 
     @property
-    def key(self) -> tuple[str, str]:
-        return self.position, self.rs_inst
+    def key(self) -> tuple[str, ...]:
+        if self.rs_inst:
+            return self.position, self.rs_inst
+        return self.position, self.rs_module, self.rs_route
+
+    @property
+    def selector_label(self) -> str:
+        return self.rs_inst or f"RS_route={self.rs_route}"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +148,7 @@ class SpecRow:
             "Intf_type": self.intf_type,
             "RS_module": self.rs_module,
             "RS_inst": self.rs_inst,
+            "RS_route": self.rs_route,
             "position": self.position,
             "position_alias": self.position_alias,
             "step": self.step,
@@ -462,6 +474,35 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class RouteCandidate:
+    name: str
+    full_name: str
+    distance: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "full_name": self.full_name, "distance": self.distance}
+
+
+@dataclass(frozen=True)
+class RouteMatch:
+    status: str
+    candidate_count: int = 0
+    tied_best_count: int = 0
+    ranked: tuple[RouteCandidate, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "metric": "case_sensitive_levenshtein",
+            "candidate_count": self.candidate_count,
+            "best_distance": self.ranked[0].distance if self.ranked else None,
+            "tied_best_count": self.tied_best_count,
+            "selected": self.ranked[0].as_dict() if self.status == "matched" else None,
+            "top_candidates": [item.as_dict() for item in self.ranked],
+        }
+
+
+@dataclass(frozen=True)
 class RowResult:
     spec: SpecRow
     instances: tuple[ActualInstance, ...]
@@ -469,6 +510,7 @@ class RowResult:
     module_rule: ModuleRule | None = None
     step_evaluations: tuple[InstanceStepEvaluation, ...] = ()
     crg_evaluations: tuple[CrgTraceEvaluation, ...] = ()
+    route_match: RouteMatch | None = None
 
     @property
     def passed(self) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import re
 from typing import Iterable, Mapping
 
@@ -15,6 +16,9 @@ from .model import (
     MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     ParameterEvaluation,
+    ROUTE_CANDIDATE_LIMIT,
+    RouteCandidate,
+    RouteMatch,
     RowResult,
     RtlConfig,
     SpecRow,
@@ -302,6 +306,62 @@ def _match_group(
     return valid, invalid
 
 
+def _name_distance(left: str, right: str) -> int:
+    """Unit-cost Levenshtein distance; equal ends do not affect the result."""
+    start = 0
+    while start < min(len(left), len(right)) and left[start] == right[start]:
+        start += 1
+    left, right = left[start:], right[start:]
+    end = 0
+    while end < min(len(left), len(right)) and left[-1 - end] == right[-1 - end]:
+        end += 1
+    if end:
+        left, right = left[:-end], right[:-end]
+    if len(left) > len(right):
+        left, right = right, left
+    if not left:
+        return len(right)
+    previous = list(range(len(left) + 1))
+    for row, letter in enumerate(right, 1):
+        current = [row]
+        for col, other in enumerate(left, 1):
+            current.append(min(
+                current[-1] + 1, previous[col] + 1, previous[col - 1] + (letter != other)
+            ))
+        previous = current
+    return previous[-1]
+
+
+def _match_route(
+    spec: SpecRow, instances: Iterable[ActualInstance]
+) -> tuple[ActualInstance | None, RouteMatch]:
+    count = ties = 0
+    best: int | None = None
+
+    def scored() -> Iterable[tuple[int, ActualInstance]]:
+        nonlocal count, ties, best
+        for instance in instances:
+            if instance.module != spec.rs_module:
+                continue
+            distance = _name_distance(spec.rs_route, instance.name)
+            count += 1
+            if best is None or distance < best:
+                best, ties = distance, 1
+            elif distance == best:
+                ties += 1
+            yield distance, instance
+
+    # Count every minimum, even when the tie is wider than the displayed list.
+    top = heapq.nsmallest(ROUTE_CANDIDATE_LIMIT, scored(), key=lambda item: (item[0], item[1].full_name))
+    evidence = RouteMatch(
+        status="matched" if ties == 1 else "ambiguous" if ties else "no_candidates",
+        candidate_count=count,
+        tied_best_count=ties,
+        ranked=tuple(RouteCandidate(i.name, i.full_name, d) for d, i in top),
+    )
+    return (top[0][1] if ties == 1 else None), evidence
+
+
 def _check_ports(
     spec: SpecRow,
     instance: ActualInstance,
@@ -517,9 +577,33 @@ def _check_row(
             instances=(),
             findings=tuple(findings),
             module_rule=rule,
+            route_match=RouteMatch("position_not_found") if not spec.rs_inst else None,
         )
 
-    matches, invalid_suffix = _match_group(spec, position.instances, suffix)
+    route_match = None
+    if spec.rs_inst:
+        matches, invalid_suffix = _match_group(spec, position.instances, suffix)
+    else:
+        winner, route_match = _match_route(spec, position.instances)
+        matches = [(winner, None)] if winner is not None else []
+        invalid_suffix = []
+        if winner is None:
+            if route_match.status == "ambiguous":
+                code = "RS_ROUTE_AMBIGUOUS"
+                message = (
+                    f"{route_match.tied_best_count} instances tie at distance "
+                    f"{route_match.ranked[0].distance} for RS_route {spec.rs_route!r}; "
+                    "refine RS_route, set RS_inst, or narrow position"
+                )
+            else:
+                code = "RS_ROUTE_NO_CANDIDATES"
+                message = (
+                    f"no instance of module {spec.rs_module!r} under {spec.position} "
+                    f"for RS_route {spec.rs_route!r}"
+                )
+            findings.append(_row_finding(
+                spec, code, message, expected=spec.rs_route, actual=route_match.as_dict()
+            ))
     for instance in invalid_suffix:
         findings.append(
             _row_finding(
@@ -534,7 +618,7 @@ def _check_row(
         )
 
     matched_instances = tuple(instance for instance, _ in matches)
-    if not matched_instances:
+    if spec.rs_inst and not matched_instances:
         findings.append(
             _row_finding(
                 spec,
@@ -665,6 +749,7 @@ def _check_row(
         module_rule=rule,
         step_evaluations=tuple(step_evaluations),
         crg_evaluations=tuple(crg_evaluations),
+        route_match=route_match,
     )
 
 
@@ -718,12 +803,12 @@ def check_specs(
                         severity="error",
                         code="AMBIGUOUS_GROUP_MATCH",
                         message=(
-                            f"{instance.full_name} matches multiple RS_inst groups: "
-                            + ", ".join(spec.rs_inst for spec in owners)
+                            f"{instance.full_name} matches multiple rows: "
+                            + ", ".join(f"row {spec.row_number} ({spec.selector_label})" for spec in owners)
                         ),
                         position=position_name,
                         instance=instance.full_name,
-                        actual=[spec.rs_inst for spec in owners],
+                        actual=[spec.selector_label for spec in owners],
                     )
                 )
     return CheckReport(rows=rows, global_findings=tuple(global_findings))

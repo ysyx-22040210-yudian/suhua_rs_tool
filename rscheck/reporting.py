@@ -8,6 +8,21 @@ from typing import Any
 from .model import CheckReport, Finding, OutputError, RowResult
 
 
+def _instance_match(row: RowResult) -> dict[str, Any]:
+    spec = row.spec
+    scope = {"position": spec.position, "RS_module": spec.rs_module}
+    if row.route_match is not None:
+        return {"mode": "RS_route", "query": spec.rs_route, **scope, **row.route_match.as_dict()}
+    return {
+        "mode": "RS_inst",
+        "query": spec.rs_inst,
+        **scope,
+        "rule": "exact_name_or_prefix_with_configured_suffix",
+        "route_ignored": bool(spec.rs_route),
+        "matched_count": len(row.instances),
+    }
+
+
 def _crg_source_check(row: RowResult) -> dict[str, Any]:
     status = "not_run"
     if row.crg_evaluations:
@@ -58,6 +73,7 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
     return {
         "spec": row.spec.as_dict(),
         "passed": row.passed,
+        "instance_match": _instance_match(row),
         "module_rule": row.module_rule.as_dict() if row.module_rule else None,
         "step_check": {
             "expected": row.spec.step,
@@ -148,6 +164,8 @@ def _finding_row(
         "CRG_source": row.spec.crg_source if row is not None else "",
         "crg_source_alias": row.spec.crg_source_alias if row is not None else "",
         "RS_inst": finding.rs_inst,
+        "RS_route": row.spec.rs_route if row else "",
+        "instance_match": json.dumps(_instance_match(row), ensure_ascii=False) if row else "",
         "RS_CFG_EN": finding.rs_cfg_en,
         "instance": finding.instance,
         "code": finding.code,
@@ -190,6 +208,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "message",
         "expected",
         "actual",
+        "RS_route",
+        "instance_match",
     ]
     try:
         with output.open("w", encoding="utf-8-sig", newline="") as stream:
@@ -209,6 +229,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "crg_source_alias": row.spec.crg_source_alias,
                             "RS_module": row.spec.rs_module,
                             "RS_inst": row.spec.rs_inst,
+                            "RS_route": row.spec.rs_route,
+                            "instance_match": json.dumps(_instance_match(row), ensure_ascii=False),
                             "RS_CFG_EN": row.spec.rs_cfg_en,
                             **_step_csv_fields(row),
                             **_crg_csv_fields(row),
@@ -256,13 +278,25 @@ def format_console_report(report: CheckReport) -> str:
         )
         lines.append(
             f"[{row_status}] row {row.spec.row_number} "
-            f"{row.spec.intf_type} | {position} / {row.spec.rs_inst} "
+            f"{row.spec.intf_type} | {position} / {row.spec.selector_label} "
             f"physical={len(row.instances)} effective={effective_step} "
             f"expected={row.spec.step} "
             f"CRG_source={crg_source} "
             f"CRG_trace={crg_trace_status} "
             f"RS_CFG_EN={row.spec.rs_cfg_en or '<blank>'}"
         )
+        match = row.route_match
+        if match is not None:
+            ranking = ", ".join(f"{item.full_name} ({item.distance})" for item in match.ranked)
+            selected = match.ranked[0].full_name if match.status == "matched" else "<none>"
+            lines.append(
+                f"  RS_route: {match.status}; module={row.spec.rs_module} "
+                f"candidates={match.candidate_count} selected={selected} "
+                f"tied_best={match.tied_best_count}; top candidates "
+                f"(case-sensitive edit distance): {ranking or '<none>'}"
+            )
+        elif row.spec.rs_route:
+            lines.append(f"  RS_inst takes precedence; RS_route {row.spec.rs_route!r} was not used")
         for finding in row.findings:
             lines.append(f"  [{finding.severity.upper()}] {finding.code}: {finding.message}")
     return "\n".join(lines)

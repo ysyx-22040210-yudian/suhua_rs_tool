@@ -24,9 +24,11 @@ from rscheck.gui_backend import (
     GuiRunRequest,
     ProcessController,
     build_check_command,
+    build_position_hierarchy_search_command,
     build_validate_command,
     default_columns,
     load_report,
+    load_position_hierarchy_search,
     load_validation_rows,
 )
 from rscheck.model import FIELD_NAMES
@@ -69,6 +71,7 @@ class GuiBackendTests(unittest.TestCase):
             "rst": "3",
             "CRG_source": "55",
             "RS_CFG_EN": "89",
+            "RS_route": "17",
         }
         command = build_validate_command(
             self._request(columns=columns), python_executable="python-under-test"
@@ -93,10 +96,11 @@ class GuiBackendTests(unittest.TestCase):
         request = GuiRunRequest(excel_path="spec.xlsx", config_path="config.json")
         self.assertFalse(request.validate_headers)
 
-    def test_default_columns_include_rs_cfg_en_as_ninth_mapping(self) -> None:
+    def test_default_columns_append_route_after_rs_cfg_en(self) -> None:
         columns = default_columns()
-        self.assertEqual(len(columns), 9)
+        self.assertEqual(len(columns), 10)
         self.assertEqual(columns["RS_CFG_EN"], "9")
+        self.assertEqual(columns["RS_route"], "10")
 
     def test_duplicate_and_invalid_columns_are_rejected(self) -> None:
         duplicate = default_columns()
@@ -186,6 +190,102 @@ class GuiBackendTests(unittest.TestCase):
                         **contract_arguments,
                     )
                 )
+
+    def test_position_hierarchy_search_command_is_elab_only_and_regex_safe(self) -> None:
+        query = r"(?i)tile.*(core|pipe)"
+        command = build_position_hierarchy_search_command(
+            self._request(), query, python_executable="python-under-test"
+        )
+        self.assertEqual(
+            command[:4],
+            ["python-under-test", "-m", "rscheck", "hierarchy-search"],
+        )
+        self.assertEqual(command.count("--collector"), 1)
+        self.assertEqual(command.count("--elab-db"), 1)
+        self.assertIn(f"--regex={query}", command)
+        self.assertEqual(command[command.index("--limit") + 1], "500")
+        self.assertEqual(command[command.index("--npi-timeout") + 1], "180")
+        self.assertEqual(
+            command[command.index("--npi-lib-dir") + 1],
+            str(ROOT / "tools" / "NPI lib"),
+        )
+        self.assertEqual(command[-1], "--json")
+        for forbidden in ("--excel", "--config", "--inventory", "--filelist", "--top"):
+            self.assertNotIn(forbidden, command)
+
+        leading_dash = build_position_hierarchy_search_command(
+            self._request(), "-u_tile", python_executable="python-under-test"
+        )
+        self.assertIn("--regex=-u_tile", leading_dash)
+
+    def test_position_hierarchy_search_rejects_invalid_inputs_before_launch(self) -> None:
+        for query in ("", "   ", "[", "line\nnext", "x" * 257):
+            with self.subTest(query=query), self.assertRaises(GuiInputError):
+                build_position_hierarchy_search_command(self._request(), query)
+        for limit in (0, 5001, True):
+            with self.subTest(limit=limit), self.assertRaisesRegex(
+                GuiInputError, "search limit"
+            ):
+                build_position_hierarchy_search_command(
+                    self._request(), "u_tile", limit=limit
+                )
+        with self.assertRaisesRegex(GuiInputError, "live NPI"):
+            build_position_hierarchy_search_command(
+                self._request(source_mode=INVENTORY_SOURCE), "u_tile"
+            )
+        with self.assertRaisesRegex(GuiInputError, "work.lib"):
+            build_position_hierarchy_search_command(
+                self._request(elab_db_path="/tmp/work.lib++/"), "u_tile"
+            )
+        with self.assertRaisesRegex(GuiInputError, "NPI timeout"):
+            build_position_hierarchy_search_command(
+                self._request(npi_timeout="0"), "u_tile"
+            )
+
+    def test_position_hierarchy_search_output_is_strictly_validated(self) -> None:
+        payload = {
+            "schema": "rscheck.hierarchy-search",
+            "schema_version": 1,
+            "query": r"^top\.u_",
+            "limit": 500,
+            "matches": [
+                {
+                    "path": "top.u_core",
+                    "name": "u_core",
+                    "definition": "core",
+                    "kind": "module",
+                },
+                {
+                    "path": "top.u_tile",
+                    "name": "u_tile",
+                    "definition": "tile",
+                    "kind": "module",
+                },
+            ],
+            "total_matches": 2,
+            "truncated": False,
+            "index_truncated": False,
+            "visited_scopes": 12,
+            "warnings": [],
+            "notices": [],
+        }
+        result = load_position_hierarchy_search(json.dumps(payload))
+        self.assertEqual([match.path for match in result.matches], [
+            "top.u_core",
+            "top.u_tile",
+        ])
+        self.assertFalse(result.truncated)
+
+        invalid = copy.deepcopy(payload)
+        invalid["matches"].reverse()
+        with self.assertRaisesRegex(GuiReportError, "sorted"):
+            load_position_hierarchy_search(json.dumps(invalid))
+        invalid = copy.deepcopy(payload)
+        invalid["truncated"] = True
+        with self.assertRaisesRegex(GuiReportError, "inconsistent"):
+            load_position_hierarchy_search(json.dumps(invalid))
+        with self.assertRaisesRegex(GuiReportError, "not JSON"):
+            load_position_hierarchy_search("not-json")
 
     def test_work_library_is_rejected_as_live_design(self) -> None:
         with self.assertRaisesRegex(GuiInputError, "work.lib\+\+"):

@@ -40,6 +40,8 @@ const unsigned int kDefaultTraceMaxDepth = 16;
 const unsigned int kMaximumTraceMaxDepth = 256;
 const unsigned int kMaxTraceObjectVisits = 100000;
 const unsigned int kMaxTraceObjectStackDepth = 1024;
+const unsigned int kMaxHierarchyDepth = 256;
+const unsigned int kMaxHierarchyScopeVisits = 1000000;
 
 struct Options {
   std::string positions_path;
@@ -51,8 +53,28 @@ struct Options {
   std::string elab_db_path;
   unsigned int trace_max_depth;
   bool show_help;
+  bool list_hierarchy;
 
-  Options() : trace_max_depth(kDefaultTraceMaxDepth), show_help(false) {}
+  Options()
+      : trace_max_depth(kDefaultTraceMaxDepth),
+        show_help(false),
+        list_hierarchy(false) {}
+};
+
+struct HierarchyScopeInfo {
+  std::string path;
+  std::string name;
+  std::string definition;
+  std::string kind;
+};
+
+struct HierarchyInfo {
+  std::vector<HierarchyScopeInfo> scopes;
+  std::set<std::string> warnings;
+  bool truncated;
+  unsigned int visited_scopes;
+
+  HierarchyInfo() : truncated(false), visited_scopes(0) {}
 };
 
 struct PortInfo {
@@ -124,6 +146,9 @@ void print_usage(std::ostream& out, const char* program) {
       << " [--trace-rules <module-tab-clock-file>]"
       << " [--trace-max-depth <1..256>]"
       << " --elab-db <Verdi elaborated KDB directory>\n"
+      << "       " << program
+      << " --list-hierarchy --output <json-file>"
+      << " --elab-db <Verdi elaborated KDB directory>\n"
       << "       The elabcom default database name is kdb.elab++; custom "
          "names are accepted.\n";
 }
@@ -166,6 +191,12 @@ bool parse_options(int argc, char** argv, Options* options, std::string* error) 
                              &options->positions_path, error)) {
         return false;
       }
+    } else if (argument == "--list-hierarchy") {
+      if (options->list_hierarchy) {
+        *error = "option specified more than once: --list-hierarchy";
+        return false;
+      }
+      options->list_hierarchy = true;
     } else if (argument == "--output") {
       if (!take_option_value(argc, argv, &i, argument,
                              &options->output_path, error)) {
@@ -204,9 +235,22 @@ bool parse_options(int argc, char** argv, Options* options, std::string* error) 
     }
   }
 
-  if (options->positions_path.empty() || options->output_path.empty() ||
-      options->clk_port.empty() || options->rst_port.empty() ||
-      options->elab_db_path.empty()) {
+  if (options->output_path.empty() || options->elab_db_path.empty()) {
+    *error = "--output and --elab-db are required";
+    return false;
+  }
+  if (options->list_hierarchy) {
+    if (!options->positions_path.empty() || !options->clk_port.empty() ||
+        !options->rst_port.empty() || !options->trace_rules_path.empty() ||
+        !options->trace_max_depth_text.empty()) {
+      *error = "--list-hierarchy cannot be combined with --positions, "
+               "--clk-port, --rst-port, --trace-rules, or --trace-max-depth";
+      return false;
+    }
+    return true;
+  }
+  if (options->positions_path.empty() || options->clk_port.empty() ||
+      options->rst_port.empty()) {
     *error = "--positions, --output, --clk-port, --rst-port, and --elab-db "
              "are required";
     return false;
@@ -479,6 +523,144 @@ std::string netlist_object_key(npiNlHandle object) {
   out << type << ':' << name;
   return out.str();
 }
+
+class HierarchyCollector {
+ public:
+  HierarchyInfo collect() {
+    npiHandle iterator = npi_iterate(npiInstance, NULL);
+    if (iterator == NULL) {
+      mark_truncated("NPI hierarchy has no queryable top scope");
+      return result_;
+    }
+
+    npiHandle top = NULL;
+    while ((top = npi_scan(iterator)) != NULL) {
+      collect_scope(top, 0);
+      npi_release_handle(top);
+      if (scope_visit_limit_reached_) {
+        npi_release_handle(iterator);
+        break;
+      }
+    }
+
+    if (result_.scopes.empty()) {
+      mark_truncated("NPI hierarchy has no supported top scope");
+    }
+
+    std::sort(result_.scopes.begin(), result_.scopes.end(), scope_less);
+    result_.scopes.erase(
+        std::unique(result_.scopes.begin(), result_.scopes.end(),
+                    same_scope_path),
+        result_.scopes.end());
+    return result_;
+  }
+
+ private:
+  static bool supported_scope_type(NPI_INT32 type) {
+    return type == npiModule || type == npiInterface || type == npiProgram ||
+           type == npiGenScope;
+  }
+
+  static std::string scope_kind(NPI_INT32 type) {
+    if (type == npiModule) {
+      return "module";
+    }
+    if (type == npiInterface) {
+      return "interface";
+    }
+    if (type == npiProgram) {
+      return "program";
+    }
+    if (type == npiGenScope) {
+      return "gen_scope";
+    }
+    return "unknown";
+  }
+
+  static bool scope_less(const HierarchyScopeInfo& left,
+                         const HierarchyScopeInfo& right) {
+    if (left.path != right.path) {
+      return left.path < right.path;
+    }
+    if (left.kind != right.kind) {
+      return left.kind < right.kind;
+    }
+    if (left.name != right.name) {
+      return left.name < right.name;
+    }
+    return left.definition < right.definition;
+  }
+
+  static bool same_scope_path(const HierarchyScopeInfo& left,
+                              const HierarchyScopeInfo& right) {
+    return left.path == right.path;
+  }
+
+  void mark_truncated(const std::string& warning) {
+    result_.truncated = true;
+    result_.warnings.insert(warning);
+  }
+
+  void collect_scope(npiHandle scope, unsigned int depth) {
+    if (scope == NULL) {
+      return;
+    }
+    const NPI_INT32 type = npi_get(npiType, scope);
+    const bool display_scope = supported_scope_type(type);
+    const std::string key = language_object_key(scope);
+    if (visited_scope_keys_.find(key) != visited_scope_keys_.end()) {
+      return;
+    }
+    if (result_.visited_scopes >= kMaxHierarchyScopeVisits) {
+      scope_visit_limit_reached_ = true;
+      mark_truncated(
+          "hierarchy traversal exceeded the scope visit limit of 1000000");
+      return;
+    }
+    visited_scope_keys_.insert(key);
+    ++result_.visited_scopes;
+    if (depth > kMaxHierarchyDepth) {
+      mark_truncated("hierarchy traversal exceeded the depth limit of 256");
+      return;
+    }
+
+    if (display_scope) {
+      HierarchyScopeInfo info;
+      info.path = language_string(npiFullName, scope);
+      info.name = language_string(npiName, scope);
+      if (type != npiGenScope) {
+        info.definition = language_string(npiDefName, scope);
+      }
+      info.kind = scope_kind(type);
+      if (info.path.empty()) {
+        mark_truncated("hierarchy scope has no full name and was omitted");
+      } else {
+        result_.scopes.push_back(info);
+      }
+    }
+
+    // npiInternalScope can expose vendor or language-specific container
+    // scopes. They are not selectable positions, but their supported
+    // descendants must remain discoverable.
+    npiHandle iterator = npi_iterate(npiInternalScope, scope);
+    if (iterator == NULL) {
+      return;
+    }
+    npiHandle child = NULL;
+    while ((child = npi_scan(iterator)) != NULL) {
+      collect_scope(child, depth + 1);
+      npi_release_handle(child);
+      if (scope_visit_limit_reached_) {
+        npi_release_handle(iterator);
+        break;
+      }
+    }
+  }
+
+  HierarchyInfo result_;
+  std::set<std::string> visited_scope_keys_;
+  bool scope_visit_limit_reached_ = false;
+};
 
 class Collector {
  public:
@@ -1437,6 +1619,74 @@ void write_json_string(std::ostream& out, const std::string& value) {
   out.put('"');
 }
 
+bool write_hierarchy(const std::string& path, const HierarchyInfo& hierarchy,
+                     const std::set<std::string>& notices,
+                     std::string* error) {
+  std::ofstream out(path.c_str(), std::ios::out | std::ios::binary |
+                                      std::ios::trunc);
+  if (!out) {
+    *error = "cannot open output file: " + path;
+    return false;
+  }
+
+  out << "{\n  \"schema\": \"rscheck.hierarchy\",\n"
+      << "  \"schema_version\": 1,\n"
+      << "  \"scopes\": [";
+  if (!hierarchy.scopes.empty()) {
+    out << '\n';
+  }
+  for (std::vector<HierarchyScopeInfo>::const_iterator scope =
+           hierarchy.scopes.begin();
+       scope != hierarchy.scopes.end(); ++scope) {
+    out << "    {\"path\": ";
+    write_json_string(out, scope->path);
+    out << ", \"name\": ";
+    write_json_string(out, scope->name);
+    out << ", \"definition\": ";
+    write_json_string(out, scope->definition);
+    out << ", \"kind\": ";
+    write_json_string(out, scope->kind);
+    out << '}';
+    std::vector<HierarchyScopeInfo>::const_iterator next = scope;
+    ++next;
+    out << (next == hierarchy.scopes.end() ? "\n" : ",\n");
+  }
+  out << "  ],\n  \"warnings\": [";
+  if (!hierarchy.warnings.empty()) {
+    out << '\n';
+  }
+  for (std::set<std::string>::const_iterator warning =
+           hierarchy.warnings.begin();
+       warning != hierarchy.warnings.end(); ++warning) {
+    out << "    ";
+    write_json_string(out, *warning);
+    std::set<std::string>::const_iterator next = warning;
+    ++next;
+    out << (next == hierarchy.warnings.end() ? "\n" : ",\n");
+  }
+  out << "  ],\n  \"notices\": [";
+  if (!notices.empty()) {
+    out << '\n';
+  }
+  for (std::set<std::string>::const_iterator notice = notices.begin();
+       notice != notices.end(); ++notice) {
+    out << "    ";
+    write_json_string(out, *notice);
+    std::set<std::string>::const_iterator next = notice;
+    ++next;
+    out << (next == notices.end() ? "\n" : ",\n");
+  }
+  out << "  ],\n  \"truncated\": "
+      << (hierarchy.truncated ? "true" : "false")
+      << ",\n  \"visited_scopes\": " << hierarchy.visited_scopes << "\n}\n";
+  out.flush();
+  if (!out) {
+    *error = "failed while writing output file: " + path;
+    return false;
+  }
+  return true;
+}
+
 void write_string_array(std::ostream& out,
                         const std::vector<std::string>& values) {
   out << '[';
@@ -1670,15 +1920,17 @@ int run(int argc, char** argv) {
   }
 
   std::vector<std::string> positions;
-  if (!read_positions(options.positions_path, &positions, &error)) {
-    std::cerr << "error[POSITIONS]: " << error << '\n';
-    return kPositionsError;
-  }
   TraceRules trace_rules;
-  if (!options.trace_rules_path.empty() &&
-      !read_trace_rules(options.trace_rules_path, &trace_rules, &error)) {
-    std::cerr << "error[TRACE_RULES]: " << error << '\n';
-    return kTraceRulesError;
+  if (!options.list_hierarchy) {
+    if (!read_positions(options.positions_path, &positions, &error)) {
+      std::cerr << "error[POSITIONS]: " << error << '\n';
+      return kPositionsError;
+    }
+    if (!options.trace_rules_path.empty() &&
+        !read_trace_rules(options.trace_rules_path, &trace_rules, &error)) {
+      std::cerr << "error[TRACE_RULES]: " << error << '\n';
+      return kTraceRulesError;
+    }
   }
 
   std::vector<std::string> npi_arguments;
@@ -1694,6 +1946,7 @@ int run(int argc, char** argv) {
     return kNpiInitError;
   }
   std::set<std::string> notices;
+  bool partial_load = false;
   if (!npi_load_design(npi_argc, npi_argv)) {
     const std::vector<std::string> top_instances = queryable_top_instances();
     if (top_instances.empty()) {
@@ -1708,9 +1961,32 @@ int run(int argc, char** argv) {
     message << "npi_load_design reported elaboration errors, but "
             << top_instances.size() << " top instance(s) remain queryable"
             << " (first: " << top_instances.front()
-            << "); continuing with fail-closed RTL evidence checks";
+            << "); continuing with fail-closed "
+            << (options.list_hierarchy ? "hierarchy enumeration"
+                                       : "RTL evidence checks");
     notices.insert(message.str());
+    partial_load = true;
     std::cerr << "warning[NPI_LOAD_PARTIAL]: " << message.str() << '\n';
+  }
+
+  if (options.list_hierarchy) {
+    HierarchyCollector hierarchy_collector;
+    HierarchyInfo hierarchy = hierarchy_collector.collect();
+    if (partial_load) {
+      hierarchy.truncated = true;
+      hierarchy.warnings.insert(
+          "hierarchy index may be incomplete because the elaborated KDB "
+          "only partially loaded");
+    }
+    if (!session.finish()) {
+      std::cerr << "error[NPI_END]: npi_end failed\n";
+      return kNpiEndError;
+    }
+    if (!write_hierarchy(options.output_path, hierarchy, notices, &error)) {
+      std::cerr << "error[OUTPUT]: " << error << '\n';
+      return kOutputError;
+    }
+    return kSuccess;
   }
 
   Collector collector(options.clk_port, options.rst_port, trace_rules,

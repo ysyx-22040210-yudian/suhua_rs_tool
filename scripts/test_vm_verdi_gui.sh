@@ -81,6 +81,7 @@ OUTPUT_BASE="$RSCHECK_FIXED_OUTPUT_BASE"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
+GUI_POSITION_HIERARCHY_ITERATIONS="${GUI_POSITION_HIERARCHY_ITERATIONS:-20}"
 GUI_CLK_WITHOUT_RST_ITERATIONS="${GUI_CLK_WITHOUT_RST_ITERATIONS:-20}"
 GUI_RS_CFG_DONTCARE_ITERATIONS="${GUI_RS_CFG_DONTCARE_ITERATIONS:-20}"
 GUI_RS_CFG_NA_ITERATIONS="${GUI_RS_CFG_NA_ITERATIONS:-20}"
@@ -461,6 +462,7 @@ for numeric_setting in \
   "$GUI_START_TIMEOUT" \
   "$NPI_TIMEOUT" \
   "$GUI_ONLINE_ITERATIONS" \
+  "$GUI_POSITION_HIERARCHY_ITERATIONS" \
   "$GUI_CLK_WITHOUT_RST_ITERATIONS" \
   "$GUI_RS_CFG_DONTCARE_ITERATIONS" \
   "$GUI_RS_CFG_NA_ITERATIONS" \
@@ -476,6 +478,8 @@ done
 [ "$GUI_START_TIMEOUT" -gt 0 ] || fail "GUI_START_TIMEOUT must be greater than zero"
 [ "$NPI_TIMEOUT" -gt 0 ] || fail "NPI_TIMEOUT must be greater than zero"
 [ "$GUI_ONLINE_ITERATIONS" -gt 0 ] || fail "GUI_ONLINE_ITERATIONS must be greater than zero"
+[ "$GUI_POSITION_HIERARCHY_ITERATIONS" -gt 0 ] ||
+  fail "GUI_POSITION_HIERARCHY_ITERATIONS must be greater than zero"
 [ "$GUI_CLK_WITHOUT_RST_ITERATIONS" -gt 0 ] ||
   fail "GUI_CLK_WITHOUT_RST_ITERATIONS must be greater than zero"
 [ "$GUI_RS_CFG_DONTCARE_ITERATIONS" -gt 0 ] ||
@@ -650,6 +654,8 @@ PARTIAL_STDOUT="$TEST_ROOT/partial_load.stdout"
 PARTIAL_STDERR="$TEST_ROOT/partial_load.stderr"
 PARTIAL_CHECK_LOG="$TEST_ROOT/partial_load_check.log"
 PARTIAL_GUI_LOG="$TEST_ROOT/partial_load_gui.log"
+PARTIAL_HIERARCHY_JSON="$TEST_ROOT/partial_hierarchy_search.json"
+PARTIAL_HIERARCHY_STDERR="$TEST_ROOT/partial_hierarchy_search.stderr"
 mkdir -p "$PARTIAL_ELAB_ROOT"
 
 cd "$PARTIAL_ELAB_ROOT"
@@ -734,6 +740,54 @@ print("partial clk-present/rst-absent evidence OK: CLK_ONLY_RS ports=clk,d,q")
 PY
 
 cd "$PROJECT_ROOT"
+set +e
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$PARTIAL_ELAB_DB" \
+  --regex '^top\.u_tile(_peer)?$' \
+  --limit 500 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout "$NPI_TIMEOUT" \
+  --json \
+  >"$PARTIAL_HIERARCHY_JSON" 2>"$PARTIAL_HIERARCHY_STDERR"
+PARTIAL_HIERARCHY_RC=$?
+set -e
+cat "$PARTIAL_HIERARCHY_JSON"
+cat "$PARTIAL_HIERARCHY_STDERR" >&2
+[ "$PARTIAL_HIERARCHY_RC" -eq 0 ] ||
+  fail "hierarchy search rejected a partial KDB whose top remains queryable"
+grep -Fq 'warning[NPI_LOAD_PARTIAL]' "$PARTIAL_HIERARCHY_STDERR"
+
+"$PYTHON_BIN" - "$PARTIAL_HIERARCHY_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    result = json.load(stream)
+expected_paths = ["top.u_tile", "top.u_tile_peer"]
+paths = [item.get("path") for item in result.get("matches", [])]
+notices = result.get("notices")
+if result.get("schema") != "rscheck.hierarchy-search" or result.get("schema_version") != 1:
+    raise SystemExit("partial hierarchy search schema mismatch: {!r}".format(result))
+if paths != expected_paths or result.get("total_matches") != 2:
+    raise SystemExit("partial hierarchy search paths mismatch: {!r}".format(result))
+if result.get("truncated") is not True or result.get("index_truncated") is not True:
+    raise SystemExit("partial hierarchy search was not marked incomplete: {!r}".format(result))
+if result.get("warnings") != [
+    "hierarchy index may be incomplete because the elaborated KDB only partially loaded"
+]:
+    raise SystemExit("partial hierarchy search warning mismatch: {!r}".format(result))
+if not isinstance(notices, list) or len(notices) != 1:
+    raise SystemExit("partial hierarchy search must preserve one notice: {!r}".format(result))
+if "top instance(s) remain queryable" not in notices[0]:
+    raise SystemExit("partial hierarchy search notice mismatch: {!r}".format(notices))
+print(
+    "partial hierarchy search evidence OK: "
+    "NPI_LOAD_PARTIAL retained, index_truncated=true, "
+    "matches=top.u_tile,top.u_tile_peer"
+)
+PY
+
 "$PYTHON_BIN" -m rscheck check \
   --excel "$PROJECT_ROOT/examples/specs.csv" \
   --config "$PROJECT_ROOT/config/rscheck.example.json" \
@@ -858,10 +912,21 @@ echo "Verdi GUI loaded elaborated top 'top' after ${elapsed}s:"
 printf '%s\n' "$VERDI_WINDOWS"
 
 cd "$PROJECT_ROOT"
+# Check route matching in the mapped GUI against the fresh elaborated design.
+RSCHECK_ROUTE_COLLECTOR="$COLLECTOR" RSCHECK_ROUTE_KDB="$ELAB_DB" \
+  RSCHECK_ROUTE_NPI_LIB="$NPI_LIB_DIR" \
+  "$PYTHON_BIN" -m unittest -v tests.test_rs_route_gui 2>&1 | tee "$TEST_ROOT/rs_route_gui.log"
+
 CLEAN_POSITIONS="$TEST_ROOT/clean_load_positions.txt"
 CLEAN_TRACE_RULES="$TEST_ROOT/clean_load_trace_rules.tsv"
 CLEAN_INVENTORY="$TEST_ROOT/clean_load_inventory.json"
 CLEAN_COLLECTOR_LOG="$TEST_ROOT/clean_load_collector.log"
+CLEAN_HIERARCHY_EXACT_JSON="$TEST_ROOT/clean_hierarchy_exact.json"
+CLEAN_HIERARCHY_EXACT_STDERR="$TEST_ROOT/clean_hierarchy_exact.stderr"
+CLEAN_HIERARCHY_LIMIT_JSON="$TEST_ROOT/clean_hierarchy_limit.json"
+CLEAN_HIERARCHY_LIMIT_STDERR="$TEST_ROOT/clean_hierarchy_limit.stderr"
+CLEAN_HIERARCHY_NO_MATCH_JSON="$TEST_ROOT/clean_hierarchy_no_match.json"
+CLEAN_HIERARCHY_NO_MATCH_STDERR="$TEST_ROOT/clean_hierarchy_no_match.stderr"
 POS_INVENTORY="$TEST_ROOT/positive_inventory.json"
 POS_REPORT="$TEST_ROOT/positive_report.json"
 POS_CSV="$TEST_ROOT/positive_report.csv"
@@ -881,6 +946,124 @@ LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     2>&1 | tee "$CLEAN_COLLECTOR_LOG"
 assert_no_collector_errors "$CLEAN_COLLECTOR_LOG"
 assert_sample_clock_traces "$CLEAN_INVENTORY" "clean-load"
+
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.u_tile(_peer)?$' \
+  --limit 500 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout "$NPI_TIMEOUT" \
+  --json \
+  >"$CLEAN_HIERARCHY_EXACT_JSON" 2>"$CLEAN_HIERARCHY_EXACT_STDERR"
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.' \
+  --limit 2 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout "$NPI_TIMEOUT" \
+  --json \
+  >"$CLEAN_HIERARCHY_LIMIT_JSON" 2>"$CLEAN_HIERARCHY_LIMIT_STDERR"
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^__rscheck_hierarchy_no_match__$' \
+  --limit 500 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout "$NPI_TIMEOUT" \
+  --json \
+  >"$CLEAN_HIERARCHY_NO_MATCH_JSON" 2>"$CLEAN_HIERARCHY_NO_MATCH_STDERR"
+
+cat "$CLEAN_HIERARCHY_EXACT_JSON"
+cat "$CLEAN_HIERARCHY_LIMIT_JSON"
+cat "$CLEAN_HIERARCHY_NO_MATCH_JSON"
+cat "$CLEAN_HIERARCHY_EXACT_STDERR" >&2
+cat "$CLEAN_HIERARCHY_LIMIT_STDERR" >&2
+cat "$CLEAN_HIERARCHY_NO_MATCH_STDERR" >&2
+assert_no_collector_errors "$CLEAN_HIERARCHY_EXACT_STDERR"
+assert_no_collector_errors "$CLEAN_HIERARCHY_LIMIT_STDERR"
+assert_no_collector_errors "$CLEAN_HIERARCHY_NO_MATCH_STDERR"
+
+"$PYTHON_BIN" - \
+  "$CLEAN_HIERARCHY_EXACT_JSON" \
+  "$CLEAN_HIERARCHY_LIMIT_JSON" \
+  "$CLEAN_HIERARCHY_NO_MATCH_JSON" <<'PY'
+import json
+import sys
+
+
+def load(path):
+    with open(path, "r", encoding="utf-8") as stream:
+        result = json.load(stream)
+    if result.get("schema") != "rscheck.hierarchy-search":
+        raise SystemExit("hierarchy search schema mismatch: {!r}".format(result))
+    if result.get("schema_version") != 1:
+        raise SystemExit("hierarchy search schema version mismatch: {!r}".format(result))
+    if result.get("warnings") != [] or result.get("notices") != []:
+        raise SystemExit("clean hierarchy search has diagnostics: {!r}".format(result))
+    if result.get("index_truncated") is not False:
+        raise SystemExit("sample hierarchy index was unexpectedly truncated: {!r}".format(result))
+    return result
+
+
+exact, limited, missing = (load(path) for path in sys.argv[1:])
+exact_paths = [item.get("path") for item in exact.get("matches", [])]
+if exact.get("query") != r"^top\.u_tile(_peer)?$":
+    raise SystemExit("exact hierarchy query was not preserved: {!r}".format(exact))
+if exact_paths != ["top.u_tile", "top.u_tile_peer"]:
+    raise SystemExit("exact hierarchy paths mismatch: {!r}".format(exact))
+if exact.get("total_matches") != 2 or exact.get("truncated") is not False:
+    raise SystemExit("exact hierarchy count mismatch: {!r}".format(exact))
+for item in exact.get("matches", []):
+    if item.get("kind") != "module" or not item.get("definition"):
+        raise SystemExit("exact hierarchy display evidence is incomplete: {!r}".format(item))
+
+limited_matches = limited.get("matches", [])
+if (
+    limited.get("limit") != 2
+    or len(limited_matches) != 2
+    or limited.get("total_matches", 0) <= 2
+    or limited.get("truncated") is not True
+):
+    raise SystemExit("limited hierarchy search did not report truncation: {!r}".format(limited))
+if any(not item.get("path", "").startswith("top.") for item in limited_matches):
+    raise SystemExit("limited hierarchy search returned an unexpected path: {!r}".format(limited))
+
+if (
+    missing.get("matches") != []
+    or missing.get("total_matches") != 0
+    or missing.get("truncated") is not False
+):
+    raise SystemExit("no-match hierarchy search mismatch: {!r}".format(missing))
+
+print("clean hierarchy exact search evidence OK: matches=top.u_tile,top.u_tile_peer")
+print(
+    "clean hierarchy limit evidence OK: returned=2 total={} truncated=true".format(
+        limited["total_matches"]
+    )
+)
+print("clean hierarchy no-match evidence OK: matches=0 truncated=false")
+PY
+
+POSITION_HIERARCHY_GUI_LOG="$TEST_ROOT/online_gui_position_hierarchy.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.u_tile(_peer)?$' \
+  --expected-path top.u_tile \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout "$NPI_TIMEOUT" \
+  --iterations "$GUI_POSITION_HIERARCHY_ITERATIONS" \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" \
+  2>&1 | tee "$POSITION_HIERARCHY_GUI_LOG"
+grep -Fq 'POSITION_HIERARCHY_GUI_WINDOW: window=mapped window_id=' \
+  "$POSITION_HIERARCHY_GUI_LOG"
+grep -Fq \
+  "selected=top.u_tile displayed=2 iterations=$GUI_POSITION_HIERARCHY_ITERATIONS mapping-dirty=false window=mapped dialog=mapped" \
+  "$POSITION_HIERARCHY_GUI_LOG"
+assert_no_collector_errors "$POSITION_HIERARCHY_GUI_LOG"
 
 "$PYTHON_BIN" - \
   "$PROJECT_ROOT/examples/specs.csv" \
@@ -1755,12 +1938,15 @@ assert_no_unexpected_collector_logs
 assert_verdi_still_ready
 
 trap - ERR
-echo "PASS: partial KDB compatibility, arbitrary Excel headers, position/CRG_source mapping, fresh KDB online GUI checks, and offline GUI stress suite completed."
+echo "PASS: partial/clean hierarchy discovery, visible position-path selection, arbitrary Excel headers, position/CRG_source mapping, online GUI checks, and offline GUI stress suite completed."
 echo "ELAB_DB=$ELAB_DB"
 echo "PARTIAL_ELAB_DB=$PARTIAL_ELAB_DB"
 echo "PARTIAL_REPORT=$PARTIAL_REPORT"
 echo "REPORT=$POS_REPORT"
 echo "VERDI_LOG=$VERDI_LOG"
+echo "HIERARCHY_SEARCH_RESULTS=$PARTIAL_HIERARCHY_JSON,$CLEAN_HIERARCHY_EXACT_JSON,$CLEAN_HIERARCHY_LIMIT_JSON,$CLEAN_HIERARCHY_NO_MATCH_JSON"
+echo "HIERARCHY_SEARCH_STDERR=$PARTIAL_HIERARCHY_STDERR,$CLEAN_HIERARCHY_EXACT_STDERR,$CLEAN_HIERARCHY_LIMIT_STDERR,$CLEAN_HIERARCHY_NO_MATCH_STDERR"
+echo "POSITION_HIERARCHY_GUI_LOG=$POSITION_HIERARCHY_GUI_LOG"
 echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CRG_TRACE_DEPTH_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$CRG_SOURCE_MAPPING_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)

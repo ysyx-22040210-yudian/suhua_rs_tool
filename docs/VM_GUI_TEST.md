@@ -1,5 +1,7 @@
 # rscheck 自带 GUI 与 Verdi GUI 的跨设备测试
 
+若只验 `RS_route` 的桌面交互，在能打开 Tk 的设备上进入仓库根目录运行 `python3 -m unittest -v tests.test_rs_route_gui`，默认读取仓库自带的离线 inventory。正式脚本 `bash scripts/test_vm_verdi_gui.sh` 会另外用本次编译的示例 KDB 运行同一个窗口测试，验收唯一命中、0 拍以及并列不选三个结果，记录到当次产物目录的 `rs_route_gui.log`。该在线测试使用 `RSCHECK_ROUTE_COLLECTOR`、`RSCHECK_ROUTE_KDB` 和可选的 `RSCHECK_ROUTE_NPI_LIB`，不接受 filelist。
+
 本文档说明如何在不同 Linux 设备和桌面环境中启动、检查并压测两个独立 GUI：
 
 | 界面 | 用途 | 启动器 | 设计输入 |
@@ -184,7 +186,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 “模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`、`clk_port=clk`、`rst_port=rst`，并把兼容规则键说明为“有 `RS_CRG_EN` parameter”。新建或修改规则时把 clk/rst 端口输入留空，应分别规范化为 `clk`、`rst_n`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，即要求 RTL `RS_CRG_EN=0`、Excel/internal `RS_CFG_EN=假门控`，且每个匹配实例贡献 1。旧 JSON 的显式规则缺少端口键时先继承 `rtl.clk_port/rst_port`，GUI 保存或导出后必须显式写入继承值。
 
-“Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；映射未保存时不能运行，保存应原子写回当前配置 JSON 并重新加载。Excel 简写命中后检查、分组、clk/rst 相对解析和 NPI positions 均使用全路径；未命中值按完整路径直通。
+“Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；映射未保存时不能运行，保存应原子写回当前配置 JSON 并重新加载。Excel 简写命中后检查、分组、clk/rst 相对解析和 NPI positions 均使用全路径；未命中值按完整路径直通。完整路径编辑区还必须提供“从 Verdi 选择”：在在线 NPI 模式下读取“检查配置”页当前的 collector、elaborated KDB、NPI 库目录和超时，用户输入针对完整 hierarchy 的 Python 正则后才发起查询。候选表显示完整路径、模块定义和 scope 类型；双击或点击“使用所选路径”只回填完整路径编辑框，不覆盖 position 简写、不自动修改映射数据库、不设置 dirty，仍需依次点击“应用修改”和“保存映射库”。
 
 “CRG Source映射库”页应提供相同的搜索、CRUD、原子保存、dirty 阻断和外部修改冲突处理。示例配置应显示 `crg_core -> top.u_tile.u_crg`、`crg_aux -> top.u_tile.u_aux_crg`；命中后 GUI/JSON/CSV 同时保留简称与完整路径，并以右侧完整 hierarchy 作为 CRG trace 目标。简称和完整 CRG 路径都不得加入 NPI positions。
 
@@ -427,6 +429,87 @@ GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case
 
 3 轮中的每一轮都必须通过真实 collector 加载该 KDB。首组 6 个实例都必须从规则 `clk` formal 追到 `u_occ` depth 1、`u_clk_mux` depth 2 和 `u_crg`/`u_aux_crg` depth 3；目标 `u_crg` 任一分支命中即通过。`clk_occ` 的 input `clk/rst_n` 必须被精确排除。第二组 `u_aux_crg` 为 direct depth 1。inventory 必须是 v3，report 必须是 v4，运行命令必须包含 `--crg-trace-max-depth 16`。
 
+Position 原始路径发现不需要 Excel 或配置文件。下面的块可直接复制，先验证 clean KDB 的精确双匹配、`limit=2` 截断和合法零匹配，再打开工具自带的候选窗口连续选择 20 轮：
+
+```bash
+cd "$PROJECT_ROOT"
+HIERARCHY_TEST_DIR="$(mktemp -d /tmp/rscheck_position_hierarchy.XXXXXX)"
+
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.u_tile(_peer)?$' \
+  --limit 500 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout 180 \
+  --json >"$HIERARCHY_TEST_DIR/exact.json"
+
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.' \
+  --limit 2 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout 180 \
+  --json >"$HIERARCHY_TEST_DIR/limited.json"
+
+"$PYTHON_BIN" -m rscheck hierarchy-search \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^__rscheck_hierarchy_no_match__$' \
+  --limit 500 \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --npi-timeout 180 \
+  --json >"$HIERARCHY_TEST_DIR/no_match.json"
+
+"$PYTHON_BIN" - \
+  "$HIERARCHY_TEST_DIR/exact.json" \
+  "$HIERARCHY_TEST_DIR/limited.json" \
+  "$HIERARCHY_TEST_DIR/no_match.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    exact = json.load(stream)
+with open(sys.argv[2], "r", encoding="utf-8") as stream:
+    limited = json.load(stream)
+with open(sys.argv[3], "r", encoding="utf-8") as stream:
+    missing = json.load(stream)
+
+assert [item["path"] for item in exact["matches"]] == [
+    "top.u_tile",
+    "top.u_tile_peer",
+]
+assert exact["total_matches"] == 2 and exact["truncated"] is False
+assert len(limited["matches"]) == 2
+assert limited["total_matches"] > 2 and limited["truncated"] is True
+assert missing["matches"] == []
+assert missing["total_matches"] == 0 and missing["truncated"] is False
+assert all(item["schema"] == "rscheck.hierarchy-search" for item in (exact, limited, missing))
+assert all(item["index_truncated"] is False for item in (exact, limited, missing))
+print("POSITION_HIERARCHY_CLI_PASS")
+PY
+
+"$PYTHON_BIN" scripts/test_position_hierarchy_gui_smoke.py \
+  --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" \
+  --elab-db "$ELAB_DB" \
+  --regex '^top\.u_tile(_peer)?$' \
+  --expected-path top.u_tile \
+  --npi-lib-dir "$NPI_LIB_DIR" \
+  --timeout 180 \
+  --iterations 20 \
+  --visible-seconds 15
+```
+
+终端必须依次出现 `POSITION_HIERARCHY_CLI_PASS`、`POSITION_HIERARCHY_GUI_WINDOW: window=mapped` 和以下末行：
+
+```text
+POSITION_HIERARCHY_GUI_PASS: ... selected=top.u_tile displayed=2 iterations=20 mapping-dirty=false window=mapped dialog=mapped window_id=0x...
+```
+
+在候选窗口可见期间，确认两条路径、模块定义和 scope 类型均不截断；选择 `top.u_tile` 后只更新完整路径编辑框，简称仍保持 `hierarchy_probe_alias`，且映射数据库尚未被修改。普通文本使用包含式模糊匹配，忽略大小写可写 `(?i)`；若状态提示结果截断，必须收窄正则后再选。第 10 节一键脚本还会验证 partial KDB 保留 notice，并把 `index_truncated/truncated` 置为 `true`，防止把部分加载结果误认为完整集合。
+
 直接复制以下命令做在线深度上限 20 轮 GUI 压测：
 
 ```bash
@@ -564,7 +647,7 @@ Ran ... tests in ...
 OK
 ```
 
-Verdi 端到端脚本会运行全量测试、构建 NPI L0/L1 collector、验证 partial/clean KDB 和可见 Verdi/Tk GUI。partial 与 clean inventory 都同时采集 `top.u_tile` 和 `top.u_tile_peer` 两个结构相同的 hierarchy，逐 scope 断言 13 个实例、33 个 trace node、4 个 unique module、foreign-prefix=0，以证明同名 local clock cone 的 cache 按完整 hierarchy 隔离；partial KDB 还验证 Netlist 端口集合缺失时由 Language Model/L1 补追 input 分支。clean KDB 上还会验证三层分支 CRG trace、规则 `clock_i`、depth 2 截断、clk/rst 端口隔离、两个门控专项、CRG 映射、100 轮稳定性和 10,000 行负载。每次 GUI smoke 都执行六根配置和三个数据库往返并断言 report v4/inventory v3。
+Verdi 端到端脚本会运行全量测试、构建 NPI L0/L1 collector、验证 partial/clean KDB 和可见 Verdi/Tk GUI。partial 与 clean inventory 都同时采集 `top.u_tile` 和 `top.u_tile_peer` 两个结构相同的 hierarchy，逐 scope 断言 13 个实例、33 个 trace node、4 个 unique module、foreign-prefix=0，以证明同名 local clock cone 的 cache 按完整 hierarchy 隔离；partial KDB 还验证 Netlist 端口集合缺失时由 Language Model/L1 补追 input 分支，并验证 hierarchy 查询保留 `NPI_LOAD_PARTIAL` notice。clean KDB 会验证 Position hierarchy 精确双匹配、`limit=2` 截断、零匹配和可见候选选择 20 轮，还会验证三层分支 CRG trace、规则 `clock_i`、depth 2 截断、clk/rst 端口隔离、两个门控专项、CRG 映射、100 轮稳定性和 10,000 行负载。通用检查 GUI smoke 执行六根配置和三个数据库往返并断言 report v4/inventory v3；独立 Position hierarchy GUI smoke 断言选择候选不自动修改简称、数据库或 dirty 状态。
 
 正式复现推荐从 bootstrap checkout 调用 fresh 驱动。下面命令会在 `${VM_RUN_BASE:-$HOME}/rscheck_fresh.*` 创建唯一运行根目录，最多执行三次同时带 TERM timeout 和 KILL 上限的 GitHub clone，每次使用独立且永久保留的 `repo_attemptN` 目录；成功后锁定克隆时的 `origin/main`，将全部控制台输出写入 `full_vm_test.log`，并强制把正式测试产物写入 `artifacts`：
 
@@ -606,7 +689,7 @@ bash scripts/test_vm_verdi_gui.sh
 bash scripts/test_vm_verdi_gui.sh --gui-probe-only
 ```
 
-端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_CRG_TRACE_DEPTH_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_RS_CFG_DONTCARE_ITERATIONS`、`GUI_RS_CFG_NA_ITERATIONS`、`GUI_CRG_SOURCE_MAPPING_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。普通在线正例默认 3 轮；CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射专项默认各 20 轮；离线稳定性默认 100 轮，负载默认 10,000 行。各轮次变量必须是十进制正整数。
+端到端覆盖变量包括 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR`、`VERDI_WINDOW_REGEX`、`VERDI_READY_REGEX`、`PYTHON_BIN`、`CXX`、`NPI_PLATFORM`、`NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`、`PYTHON_ENABLE`、`GCC_ENABLE`、`GUI_START_TIMEOUT`、`NPI_TIMEOUT`、`KEEP_VERDI_GUI`、`GUI_ONLINE_ITERATIONS`、`GUI_POSITION_HIERARCHY_ITERATIONS`、`GUI_CRG_TRACE_DEPTH_ITERATIONS`、`GUI_CLK_WITHOUT_RST_ITERATIONS`、`GUI_RS_CFG_DONTCARE_ITERATIONS`、`GUI_RS_CFG_NA_ITERATIONS`、`GUI_CRG_SOURCE_MAPPING_ITERATIONS`、`GUI_STRESS_ITERATIONS`、`GUI_LOAD_ROWS`、`GUI_VISIBLE_SECONDS`、`VERDI_ENV_FILE` 和 `VERDI_AUTO_LICENSE_IMPORT`。普通在线正例默认 3 轮；Position hierarchy、CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射专项默认各 20 轮；离线稳定性默认 100 轮，负载默认 10,000 行。各轮次变量必须是十进制正整数。
 
 成功输出应包含：
 
@@ -617,8 +700,13 @@ partial NPI load evidence OK: load reported errors but requested RTL remained qu
 partial-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
 partial-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
 partial NPI formal-port L0/L1 inventory evidence OK
+partial hierarchy search evidence OK: NPI_LOAD_PARTIAL retained, index_truncated=true, matches=top.u_tile,top.u_tile_peer
 clean-load NPI clock trace evidence OK: RS->u_occ->u_clk_mux->{u_crg,u_aux_crg}, custom clock_i, witness-depth=3
 clean-load trace cache scope isolation OK: top.u_tile and top.u_tile_peer contain only their own same-named clock cones
+clean hierarchy exact search evidence OK: matches=top.u_tile,top.u_tile_peer
+clean hierarchy limit evidence OK: returned=2 total=... truncated=true
+clean hierarchy no-match evidence OK: matches=0 truncated=false
+POSITION_HIERARCHY_GUI_PASS: ... selected=top.u_tile displayed=2 iterations=20 mapping-dirty=false window=mapped dialog=mapped window_id=0x...
 RESULT: PASS | rows=2 errors=0 warnings=1
 [WARNING] NPI_LOAD_PARTIAL: ...
 Verdi GUI loaded elaborated top 'top' after ...
@@ -638,10 +726,10 @@ GUI_SMOKE_PASS: state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=
 config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules
 module-rule-ports=preserved
 crg-source-db=crud-complete
-PASS: partial KDB compatibility, arbitrary Excel headers, position mapping, fresh KDB online GUI checks, and offline GUI stress suite completed.
+PASS: partial/clean hierarchy discovery, visible position-path selection, arbitrary Excel headers, position/CRG_source mapping, online GUI checks, and offline GUI stress suite completed.
 ```
 
-正式脚本不会只检查一次 marker。它对以下十二份日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
+正式脚本不会只检查一次 marker。它对以下十二份通用检查 GUI 日志逐一执行 `grep -Fq` 硬断言，任一缺失都会使端到端测试失败：
 
 ```text
 online_gui_positive.log
@@ -659,6 +747,8 @@ offline_gui_10000_rows.log
 ```
 
 十二份日志都必须包含完全相同的六根 config-io marker、`module-rule-ports=preserved`、`crg-source-db=crud-complete`、`dirty-copy=export-preserved/import-cleared` 和 `schemas=report-v4/inventory-v3`。映射日志必须包含 `crg-source-check=pass trace-depth=3 findings=none`；新增 `online_gui_crg_trace_depth_limit.log` 必须包含 `crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6`，并保持 2 passed rows、0 error。
+
+Position hierarchy 使用独立日志 `online_gui_position_hierarchy.log`，必须包含 `POSITION_HIERARCHY_GUI_WINDOW` 与 `POSITION_HIERARCHY_GUI_PASS`，但不套用 Excel/check/report 的六根 config-io marker。CLI JSON 分别为 `partial_hierarchy_search.json`、`clean_hierarchy_exact.json`、`clean_hierarchy_limit.json`、`clean_hierarchy_no_match.json`，stderr 单独保存；脚本末尾打印 `HIERARCHY_SEARCH_RESULTS`、`HIERARCHY_SEARCH_STDERR` 和 `POSITION_HIERARCHY_GUI_LOG` 的完整路径。
 
 正例第 3 行故意把完整本地例化名 `CTRL_RS_D0` 填入 `RS_inst`。该行通过证明空 remainder 合法，而且实例仍完成 module、parameters、step、clk/rst 和 direct depth 1 CRG trace。这里不能改填完整层次实例名。
 
@@ -682,6 +772,8 @@ offline_gui_10000_rows.log
 - `error[NPI_LOAD]` / collector 退出 11：load 返回 0 且没有任何 top 可查询。确认 KDB 来自 `elabcom -elab`，执行 `ldd "$COLLECTOR" | grep -E 'libNPI|libnpiL1'` 核对运行库与 Verdi/KDB 版本，并查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`；`work.lib++` 及其符号链接别名会更早被拒绝。
 - GUI 在线日志中出现 `-f`、RTL 或 `-top`：停止签核；当前实现不应构造这些参数，按输入边界回归处理。
 - 示例出现 `POSITION_NOT_FOUND`：确认 Excel 为 `tile_core`、当前配置含 `position_mappings.tile_core=top.u_tile`；report 中 alias 为空表示未命中并按路径直通，优先检查简写大小写和实际加载的配置文件。
+- Position 候选为零：这可以是合法查询结果；确认当前选择的是目标 `*.elab++`、top 和大小写正确，并核对 Python 正则转义。普通文本已按包含关系匹配，不需要手写前后 `.*`。
+- Position 候选提示截断：当前列表不是完整结果；收窄正则后重新查询再选择。候选查询拒绝 `work.lib++`、filelist 和 RTL 源码。
 - 显式模块规则未生效：核对规则键与 Excel/RTL 模块名的大小写；没有精确匹配时工具采用默认 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，实际要求 RTL `RS_CRG_EN` 并检查默认端口。
 - `CLK_PORT_MISSING` / `RST_PORT_MISSING`：查看 report 中最终 `module_rule.clk_port/rst_port` 和 inventory 的全部 `ports`。旧 offline inventory 若只采了全局端口，必须用当前 collector 重采。partial KDB 中端口仍为空时检查 NPI L1 库与 fallback 日志；当前 collector 会把 Netlist 已解析端口和 Language Model/L1 集合合并，补追非空但不完整的 Netlist input 集合，同时跳过已解析同名端口。clk/rst 独立判定：模块存在且连接了规则指定的 clk、但没有 rst 时，行 FAIL 且只能报 `RST_PORT_MISSING`；同时出现 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED` 应按回归缺陷处理。当前不能关闭 rst 检查。
 - `CRG_SOURCE_NOT_FOUND`：完整 v3 trace 未精确命中目标完整 hierarchy；查看 report v4 `crg_source_check` 和 `clock_trace.modules/path`。
