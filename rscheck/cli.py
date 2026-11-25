@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Sequence
 
 from .checker import check_specs
@@ -19,16 +20,20 @@ from .model import (
     MAX_CRG_TRACE_DEPTH,
     ConfigError,
     FIELD_NAMES,
+    Inventory,
     RsCheckError,
+    SkippedRow,
+    SpecRow,
     ToolConfig,
 )
 from .npi_runner import (
     DEFAULT_HIERARCHY_SEARCH_LIMIT,
     MAX_HIERARCHY_SEARCH_LIMIT,
+    collect_hierarchy,
     collect_inventory,
     search_hierarchy,
 )
-from .reporting import format_console_report, write_csv_report, write_json_report
+from .reporting import format_console_report, write_csv_report, write_json_report, write_match_details
 
 
 def _common_parser() -> argparse.ArgumentParser:
@@ -77,6 +82,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="validate and display normalized Excel rows without loading RTL",
     )
     validate.add_argument("--json", action="store_true", help="print normalized rows as JSON")
+    validate.add_argument("--include-skipped", action="store_true",
+                          help="with --json, return an object containing rows and skipped_rows")
 
     check = subparsers.add_parser(
         "check",
@@ -94,6 +101,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--json-report", help="write a structured JSON report")
     check.add_argument("--csv-report", help="write an Excel-friendly UTF-8 CSV report")
+    check.add_argument("--match-details", action="store_true", help="print human-readable instance match details")
+    check.add_argument("--match-report", metavar="FILE", help="write the same match details as a UTF-8 text file")
     check.add_argument(
         "--keep-inventory",
         help="copy live NPI inventory to this path (only with --collector)",
@@ -121,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     hierarchy_search = subparsers.add_parser(
         "hierarchy-search",
-        help="search position scope paths in a Verdi elaborated KDB",
+        help="search DUT scope paths in a Verdi elaborated KDB",
     )
     hierarchy_search.add_argument(
         "--collector", required=True, help="NPI collector executable"
@@ -129,11 +138,14 @@ def _build_parser() -> argparse.ArgumentParser:
     hierarchy_search.add_argument(
         "--elab-db", required=True, help="Verdi elaborated database directory"
     )
-    hierarchy_search.add_argument(
+    hierarchy_mode = hierarchy_search.add_mutually_exclusive_group(required=True)
+    hierarchy_mode.add_argument(
         "--regex",
-        required=True,
         help="Python regular expression matched against full hierarchy paths",
     )
+    # The GUI owns the temporary directory for exactly one dialog and one KDB.
+    hierarchy_mode.add_argument("--browse", action="store_true", help=argparse.SUPPRESS)
+    hierarchy_search.add_argument("--session-index", type=Path, help=argparse.SUPPRESS)
     hierarchy_search.add_argument(
         "--limit",
         type=int,
@@ -303,15 +315,36 @@ def _apply_overrides(config: ToolConfig, args: argparse.Namespace) -> ToolConfig
     return replace(config, excel=excel)
 
 
-def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
+def _read_workbook(args: argparse.Namespace, config: ToolConfig) -> tuple[list[SpecRow], list[SkippedRow]]:
+    skipped: list[SkippedRow] = []
     specs = read_spec_rows(
         args.excel,
         config.excel,
         config.position_mappings,
         config.crg_source_mappings,
+        on_notice=lambda message: print(message, file=sys.stderr),
+        on_skip=skipped.append,
     )
+    if skipped:
+        print(f"info[ROWS_SKIPPED]: 整行跳过 {len(skipped)} 行，参与检查 {len(specs)} 行。", file=sys.stderr)
+        for item in skipped[:10]:
+            print(f"  {item.describe()}", file=sys.stderr)
+        if len(skipped) > 10:
+            print("  仅预览前 10 行；完整清单见 JSON / CSV 报告或 validate --json --include-skipped。", file=sys.stderr)
+    elif not specs:
+        print("info[NO_ACTIVE_ROWS]: 规格数据区为空，未执行检查。", file=sys.stderr)
+    return specs, skipped
+
+
+def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
+    specs, skipped = _read_workbook(args, config)
+    for spec in specs:
+        for finding in spec.blank_findings:
+            print(f"warning[{finding.code}]: {finding.message}", file=sys.stderr)
     if args.json:
-        print(json.dumps([spec.as_dict() for spec in specs], ensure_ascii=False, indent=2))
+        rows = [spec.as_dict() for spec in specs]
+        print(json.dumps({"rows": rows, "skipped_rows": [s.as_dict() for s in skipped]} if args.include_skipped
+                         else rows, ensure_ascii=False, indent=2))
     else:
         print(f"VALID: {len(specs)} specification row(s)")
         for spec in specs:
@@ -326,6 +359,11 @@ def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
                 f"module={spec.rs_module} step={spec.step} "
                 f"CRG_source={crg_source}"
             )
+            if spec.rs_inst_formula_cell:
+                print(f"  RS_inst 公式结果（{spec.sheet}!{spec.rs_inst_formula_cell}）："
+                      f"{json.dumps(spec.rs_inst, ensure_ascii=False)}")
+            if len(spec.rs_inst_items) > 1:
+                print("  RS_inst items: " + "; ".join(spec.rs_inst_items))
     return 0
 
 
@@ -333,6 +371,16 @@ def _check_command(
     args: argparse.Namespace,
     config: ToolConfig,
 ) -> int:
+    if args.match_report:
+        dest = Path(args.match_report).expanduser().resolve()
+        for name in ("excel", "config", "inventory", "collector", "keep_inventory", "json_report", "csv_report"):
+            path = getattr(args, name, None)
+            if path:
+                other = Path(path).expanduser().resolve()
+                if dest == other or (dest.exists() and other.exists() and dest.samefile(other)):
+                    raise ConfigError(f"--match-report must not overwrite --{name.replace('_', '-')}")
+        if args.elab_db and Path(args.elab_db).expanduser().resolve() in (dest, *dest.parents):
+            raise ConfigError("--match-report must not be written inside --elab-db")
     if args.npi_timeout is not None and args.npi_timeout < 1:
         raise ConfigError("--npi-timeout must be >= 1")
     if args.crg_trace_max_depth is not None:
@@ -348,12 +396,7 @@ def _check_command(
                 crg_trace_max_depth=args.crg_trace_max_depth,
             ),
         )
-    specs = read_spec_rows(
-        args.excel,
-        config.excel,
-        config.position_mappings,
-        config.crg_source_mappings,
-    )
+    specs, skipped = _read_workbook(args, config)
     if args.inventory:
         if args.elab_db:
             raise ConfigError("--elab-db requires --collector")
@@ -361,7 +404,7 @@ def _check_command(
             raise ConfigError("--keep-inventory requires --collector")
         if args.npi_lib_dir:
             raise ConfigError("--npi-lib-dir requires --collector")
-        inventory = load_inventory(args.inventory)
+        inventory = load_inventory(args.inventory) if specs else Inventory({}, schema_version=4)
     else:
         if not args.elab_db:
             raise ConfigError("--collector requires --elab-db")
@@ -374,21 +417,32 @@ def _check_command(
             timeout_seconds=args.npi_timeout,
             keep_inventory=args.keep_inventory,
             npi_lib_dir=args.npi_lib_dir,
-        )
-    report = check_specs(specs, inventory, config.rtl, config.module_rules)
-    print(format_console_report(report))
+        ) if specs else Inventory({}, schema_version=4)
+        if not specs and args.keep_inventory:
+            print("info[NO_COLLECTION]: 没有需检查的行，未启动 NPI，也未写入 --keep-inventory。", file=sys.stderr)
+    report = replace(check_specs(specs, inventory, config.rtl, config.module_rules), skipped_rows=tuple(skipped))
+    print(format_console_report(report, match_details=args.match_details))
     if args.json_report:
         output = write_json_report(report, args.json_report)
         print(f"JSON report: {output}")
     if args.csv_report:
         output = write_csv_report(report, args.csv_report)
         print(f"CSV report: {output}")
+    if args.match_report:
+        output = write_match_details(report, args.match_report)
+        print(f"Match details: {output}")
     return 0 if report.passed else 1
 
 
 def _hierarchy_search_command(args: argparse.Namespace) -> int:
     if args.npi_timeout is not None and args.npi_timeout < 1:
         raise ConfigError("--npi-timeout must be >= 1")
+    if args.browse:
+        if not args.session_index:
+            raise ConfigError("--browse requires a session index")
+        collect_hierarchy(args.collector, elab_db=args.elab_db, timeout_seconds=args.npi_timeout,
+                          npi_lib_dir=args.npi_lib_dir, index_output=args.session_index)
+        return 0
     result = search_hierarchy(
         args.collector,
         args.regex,
@@ -396,6 +450,7 @@ def _hierarchy_search_command(args: argparse.Namespace) -> int:
         limit=args.limit,
         timeout_seconds=args.npi_timeout,
         npi_lib_dir=args.npi_lib_dir,
+        **({"cached_index": args.session_index} if args.session_index else {}),
     )
     if args.json:
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))

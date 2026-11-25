@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import shlex
 import signal
@@ -18,8 +19,18 @@ from .model import (
     CRG_TRACE_EXCLUDED_INPUTS,
     CRG_TRACE_STATUSES,
     FIELD_NAMES,
+    OPTIONAL_ROW_FIELDS,
+    REQUIRED_ROW_FIELDS,
     REQUIRED_COLUMN_FIELDS,
-    ROUTE_CANDIDATE_LIMIT,
+    NAME_CANDIDATE_LIMIT,
+    NAME_TIE_REVIEW_LIMIT,
+    RS_INST_FUZZY_RULE,
+    RS_INST_GROUP_RULE,
+    RS_INST_LEGACY_SPLIT_RULE,
+    RS_INST_LIST_RULE,
+    RS_INST_SPLIT_RULE,
+    split_rs_inst,
+    skip_reason,
     InventoryError,
     MAX_CRG_TRACE_DEPTH,
 )
@@ -278,7 +289,7 @@ def build_validate_command(
     request: GuiRunRequest, *, python_executable: str | None = None
 ) -> list[str]:
     python = python_executable or sys.executable
-    return [python, "-m", "rscheck", "validate", *_common_arguments(request), "--json"]
+    return [python, "-m", "rscheck", "validate", *_common_arguments(request), "--include-skipped", "--json"]
 
 
 def build_position_hierarchy_search_command(
@@ -286,6 +297,7 @@ def build_position_hierarchy_search_command(
     query: str,
     *,
     limit: int = DEFAULT_HIERARCHY_SEARCH_LIMIT,
+    session_index: Path | None = None,
     python_executable: str | None = None,
 ) -> list[str]:
     if request.source_mode != LIVE_SOURCE:
@@ -295,7 +307,8 @@ def build_position_hierarchy_search_command(
     if Path(elab_db.rstrip("/\\")).name == "work.lib++":
         raise GuiInputError("work.lib++ is not an elaborated KDB")
     try:
-        normalized_query = normalize_hierarchy_query(query)
+        browse = query == "" and session_index is not None
+        normalized_query = "" if browse else normalize_hierarchy_query(query)
         normalized_limit = validate_hierarchy_search_limit(limit)
     except InventoryError as exc:
         raise GuiInputError(str(exc)) from exc
@@ -312,7 +325,7 @@ def build_position_hierarchy_search_command(
         collector,
         "--elab-db",
         elab_db,
-        f"--regex={normalized_query}",
+        "--browse" if browse else f"--regex={normalized_query}",
         "--limit",
         str(normalized_limit),
     ]
@@ -320,6 +333,8 @@ def build_position_hierarchy_search_command(
         command.extend(["--npi-timeout", npi_timeout])
     if request.npi_lib_dir.strip():
         command.extend(["--npi-lib-dir", request.npi_lib_dir.strip()])
+    if session_index is not None:
+        command.extend(["--session-index", str(session_index)])
     command.append("--json")
     return command
 
@@ -395,13 +410,60 @@ def format_command(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
+def _validate_selector_fields(spec: Mapping[str, Any], label: str, *, saved_report: bool = False) -> None:
+    if not isinstance(spec.get("RS_inst"), str) or not isinstance(spec.get("RS_route", ""), str):
+        raise GuiReportError(f"{label}.RS_inst and RS_route must be strings")
+    if "RS_inst_formula_cell" in spec:
+        address = spec["RS_inst_formula_cell"]
+        ref = re.fullmatch(r"[A-Z]+([1-9][0-9]*)", address) if isinstance(address, str) else None
+        if (not ref or ref[1] != str(spec.get("row"))
+                or not isinstance(spec.get("sheet"), str) or not spec["sheet"]):
+            raise GuiReportError(f"{label}.RS_inst_formula_cell must be a cell in the specification row")
+    ignored = spec.get("ignored_fields", {})
+    if "ignored_fields" in spec:
+        if not isinstance(ignored, Mapping) or set(ignored) - set(OPTIONAL_ROW_FIELDS):
+            raise GuiReportError(f"{label}.ignored_fields is invalid")
+        for name in OPTIONAL_ROW_FIELDS:
+            raw = (spec.get("crg_source_alias") or spec.get(name)) if name == "CRG_source" else spec.get(name, "")
+            if not isinstance(raw, str):
+                raise GuiReportError(f"{label}.{name} must be a string")
+            if name == "RS_route" and not raw and name not in ignored:
+                continue  # Unmapped optional column.
+            reason = skip_reason(raw)
+            if (name in ignored) != bool(reason) or reason != ignored.get(name):
+                raise GuiReportError(f"{label}.ignored_fields disagrees with {name}")
+    has_rule = "RS_inst_split_rule" in spec
+    rule = spec.get("RS_inst_split_rule", RS_INST_SPLIT_RULE)
+    supported = (RS_INST_SPLIT_RULE, RS_INST_LEGACY_SPLIT_RULE) if saved_report else (RS_INST_SPLIT_RULE,)
+    if has_rule and (rule not in supported or "RS_inst_items" not in spec):
+        raise GuiReportError(f"{label} has an unsupported or incomplete RS_inst split rule")
+    if "RS_inst_items" not in spec:
+        return
+    items = spec["RS_inst_items"]
+    if not isinstance(items, list) or any(not isinstance(q, str) or not q.strip() for q in items):
+        raise GuiReportError(f"{label}.RS_inst_items must be a list of non-blank strings")
+    # Versioned reports use the policy recorded by that run. For unversioned
+    # reports the recorded selectors are checked against instance_match instead.
+    derived = [] if "RS_inst" in ignored else list(split_rs_inst(spec["RS_inst"], rule=rule))
+    if (has_rule or not saved_report) and items != derived:
+        raise GuiReportError(f"{label}.RS_inst_items does not match the original cell")
+
+
 def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
+    return load_validation_result(stdout)[0]
+
+
+def load_validation_result(stdout: str) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...]]:
     try:
         value = json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise GuiReportError(
             f"validation output is not JSON: line {exc.lineno}, column {exc.colno}"
         ) from exc
+    skipped = ()
+    if isinstance(value, Mapping):
+        skipped = _validated_skips(value.get("skipped_rows"))
+        value = value.get("rows")
     if not isinstance(value, list):
         raise GuiReportError("validation output must be a JSON array")
     rows: list[Mapping[str, Any]] = []
@@ -414,12 +476,11 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
             raise GuiReportError(
                 f"validation row {index + 1} is missing: {', '.join(missing)}"
             )
-        if not isinstance(item.get("RS_route", ""), str):
-            raise GuiReportError(f"validation row {index + 1}.RS_route must be a string")
+        _validate_selector_fields(item, f"validation row {index + 1}")
         _validate_position_resolution(item, f"validation row {index + 1}")
         _validate_crg_source_resolution(item, f"validation row {index + 1}")
         rows.append(dict(item))
-    return tuple(rows)
+    return tuple(rows), skipped
 
 
 def load_position_hierarchy_search(stdout: str) -> HierarchySearchResult:
@@ -450,7 +511,7 @@ def _validate_position_resolution(value: Mapping[str, Any], name: str) -> None:
 
 def _validate_crg_source_resolution(value: Mapping[str, Any], name: str) -> None:
     crg_source = value.get("CRG_source")
-    if not isinstance(crg_source, str) or not crg_source:
+    if not isinstance(crg_source, str) or (not crg_source and "CRG_source" not in value.get("ignored_fields", {})):
         raise GuiReportError(f"{name}.CRG_source must be a non-empty string")
     if "crg_source_alias" not in value:
         return
@@ -462,6 +523,17 @@ def _mapping_array(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
         raise GuiReportError(f"{name} must be an array of objects")
     return tuple(dict(item) for item in value)
+
+
+def _validated_skips(raw: Any) -> tuple[Mapping[str, Any], ...]:
+    skipped = _mapping_array(raw, "skipped_rows")
+    for entry in skipped:
+        reasons = entry.get("fields")
+        if (not isinstance(entry.get("sheet"), str) or type(entry.get("row")) is not int or entry["row"] < 1
+                or not isinstance(reasons, Mapping) or not reasons or set(reasons) - set(REQUIRED_ROW_FIELDS)
+                or any(v not in ("NA", "blank") for v in reasons.values())):
+            raise GuiReportError("invalid skipped row")
+    return skipped
 
 
 def _validate_finding_severities(
@@ -479,42 +551,118 @@ def _validate_instance_match(
     instances: tuple[Mapping[str, Any], ...], row_number: int,
 ) -> None:
     # Older reports have neither RS_route nor selection evidence.
-    if "instance_match" not in row and (spec.get("RS_inst") or not spec.get("RS_route")):
+    if ("instance_match" not in row and "RS_inst_items" not in spec
+            and (spec.get("RS_inst") or not spec.get("RS_route"))):
         return
     match = row.get("instance_match")
     label = f"report row {row_number}.instance_match"
     if not isinstance(match, Mapping):
         raise GuiReportError(f"{label} must be an object")
-    mode = "RS_inst" if spec["RS_inst"] else "RS_route"
-    if (match.get("mode") != mode or match.get("query") != spec.get(mode)
+    # Reports written before list support treated the original cell as one literal.
+    tokens = spec.get("RS_inst_items")
+    ignored = spec.get("ignored_fields", {})
+    route_active = bool(spec.get("RS_route")) and "RS_route" not in ignored
+    if "ignored_fields" in spec and not tokens and not route_active:
+        if (match.get("mode") != "none" or match.get("status") != "no_selector" or match.get("rule") != "not_run"
+                or match.get("query") != "" or instances or match.get("matched_count") != 0
+                or match.get("position") != spec["position"] or match.get("RS_module") != spec["RS_module"]):
+            raise GuiReportError(f"{label}: no active instance selector")
+        return
+    mode = "RS_inst" if (tokens if tokens is not None else spec["RS_inst"]) else "RS_route"
+    expected_query = tokens[0] if tokens and len(tokens) == 1 else spec.get(mode)
+    if (match.get("mode") != mode or match.get("query") != expected_query
             or match.get("position") != spec["position"] or match.get("RS_module") != spec["RS_module"]):
         raise GuiReportError(f"{label} does not match the specification")
     if mode == "RS_inst":
-        if match.get("matched_count") != len(instances):
+        if type(match.get("matched_count")) is not int or match["matched_count"] != len(instances):
             raise GuiReportError(f"{label}.matched_count does not match the instances")
-        return
+        if tokens and len(tokens) > 1:
+            if (match.get("rule") != RS_INST_LIST_RULE
+                    or match.get("route_ignored") is not route_active):
+                raise GuiReportError(f"{label} is missing the per-item selection rule")
+            _validate_item_matches(match, tokens, instances, spec, label)
+            return
+        if match.get("rule") == RS_INST_GROUP_RULE:
+            if "matched_paths" in match and match["matched_paths"] != [i["full_name"] for i in instances]:
+                raise GuiReportError(f"{label}.matched_paths does not match the instances")
+            return  # Direct-name/group evidence, including reports produced before fallback existed.
+        if match.get("rule") != RS_INST_FUZZY_RULE:
+            raise GuiReportError(f"{label} has an unknown RS_inst selection rule")
+    _validate_nearest(match, instances, spec, label)
+
+
+def _validate_item_matches(
+    match: Mapping[str, Any], tokens: list[str], instances: Sequence[Mapping[str, Any]],
+    spec: Mapping[str, Any], label: str,
+) -> None:
+    items = _mapping_array(match.get("items"), f"{label}.items")
+    if [item.get("query") for item in items] != tokens:
+        raise GuiReportError(f"{label}.items does not match the extracted selectors")
+    if any(not isinstance(instance.get("full_name"), str) for instance in instances):
+        raise GuiReportError(f"{label} has an invalid physical instance path")
+    by_path = {instance["full_name"]: instance for instance in instances}
+    seen: set[str] = set()
+    for index, item in enumerate(items, 1):
+        where = f"{label}.items[{index}]"
+        paths = item.get("matched_paths")
+        if (not isinstance(paths, list) or any(not isinstance(p, str) or p not in by_path for p in paths)
+                or len(set(paths)) != len(paths)):
+            raise GuiReportError(f"{where} has invalid matched paths")
+        if type(item.get("added_count")) is not int or item["added_count"] != len(set(paths) - seen):
+            raise GuiReportError(f"{where}.added_count is inconsistent with the physical instances")
+        seen.update(paths)
+        if item.get("rule") == RS_INST_FUZZY_RULE:
+            _validate_nearest(item, tuple(by_path[p] for p in paths), spec, where)
+        elif item.get("rule") == RS_INST_GROUP_RULE and item.get("status") == "matched" and paths:
+            pass
+        elif item.get("rule") == "not_run" and item.get("status") == "position_not_found" and not paths:
+            pass
+        else:
+            raise GuiReportError(f"{where} has inconsistent selection evidence")
+    if seen != set(by_path) or len(by_path) != len(instances):
+        raise GuiReportError(f"{label} instance union does not match the row")
+
+
+def _validate_nearest(
+    match: Mapping[str, Any], instances: Sequence[Mapping[str, Any]], spec: Mapping[str, Any], label: str,
+) -> None:
     count, ties = match.get("candidate_count"), match.get("tied_best_count")
     status = match.get("status")
     if (type(count) is not int or type(ties) is not int or not 0 <= ties <= count
             or match.get("metric") != "case_sensitive_levenshtein"
             or status not in ("matched", "ambiguous", "no_candidates", "position_not_found")):
-        raise GuiReportError(f"{label} has invalid route diagnostics")
+        raise GuiReportError(f"{label} has invalid nearest-name diagnostics")
     top = _mapping_array(match.get("top_candidates"), f"{label}.top_candidates")
-    if len(top) != min(ROUTE_CANDIDATE_LIMIT, count) or any(
+    if len(top) != min(NAME_CANDIDATE_LIMIT, count) or any(
         type(item.get("distance")) is not int or item["distance"] < 0
         or not isinstance(item.get("name"), str) or not isinstance(item.get("full_name"), str)
         for item in top
     ):
         raise GuiReportError(f"{label} has invalid ranked candidates")
+    distances = [(item["distance"], item["full_name"]) for item in top]
+    if distances != sorted(distances):
+        raise GuiReportError(f"{label} candidates are not in ranked order")
     if match.get("best_distance") != (top[0]["distance"] if top else None):
         raise GuiReportError(f"{label}.best_distance does not match the ranking")
+    if "extra_tied_candidates" in match:
+        extra = _mapping_array(match["extra_tied_candidates"], f"{label}.extra_tied_candidates")
+        if (status != "ambiguous" or ties <= len(top) or len(extra) != min(ties, NAME_TIE_REVIEW_LIMIT) - len(top)
+                or any(not isinstance(c.get("name"), str) or not isinstance(c.get("full_name"), str)
+                       or type(c.get("distance")) is not int or c["distance"] != match["best_distance"]
+                       for c in (*top, *extra))):
+            raise GuiReportError(f"{label} has inconsistent tied candidate evidence")
+        paths = [c["full_name"] for c in (*top, *extra)]
+        if paths != sorted(set(paths)):
+            raise GuiReportError(f"{label} has unordered or repeated tied candidates")
     if status == "matched":
         if (ties != 1 or len(instances) != 1 or match.get("selected") != top[0]
-                or top[0]["full_name"] != instances[0].get("full_name")):
+                or top[0]["full_name"] != instances[0].get("full_name")
+                or top[0]["name"] != instances[0].get("name")
+                or instances[0].get("module") != spec["RS_module"]):
             raise GuiReportError(f"{label} selected instance does not match the ranking or inventory")
     elif (instances or match.get("selected") is not None
             or (status == "ambiguous" and ties < 2) or (status != "ambiguous" and count)):
-        raise GuiReportError(f"{label} is inconsistent with an unselected route")
+        raise GuiReportError(f"{label} is inconsistent with an unselected instance")
 
 
 def _validate_v3_row(
@@ -695,9 +843,13 @@ def _validate_v3_row(
         contribution_values.append(value)
 
     effective_step = step_check.get("effective_step")
+    selection = row.get("instance_match", {})
+    incomplete = selection.get("rule") == RS_INST_LIST_RULE and any(
+        item["status"] != "matched" for item in selection["items"]
+    )
     expected_effective = (
         None
-        if not contribution_values or any(value is None for value in contribution_values)
+        if incomplete or not contribution_values or any(value is None for value in contribution_values)
         else sum(value for value in contribution_values if value is not None)
     )
     if effective_step is not None and type(effective_step) is not int:
@@ -708,7 +860,7 @@ def _validate_v3_row(
         raise GuiReportError(
             f"report row {row_number}.step_check.effective_step does not match contributions"
         )
-    if row.get("passed") and effective_step != step:
+    if row.get("passed") and effective_step != step and selection.get("mode") != "none":
         raise GuiReportError(
             f"report row {row_number}.passed is inconsistent with effective_step"
         )
@@ -745,12 +897,12 @@ def _validate_trace_node(
     return value
 
 
-def _validate_report_clock_trace(value: Any, name: str) -> Mapping[str, Any] | None:
+def _validate_report_clock_trace(value: Any, name: str, *, reset: bool = False) -> Mapping[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
         raise GuiReportError(f"{name} must be an object or null")
-    clock_port = value.get("clock_port")
+    clock_port = value.get("reset_port" if reset else "clock_port")
     max_depth = value.get("max_depth")
     excluded_inputs = value.get("excluded_inputs")
     status = value.get("status")
@@ -762,9 +914,10 @@ def _validate_report_clock_trace(value: Any, name: str) -> Mapping[str, Any] | N
         raise GuiReportError(
             f"{name}.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
         )
-    if excluded_inputs != list(CRG_TRACE_EXCLUDED_INPUTS):
+    exclusions = ["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS)
+    if excluded_inputs != exclusions:
         raise GuiReportError(
-            f"{name}.excluded_inputs must be exactly {list(CRG_TRACE_EXCLUDED_INPUTS)!r}"
+            f"{name}.excluded_inputs must be exactly {exclusions!r}"
         )
     if status not in CRG_TRACE_STATUSES:
         raise GuiReportError(f"{name}.status is invalid")
@@ -783,6 +936,63 @@ def _validate_report_clock_trace(value: Any, name: str) -> Mapping[str, Any] | N
     return value
 
 
+def _validate_source_signals(row: Mapping[str, Any], spec: Mapping[str, Any],
+                             instances: Sequence[Mapping[str, Any]], label: str) -> None:
+    from .checker import source_connection_matches
+    from .model import ClockTrace
+    checks = _mapping_array(row["source_signal_checks"], label)
+    by_name = {i["full_name"]: i for i in instances}
+    limits = {e["instance"]: e["max_depth"] for e in row["crg_source_check"]["instances"]}
+    ignored = spec.get("ignored_fields", {})
+    expected = {(i["full_name"], role) for i in instances if i.get("module") == spec.get("RS_module")
+                for role in ("clk", "rst") if role not in ignored and "CRG_source" not in ignored}
+    for check in checks:
+        name, role = check.get("instance"), check.get("role")
+        if not isinstance(name, str) or not isinstance(role, str) or (name, role) not in expected:
+            raise GuiReportError(f"{label}: unexpected instance or role")
+        expected.remove((name, role))
+        rule = row.get("module_rule") or {}
+        if (check.get("target") != spec["CRG_source"] or check.get("expected") != spec[role]
+                or check.get("start_port") != rule.get(role + "_port")
+                or check.get("status") not in ("matched", "mismatch", "unavailable", "invalid_start", "depth_limited", "not_found")):
+            raise GuiReportError(f"{label}: invalid source-signal check")
+        endpoints = _mapping_array(check.get("endpoints"), label)
+        matching = _mapping_array(check.get("matching"), label)
+        inst = by_name[name]
+        trace = inst.get("clock_trace" if role == "clk" else "reset_trace")
+        if trace is not None:
+            if not isinstance(trace, Mapping):
+                raise GuiReportError(f"{label}: invalid signal trace")
+            try:
+                ClockTrace.from_mapping(trace, reset=role == "rst")
+            except InventoryError as exc:
+                raise GuiReportError(f"{label}: {exc}") from exc
+        leaf = check.get("allow_leaf_signal_match", False)
+        if type(leaf) is not bool:
+            raise GuiReportError(f"{label}: invalid source matching policy")
+        eligible = tuple(e for e in (trace or {}).get("endpoints", [])
+                         if e["instance"] == check["target"] and e["depth"] <= limits[name])
+        if any(e not in eligible for e in endpoints):
+            raise GuiReportError(f"{label}: source endpoint is not reachable at the configured depth")
+        derived = tuple(e for e in endpoints if e["port"] and e["connection"] and
+                        source_connection_matches(check["expected"], e["connection"], check["target"].rpartition(".")[0], leaf))
+        if (not isinstance(check.get("diagnostics"), list)
+                or not all(isinstance(msg, str) for msg in check["diagnostics"])
+                or (check["status"] == "matched") != bool(matching)
+                or matching != derived
+                or (check["status"] in ("matched", "mismatch") and
+                    (not endpoints or endpoints != eligible or (trace or {}).get("clock_port" if role == "clk" else "reset_port")
+                     != check["start_port"]))):
+            raise GuiReportError(f"{label}: source endpoint evidence is inconsistent")
+    if expected:
+        raise GuiReportError(f"{label}: missing clock or reset result")
+    statuses = {c["status"] for c in checks}
+    aggregate = ("fail" if statuses & {"mismatch", "invalid_start"} else "warning" if statuses - {"matched"}
+                 else "pass" if statuses else "not_run")
+    if row.get("source_signal_status") != aggregate:
+        raise GuiReportError(f"{label}: status does not match source-signal evidence")
+
+
 def _validate_v4_crg_source_check(
     row: Mapping[str, Any],
     spec: Mapping[str, Any],
@@ -796,7 +1006,9 @@ def _validate_v4_crg_source_check(
         raise GuiReportError(f"{check_name} must be an object")
     expected = check.get("expected")
     spec_expected = str(spec.get("CRG_source", "")).strip(".")
-    if not isinstance(expected, str) or not expected:
+    ignored = spec.get("ignored_fields", {})
+    disabled = "CRG_source" in ignored
+    if not isinstance(expected, str) or (not expected and not disabled):
         raise GuiReportError(f"{check_name}.expected must be a non-empty string")
     if expected != spec_expected:
         raise GuiReportError(f"{check_name}.expected does not match spec.CRG_source")
@@ -804,7 +1016,7 @@ def _validate_v4_crg_source_check(
     if status not in {"not_run", "pass", "warning"}:
         raise GuiReportError(f"{check_name}.status is invalid")
     evaluations = _mapping_array(check.get("instances"), f"{check_name}.instances")
-    if len(evaluations) != len(matched_instances):
+    if len(evaluations) != (0 if disabled else len(matched_instances)):
         raise GuiReportError(f"{check_name}.instances does not match instances")
 
     evaluation_statuses: list[str] = []
@@ -816,11 +1028,17 @@ def _validate_v4_crg_source_check(
         if evaluation.get("instance") != full_name:
             raise GuiReportError(f"{name}.instance does not match")
         clock_port = evaluation.get("clock_port")
+        reset = "clk" in ignored and "rst" not in ignored
+        role = "rst" if reset else "clk"
+        if evaluation.get("trace_role", "clk") != role:
+            raise GuiReportError(f"{name}.trace_role is inconsistent with active fields")
+        port_key = "reset_port" if reset else "clock_port"
+        trace_key = "reset_trace" if reset else "clock_trace"
         if not isinstance(clock_port, str) or not clock_port.strip():
             raise GuiReportError(f"{name}.clock_port must be a non-empty string")
         module_rule = row.get("module_rule")
-        if isinstance(module_rule, Mapping) and "clk_port" in module_rule:
-            if clock_port != module_rule["clk_port"]:
+        if isinstance(module_rule, Mapping) and role + "_port" in module_rule:
+            if clock_port != module_rule[role + "_port"]:
                 raise GuiReportError(f"{name}.clock_port does not match module_rule")
         if evaluation.get("expected") != expected:
             raise GuiReportError(f"{name}.expected does not match CRG_source")
@@ -847,8 +1065,8 @@ def _validate_v4_crg_source_check(
             raise GuiReportError(f"{name}.diagnostics must be an array of strings")
 
         trace = _validate_report_clock_trace(
-            instance.get("clock_trace"),
-            f"report row {row_number} instance {index}.clock_trace",
+            instance.get(trace_key),
+            f"report row {row_number} instance {index}.{trace_key}", reset=reset,
         )
         if trace is not None and trace_status != trace.get("status"):
             raise GuiReportError(f"{name}.trace_status does not match clock_trace")
@@ -894,7 +1112,7 @@ def _validate_v4_crg_source_check(
                 }
             else:
                 derived_status = "unavailable"
-        elif trace.get("clock_port") != clock_port:
+        elif trace.get(port_key) != clock_port:
             derived_status = "unavailable"
         else:
             reachable_modules = [
@@ -935,10 +1153,10 @@ def _validate_v4_crg_source_check(
 
         if trace is not None:
             expected_diagnostics = list(trace.get("diagnostics", []))
-            if trace.get("clock_port") != clock_port:
+            if trace.get(port_key) != clock_port:
                 expected_diagnostics.insert(
                     0,
-                    f"inventory traced formal port {trace.get('clock_port')!r}, "
+                    f"inventory traced formal port {trace.get(port_key)!r}, "
                     f"but module rule requires {clock_port!r}",
                 )
             if diagnostics != expected_diagnostics:
@@ -1024,9 +1242,13 @@ def load_report(path: str | Path) -> LoadedReport:
     global_findings = _mapping_array(value.get("global_findings"), "global_findings")
     _validate_finding_severities(global_findings, "global_findings")
     rows = _mapping_array(value.get("rows"), "rows")
+    skipped = _validated_skips(value.get("skipped_rows", []))
+    if type(summary.get("skipped_rows", 0)) is not int or summary.get("skipped_rows", 0) != len(skipped):
+        raise GuiReportError("summary.skipped_rows does not match skipped_rows")
     if summary["rows"] != len(rows):
         raise GuiReportError("JSON report summary.rows does not match rows length")
-    if summary["passed_rows"] + summary["failed_rows"] != summary["rows"]:
+    partial = summary.get("partial_rows", 0)
+    if type(partial) is not int or partial < 0 or summary["passed_rows"] + summary["failed_rows"] + partial != summary["rows"]:
         raise GuiReportError(
             "JSON report passed_rows and failed_rows do not add up to rows"
         )
@@ -1041,8 +1263,7 @@ def load_report(path: str | Path) -> LoadedReport:
             raise GuiReportError(
                 f"report row {index + 1}.spec is missing: {', '.join(missing)}"
             )
-        if not isinstance(spec.get("RS_route", ""), str):
-            raise GuiReportError(f"report row {index + 1}.spec.RS_route must be a string")
+        _validate_selector_fields(spec, f"report row {index + 1}.spec", saved_report=True)
         if not isinstance(spec["RS_CFG_EN"], str):
             raise GuiReportError(
                 f"report row {index + 1}.spec.RS_CFG_EN must be a string"
@@ -1087,13 +1308,16 @@ def load_report(path: str | Path) -> LoadedReport:
             _validate_v4_crg_source_check(
                 row, spec, matched_instances, row_findings, index + 1
             )
+            if "source_signal_checks" in row:
+                _validate_source_signals(row, spec, matched_instances, f"report row {index+1}.source_signal_checks")
         row_has_error = any(item.get("severity") == "error" for item in row_findings)
         if row["passed"] != (not row_has_error):
             raise GuiReportError(
                 f"report row {index + 1}.passed does not match its error findings"
             )
         all_findings.extend(row_findings)
-    if actual_passed_rows != summary["passed_rows"]:
+    actual_partial = sum(row["passed"] and (row.get("instance_match") or {}).get("mode") == "none" for row in rows)
+    if actual_partial != partial or actual_passed_rows - actual_partial != summary["passed_rows"]:
         raise GuiReportError("JSON report passed_rows does not match row results")
     actual_errors = sum(item.get("severity") == "error" for item in all_findings)
     actual_warnings = sum(item.get("severity") == "warning" for item in all_findings)
@@ -1101,6 +1325,9 @@ def load_report(path: str | Path) -> LoadedReport:
         raise GuiReportError("JSON report finding counts do not match summary")
     if summary["passed"] != (actual_errors == 0 and summary["failed_rows"] == 0):
         raise GuiReportError("JSON report passed state does not match row findings")
+    state = "FAIL" if not summary["passed"] else "SKIPPED" if not rows else "PARTIAL" if partial else "PASS"
+    if "check_status" in value and value["check_status"] != state:
+        raise GuiReportError("JSON report check_status does not match checked rows")
     return LoadedReport(
         summary=dict(summary),
         global_findings=global_findings,

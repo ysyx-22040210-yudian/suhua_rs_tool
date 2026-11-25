@@ -25,6 +25,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--elab-db", required=True)
     parser.add_argument("--regex", required=True)
     parser.add_argument("--expected-path", required=True)
+    parser.add_argument("--target", choices=("position", "CRG_source"), default="position")
     parser.add_argument("--npi-lib-dir")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--iterations", type=int, default=1)
@@ -54,7 +55,7 @@ def main() -> int:
     root = tk.Tk()
     app = RsCheckApp(root)
     root.geometry("1180x780")
-    root.title("RTL RS Position Hierarchy GUI Smoke")
+    root.title(f"RTL RS {args.target} DUT Hierarchy GUI Smoke")
     callback_errors: list[str] = []
     modal_errors: list[str] = []
     original_showerror = gui_module.messagebox.showerror
@@ -77,9 +78,15 @@ def main() -> int:
     app.npi_lib_var.set(args.npi_lib_dir or "")
     app.npi_timeout_var.set(str(args.timeout))
     app.position_alias_var.set("hierarchy_probe_alias")
-    app.position_hierarchy_regex_var.set(args.regex)
+    app.crg_source_alias_var.set("hierarchy_crg_alias")
+    is_position = args.target == "position"
+    editor = app.position_path_var if is_position else app.crg_source_path_var
+    other = app.crg_source_path_var if is_position else app.position_path_var
+    other.set("keep.other.path")
+    app.notebook.select(app.positions_tab if is_position else app.crg_sources_tab)
     baseline_mappings = dict(app._position_mappings)
     baseline_dirty = app._position_mappings_dirty
+    baseline_crg = dict(app._crg_source_mappings), app._crg_source_mappings_dirty
     root.update()
     window_id = hex(root.winfo_id())
     if not root.winfo_ismapped():
@@ -121,7 +128,7 @@ def main() -> int:
             root.destroy()
             return
         if phase == "start":
-            app._open_position_hierarchy_search()
+            (app.position_hierarchy_pick_button if is_position else app.crg_source_hierarchy_pick_button).invoke()
             phase = "wait-dialog"
             root.after(100, poll)
             return
@@ -131,10 +138,32 @@ def main() -> int:
                 fail("hierarchy candidate dialog was not created")
                 root.after(100, poll)
                 return
-            if not dialog.winfo_ismapped():
+            if not dialog.winfo_ismapped() or app.running or app.controller.is_running:
                 root.after(100, poll)
                 return
             dialog_mapped = True
+            model = app._hierarchy_model
+            tree = app._position_hierarchy_tree
+            if not model or args.expected_path not in model.by_path:
+                fail("unfiltered DUT tree is absent or incomplete")
+                root.after(100, poll)
+                return
+            # Reveal the target by walking the actual, initially collapsed
+            # branches before using a regex. Fire the same event as Tk's arrow.
+            lineage = []
+            parent = model.parents[args.expected_path]
+            while parent:
+                lineage.append(parent)
+                parent = model.parents[parent]
+            for parent in reversed(lineage):
+                node = app._scope_iid(parent)
+                tree.focus(node)
+                tree.event_generate("<<TreeviewOpen>>")
+                tree.item(node, open=True)
+            if not tree.exists(app._scope_iid(args.expected_path)):
+                fail("unfiltered tree failed to reveal the expected path")
+                root.after(100, poll)
+                return
             app.position_hierarchy_regex_var.set(args.regex)
             app._start_position_hierarchy_search()
             if not app.running:
@@ -153,7 +182,7 @@ def main() -> int:
                 root.after(100, poll)
                 return
             candidate_paths = dict(app._position_hierarchy_paths)
-            displayed = len(candidate_paths)
+            displayed = len(app._hierarchy_hits)
             selected_iid = next(
                 (
                     iid
@@ -162,7 +191,7 @@ def main() -> int:
                 ),
                 "",
             )
-            if not selected_iid:
+            if not selected_iid or args.expected_path not in app._hierarchy_hits:
                 fail(
                     f"expected path {args.expected_path!r} is absent from "
                     f"{sorted(candidate_paths.values())!r}"
@@ -172,14 +201,16 @@ def main() -> int:
             tree.selection_set(selected_iid)
             app._on_position_hierarchy_candidate_selected()
             app._use_selected_position_hierarchy()
-            if app.position_path_var.get() != args.expected_path:
+            if editor.get() != args.expected_path or other.get() != "keep.other.path":
                 fail("selected hierarchy path was not copied into the editor")
-            elif app.position_alias_var.get() != "hierarchy_probe_alias":
-                fail("selecting a hierarchy path changed the position alias")
+            elif (app.position_alias_var.get(), app.crg_source_alias_var.get()) != ("hierarchy_probe_alias", "hierarchy_crg_alias"):
+                fail("selecting a hierarchy path changed an alias")
             elif dict(app._position_mappings) != baseline_mappings:
                 fail("selecting a hierarchy path modified the mapping database")
             elif app._position_mappings_dirty != baseline_dirty:
                 fail("selecting a hierarchy path changed the mapping dirty state")
+            elif (app._crg_source_mappings, app._crg_source_mappings_dirty) != baseline_crg:
+                fail("selecting a hierarchy path changed the CRG database or dirty state")
             if failed:
                 root.after(100, poll)
                 return
@@ -189,7 +220,8 @@ def main() -> int:
                 root.after(100, poll)
                 return
             print(
-                "POSITION_HIERARCHY_GUI_PASS: "
+                ("POSITION_HIERARCHY_GUI_PASS: " if is_position else "CRG_SOURCE_HIERARCHY_GUI_PASS: ")
+                +
                 f"regex={args.regex!r} selected={args.expected_path} "
                 f"displayed={displayed} iterations={completed} "
                 f"mapping-dirty={str(app._position_mappings_dirty).lower()} "

@@ -101,6 +101,12 @@ struct ClockTrace {
   unsigned int max_depth;
   std::string status;
   std::vector<DriverSource> modules;
+  struct Endpoint {
+    std::string instance, port, connection;
+    unsigned int depth;
+    std::vector<std::string> path;
+  };
+  std::vector<Endpoint> endpoints;
   std::vector<std::string> diagnostics;
 
   ClockTrace() : max_depth(0), status("complete") {}
@@ -125,8 +131,10 @@ struct InstanceInfo {
   std::vector<DriverSource> clk_sources;
   ClockTrace clock_trace;
   bool has_clock_trace;
+  ClockTrace reset_trace;
+  bool has_reset_trace;
 
-  InstanceInfo() : line(0), has_line(false), has_clock_trace(false) {}
+  InstanceInfo() : line(0), has_line(false), has_clock_trace(false), has_reset_trace(false) {}
 };
 
 struct PositionInfo {
@@ -137,13 +145,13 @@ struct PositionInfo {
 };
 
 typedef std::vector<std::pair<std::string, PositionInfo> > PositionResults;
-typedef std::map<std::string, std::string> TraceRules;
+typedef std::map<std::string, std::pair<std::string, std::string> > TraceRules;
 
 void print_usage(std::ostream& out, const char* program) {
   out << "Usage: " << program
       << " --positions <newline-file> --output <json-file>"
       << " --clk-port <name> --rst-port <name>"
-      << " [--trace-rules <module-tab-clock-file>]"
+      << " [--trace-rules <module-tab-clock-tab-reset-file>]"
       << " [--trace-max-depth <1..256>]"
       << " --elab-db <Verdi elaborated KDB directory>\n"
       << "       " << program
@@ -344,7 +352,7 @@ bool read_positions(const std::string& path, std::vector<std::string>* positions
   return true;
 }
 
-bool read_trace_rules(const std::string& path, TraceRules* rules,
+bool read_trace_rules(const std::string& path, const std::string& default_rst, TraceRules* rules,
                       std::string* error) {
   std::ifstream input(path.c_str(), std::ios::in | std::ios::binary);
   if (!input) {
@@ -363,32 +371,35 @@ bool read_trace_rules(const std::string& path, TraceRules* rules,
       continue;
     }
     const std::string::size_type separator = line.find('\t');
+    const std::string::size_type second = line.find('\t', separator == std::string::npos ? 0 : separator + 1);
     if (separator == std::string::npos ||
-        line.find('\t', separator + 1) != std::string::npos) {
+        (second != std::string::npos && line.find('\t', second + 1) != std::string::npos)) {
       std::ostringstream message;
       message << "trace rules line " << line_number
-              << " must contain exactly module<TAB>clock_port";
+              << " must contain module<TAB>clock_port[<TAB>reset_port]";
       *error = message.str();
       return false;
     }
     const std::string module = trim_ascii(line.substr(0, separator));
-    const std::string clock_port = trim_ascii(line.substr(separator + 1));
-    if (module.empty() || clock_port.empty()) {
+    const std::string clock_port = trim_ascii(line.substr(separator + 1, second - separator - 1));
+    const std::string reset_port = second == std::string::npos ? default_rst : trim_ascii(line.substr(second + 1));
+    const std::pair<std::string, std::string> ports(clock_port, reset_port);
+    if (module.empty() || clock_port.empty() || reset_port.empty()) {
       std::ostringstream message;
       message << "trace rules line " << line_number
-              << " has an empty module or clock port";
+              << " has an empty module, clock or reset port";
       *error = message.str();
       return false;
     }
     TraceRules::const_iterator existing = rules->find(module);
-    if (existing != rules->end() && existing->second != clock_port) {
+    if (existing != rules->end() && existing->second != ports) {
       std::ostringstream message;
-      message << "trace rules define conflicting clock ports for module "
+      message << "trace rules define conflicting clock/reset ports for module "
               << module;
       *error = message.str();
       return false;
     }
-    (*rules)[module] = clock_port;
+    (*rules)[module] = ports;
   }
   if (!input.eof()) {
     *error = "failed while reading trace rules file: " + path;
@@ -708,6 +719,7 @@ class Collector {
   struct ModuleHit {
     std::string instance;
     std::string module;
+    std::string port;
   };
 
   struct ModuleFrontier {
@@ -720,8 +732,8 @@ class Collector {
   };
 
   struct TraceState {
-    TraceState(const std::string& clock_port, unsigned int max_depth)
-        : object_visits(0), depth_limited(false), unresolved(false) {
+    TraceState(const std::string& clock_port, unsigned int max_depth, bool reset)
+        : object_visits(0), depth_limited(false), unresolved(false), is_reset(reset) {
       trace.clock_port = clock_port;
       trace.max_depth = max_depth;
     }
@@ -730,6 +742,8 @@ class Collector {
     unsigned int object_visits;
     bool depth_limited;
     bool unresolved;
+    bool is_reset;
+    std::map<std::pair<std::string, std::string>, ClockTrace::Endpoint> endpoints;
     std::map<std::string, unsigned int> best_object_depth;
     std::map<std::string, unsigned int> expanded_module_depth;
     std::map<std::string, DriverSource> modules_by_instance;
@@ -748,7 +762,7 @@ class Collector {
     if (left.instance != right.instance) {
       return left.instance < right.instance;
     }
-    return left.module < right.module;
+    return std::make_pair(left.module, left.port) < std::make_pair(right.module, right.port);
   }
 
   static bool source_less(const DriverSource& left,
@@ -908,7 +922,7 @@ class Collector {
       npiHandle module, const std::string& instance_full_name) {
     std::map<std::string, PortInfo> result;
 
-    npiHandle iterator = npi_iterate(npiPort, module);
+    npiHandle iterator = module == NULL ? NULL : npi_iterate(npiPort, module);
     if (iterator != NULL) {
       npiHandle port = NULL;
       while ((port = npi_scan(iterator)) != NULL) {
@@ -1000,7 +1014,7 @@ class Collector {
     }
     if (state->object_visits >= kMaxTraceObjectVisits) {
       std::ostringstream message;
-      message << "clock trace exceeded the " << kMaxTraceObjectVisits
+      message << "signal trace exceeded the " << kMaxTraceObjectVisits
               << " Netlist object budget";
       mark_trace_unresolved(state, message.str());
       return false;
@@ -1014,7 +1028,7 @@ class Collector {
     return true;
   }
 
-  void add_module_hit(npiNlHandle instance, std::vector<ModuleHit>* hits,
+  void add_module_hit(npiNlHandle instance, npiNlHandle port, std::vector<ModuleHit>* hits,
                       TraceState* state) {
     ModuleHit hit;
     hit.instance = netlist_string(npiNlFullName, instance);
@@ -1022,6 +1036,9 @@ class Collector {
       hit.instance = netlist_string(npiNlName, instance);
     }
     hit.module = netlist_string(npiNlDefName, instance);
+    if (port != NULL) {
+      hit.port = netlist_string(npiNlName, port);
+    }
     if (hit.instance.empty() || hit.module.empty()) {
       mark_trace_unresolved(
           state,
@@ -1041,7 +1058,7 @@ class Collector {
     }
     if (stack_depth > kMaxTraceObjectStackDepth) {
       std::ostringstream message;
-      message << "clock trace exceeded the " << kMaxTraceObjectStackDepth
+      message << "signal trace exceeded the " << kMaxTraceObjectStackDepth
               << " Netlist traversal stack limit";
       mark_trace_unresolved(state, message.str());
       return;
@@ -1059,7 +1076,7 @@ class Collector {
           npi_nl_get(npiNlCellType, instance) == npiNlModuleCell;
       if (module_cell &&
           (direction == npiNlOutput || direction == npiNlInout)) {
-        add_module_hit(instance, hits, state);
+        add_module_hit(instance, object, hits, state);
         npi_nl_release_handle(instance);
         return;
       }
@@ -1083,7 +1100,7 @@ class Collector {
       }
     } else if (type == npiNlInst) {
       if (npi_nl_get(npiNlCellType, object) == npiNlModuleCell) {
-        add_module_hit(object, hits, state);
+        add_module_hit(object, NULL, hits, state);
         return;
       }
     }
@@ -1134,7 +1151,7 @@ class Collector {
     for (std::vector<ModuleHit>::const_iterator hit = hits->begin();
          hit != hits->end(); ++hit) {
       if (unique.empty() || unique.back().instance != hit->instance ||
-          unique.back().module != hit->module) {
+          unique.back().module != hit->module || unique.back().port != hit->port) {
         unique.push_back(*hit);
       }
     }
@@ -1182,6 +1199,7 @@ class Collector {
   bool record_module(const ModuleHit& hit, unsigned int depth,
                      const std::vector<std::string>& parent_path,
                      TraceState* state, ModuleFrontier* frontier) {
+    if (std::find(parent_path.begin(), parent_path.end(), hit.instance) != parent_path.end()) return false;
     DriverSource source;
     source.instance = hit.instance;
     source.module = hit.module;
@@ -1189,6 +1207,30 @@ class Collector {
     source.path = parent_path;
     source.path.push_back(hit.instance);
 
+    // Capture the specific driven output before deduplicating module expansion.
+    // Never substitute a different output of this module or the RS-side net.
+    const std::pair<std::string, std::string> key(hit.instance, hit.port);
+    std::map<std::pair<std::string, std::string>, ClockTrace::Endpoint>::iterator old = state->endpoints.find(key);
+    if (old == state->endpoints.end() || depth < old->second.depth ||
+        (depth == old->second.depth && source.path < old->second.path)) {
+      ClockTrace::Endpoint endpoint;
+      endpoint.instance = hit.instance;
+      endpoint.port = hit.port;
+      endpoint.depth = depth;
+      endpoint.path = source.path;
+      if (!hit.port.empty()) {
+        if (!source_ports_.count(hit.instance)) {
+          npiHandle module = npi_handle_by_name(hit.instance.c_str(), NULL);
+          source_ports_[hit.instance] = collect_ports(module, hit.instance);
+          if (module != NULL) npi_release_handle(module);
+        }
+        const std::map<std::string, PortInfo>& ports = source_ports_[hit.instance];
+        std::map<std::string, PortInfo>::const_iterator p = ports.find(hit.port);
+        if (p != ports.end() && p->second.object_type.find("Operation") == std::string::npos)
+          endpoint.connection = p->second.connection;
+      }
+      state->endpoints[key] = endpoint;
+    }
     std::map<std::string, DriverSource>::iterator existing =
         state->modules_by_instance.find(source.instance);
     if (existing != state->modules_by_instance.end() &&
@@ -1318,7 +1360,7 @@ class Collector {
       }
       fallback_classified_ports->insert(port->first);
       if (port->second.direction != npiInput || port->first == "clk" ||
-          port->first == "rst_n") {
+          (!state->is_reset && port->first == "rst_n")) {
         continue;
       }
       npiNlHandle start = resolve_trace_start(current.instance, port->first,
@@ -1384,7 +1426,7 @@ class Collector {
         npi_nl_release_handle(port);
         continue;
       }
-      if (name == "clk" || name == "rst_n") {
+      if (name == "clk" || (!state->is_reset && name == "rst_n")) {
         resolved_ports->insert(name);
         npi_nl_release_handle(port);
         continue;
@@ -1468,11 +1510,11 @@ class Collector {
 
   ClockTrace trace_clock(const std::string& instance_full_name,
                          const std::string& clock_port,
-                         const PortInfo& port) {
+                         const PortInfo& port, bool reset = false) {
     // The same leaf net name can occur in different hierarchy scopes when a
     // partial KDB cannot provide a canonical connection full name.
     std::string cache_key =
-        instance_full_name + "\x1f" + clock_port + "\x1f";
+        instance_full_name + "\x1f" + clock_port + "\x1f" + (reset ? "R" : "C");
     if (!port.connection.empty() &&
         port.object_type.find("Operation") == std::string::npos) {
       cache_key += port.connection;
@@ -1487,12 +1529,12 @@ class Collector {
       return cached->second;
     }
 
-    TraceState state(clock_port, trace_max_depth_);
+    TraceState state(clock_port, trace_max_depth_, reset);
     npiNlHandle start =
         resolve_trace_start(instance_full_name, clock_port, port);
     if (start == NULL) {
       mark_trace_unresolved(
-          &state, "NPI Netlist could not resolve clock port: " +
+          &state, "NPI Netlist could not resolve trace start port: " +
                       instance_full_name + "." + clock_port);
     } else {
       std::vector<ModuleHit> hits;
@@ -1509,7 +1551,7 @@ class Collector {
       }
       if (state.modules_by_instance.empty() && !state.unresolved) {
         add_trace_diagnostic(
-            &state, "no upstream module output was resolved for clock port: " +
+            &state, "no upstream module output was resolved for start port: " +
                         instance_full_name + "." + clock_port);
       }
     }
@@ -1519,6 +1561,7 @@ class Collector {
          source != state.modules_by_instance.end(); ++source) {
       state.trace.modules.push_back(source->second);
     }
+    for (const auto& item : state.endpoints) state.trace.endpoints.push_back(item.second);
     std::sort(state.trace.modules.begin(), state.trace.modules.end(),
               source_less);
     std::sort(state.trace.diagnostics.begin(), state.trace.diagnostics.end());
@@ -1547,15 +1590,17 @@ class Collector {
 
     result.ports = collect_ports(module, result.full_name);
     result.parameters = collect_parameters(module);
-    std::string clock_port;
+    std::string clock_port, reset_port;
     bool trace_required = false;
     if (trace_rules_.empty()) {
       clock_port = fallback_clk_port_;
-      trace_required = result.ports.find(clock_port) != result.ports.end();
+      reset_port = fallback_rst_port_;
+      trace_required = result.ports.count(clock_port) || result.ports.count(reset_port);
     } else {
       TraceRules::const_iterator rule = trace_rules_.find(result.module);
       if (rule != trace_rules_.end()) {
-        clock_port = rule->second;
+        clock_port = rule->second.first;
+        reset_port = rule->second.second;
         trace_required = true;
       }
     }
@@ -1568,6 +1613,10 @@ class Collector {
           trace_clock(result.full_name, clock_port,
                       port == result.ports.end() ? empty_port : port->second);
       result.clk_sources = result.clock_trace.modules;
+      result.has_reset_trace = true;
+      port = result.ports.find(reset_port);
+      result.reset_trace = trace_clock(result.full_name, reset_port,
+          port == result.ports.end() ? empty_port : port->second, true);
     }
     return result;
   }
@@ -1578,6 +1627,7 @@ class Collector {
   unsigned int trace_max_depth_;
   std::set<std::string> warnings_;
   std::map<std::string, ClockTrace> clock_trace_cache_;
+  std::map<std::string, std::map<std::string, PortInfo> > source_ports_;
 };
 
 void write_json_string(std::ostream& out, const std::string& value) {
@@ -1701,13 +1751,13 @@ void write_string_array(std::ostream& out,
 }
 
 void write_clock_trace(std::ostream& out, const ClockTrace& trace,
-                       const std::string& indent) {
+                       const std::string& indent, bool reset = false) {
   out << "{\n";
-  out << indent << "  \"clock_port\": ";
+  out << indent << (reset ? "  \"reset_port\": " : "  \"clock_port\": ");
   write_json_string(out, trace.clock_port);
   out << ",\n" << indent << "  \"max_depth\": " << trace.max_depth;
   out << ",\n" << indent
-      << "  \"excluded_inputs\": [\"clk\", \"rst_n\"]";
+      << (reset ? "  \"excluded_inputs\": [\"clk\"]" : "  \"excluded_inputs\": [\"clk\", \"rst_n\"]");
   out << ",\n" << indent << "  \"status\": ";
   write_json_string(out, trace.status);
   out << ",\n" << indent << "  \"modules\": [";
@@ -1727,7 +1777,17 @@ void write_clock_trace(std::ostream& out, const ClockTrace& trace,
     ++next;
     out << (next == trace.modules.end() ? "\n" : ",\n");
   }
-  out << indent << "  ],\n" << indent << "  \"diagnostics\": [";
+  out << indent << "  ],\n" << indent << "  \"endpoints\": [";
+  for (size_t i = 0; i < trace.endpoints.size(); ++i) {
+    const ClockTrace::Endpoint& e = trace.endpoints[i];
+    if (i) out << ", ";
+    out << "{\"instance\": "; write_json_string(out, e.instance);
+    out << ", \"port\": "; write_json_string(out, e.port);
+    out << ", \"connection\": "; write_json_string(out, e.connection);
+    out << ", \"depth\": " << e.depth << ", \"path\": "; write_string_array(out, e.path);
+    out << '}';
+  }
+  out << "],\n" << indent << "  \"diagnostics\": [";
   if (!trace.diagnostics.empty()) {
     out << '\n';
   }
@@ -1822,10 +1882,11 @@ void write_instance(std::ostream& out, const InstanceInfo& instance,
   out << indent << "  \"clock_trace\": ";
   if (instance.has_clock_trace) {
     write_clock_trace(out, instance.clock_trace, indent + "  ");
-    out << '\n';
-  } else {
-    out << "null\n";
-  }
+  } else out << "null";
+  out << ",\n" << indent << "  \"reset_trace\": ";
+  if (instance.has_reset_trace) write_clock_trace(out, instance.reset_trace, indent + "  ", true);
+  else out << "null";
+  out << '\n';
   out << indent << '}';
 }
 
@@ -1840,7 +1901,7 @@ bool write_inventory(const std::string& path, const PositionResults& positions,
     return false;
   }
 
-  out << "{\n  \"schema_version\": 3,\n  \"positions\": {";
+  out << "{\n  \"schema_version\": 4,\n  \"positions\": {";
   if (!positions.empty()) {
     out << '\n';
   }
@@ -1927,7 +1988,7 @@ int run(int argc, char** argv) {
       return kPositionsError;
     }
     if (!options.trace_rules_path.empty() &&
-        !read_trace_rules(options.trace_rules_path, &trace_rules, &error)) {
+        !read_trace_rules(options.trace_rules_path, options.rst_port, &trace_rules, &error)) {
       std::cerr << "error[TRACE_RULES]: " << error << '\n';
       return kTraceRulesError;
     }

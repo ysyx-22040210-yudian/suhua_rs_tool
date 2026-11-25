@@ -49,13 +49,13 @@ class NpiCollectorContractTests(unittest.TestCase):
         self.assertIn("connected_type == npiNlPseudoNet", source)
         self.assertIn("NPI Netlist module port has unknown direction", source)
         self.assertIn("npiNlInstPort, instance, current", source)
-        self.assertIn('name == "clk" || name == "rst_n"', source)
+        self.assertIn('name == "clk" || (!state->is_reset && name == "rst_n")', source)
         self.assertIn("intermediate port(s) with unknown direction", source)
         self.assertIn("mark_trace_unresolved(state, message.str())", source)
         self.assertIn("depth >= state->trace.max_depth", source)
         self.assertIn('state.trace.status = "depth_limited"', source)
         self.assertIn('state.trace.status = "unresolved"', source)
-        self.assertIn('\\"schema_version\\": 3', source)
+        self.assertIn('\\"schema_version\\": 4', source)
         self.assertIn('\\"clock_trace\\": ', source)
         self.assertIn(
             '\\"excluded_inputs\\": [\\"clk\\", \\"rst_n\\"]', source
@@ -632,7 +632,7 @@ class NpiRunnerTests(unittest.TestCase):
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 3,
+                            "schema_version": 4,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },
@@ -655,7 +655,7 @@ class NpiRunnerTests(unittest.TestCase):
             self.assertEqual(command[0], str(collector.resolve()))
             self.assertEqual(command[1], "--positions")
             self.assertEqual(command[3], "--output")
-            self.assertEqual(observed_trace_rules, ["rs_pipe\tclk\n"])
+            self.assertEqual(observed_trace_rules, ["rs_pipe\tclk\trst_n\n"])
             self.assertEqual(
                 command[command.index("--trace-max-depth") + 1], "16"
             )
@@ -692,7 +692,7 @@ class NpiRunnerTests(unittest.TestCase):
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 3,
+                            "schema_version": 4,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },
@@ -718,7 +718,7 @@ class NpiRunnerTests(unittest.TestCase):
                     elab_db=elab_db,
                 )
 
-            self.assertEqual(observed, {"rules": "rs_pipe\tpipe_clock\n", "depth": "31"})
+            self.assertEqual(observed, {"rules": "rs_pipe\tpipe_clock\tpipe_reset_n\n", "depth": "31"})
 
     def test_live_collector_legacy_inventory_schema_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -852,7 +852,7 @@ class NpiRunnerTests(unittest.TestCase):
                 output.write_text(
                     json.dumps(
                         {
-                            "schema_version": 3,
+                            "schema_version": 4,
                             "positions": {
                                 "top.u": {"found": False, "instances": []}
                             },

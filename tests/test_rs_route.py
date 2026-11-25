@@ -52,7 +52,7 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(evidence["selected"], {"name": expected_name, "distance": distance,
                              "full_name": "top.u_tile." + expected_name})
             self.assertEqual((evidence["candidate_count"], evidence["tied_best_count"]), (7, 1))
-            self.assertEqual(record["spec"]["RS_inst"], "")
+            self.assertEqual(record["spec"]["RS_inst"], "NA")
             self.assertEqual(csv_rows[n]["RS_route"], self.rows[n].rs_route)
             self.assertEqual(json.loads(csv_rows[n]["instance_match"]), evidence)
             self.assertIn(expected_name, _instance_display(record["spec"], record))
@@ -139,7 +139,7 @@ class RouteTests(unittest.TestCase):
             with self.assertRaisesRegex(GuiReportError, "selected instance"):
                 load_report(f)
 
-    def test_explicit_inst_precedence_including_unsuccessful_explicit_selector(self):
+    def test_explicit_inst_precedence_for_groups_and_nearest_fallback(self):
         original = read_spec_rows(ROOT / "examples" / "specs.csv", self.config.excel,
                                   self.config.position_mappings, self.config.crg_source_mappings)[0]
         result = self.check(replace(original, rs_route="CTRL_RS_D0"))
@@ -147,9 +147,12 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(len(result.rows[0].instances), 6)
         match = report_to_dict(result)["rows"][0]["instance_match"]
         self.assertEqual((match["mode"], match["route_ignored"]), ("RS_inst", True))
-        failure = self.check(replace(self.row, rs_inst="absent"))
-        self.assertFalse(failure.passed)
-        self.assertEqual(failure.rows[0].findings[0].code, "GROUP_NOT_FOUND")
+        result = self.check(replace(self.row, rs_inst="CTRL_RS_DO", rs_route="AAAA_BBB_C2"))
+        self.assertTrue(result.passed)
+        self.assertEqual(result.rows[0].instances[0].name, "CTRL_RS_D0")
+        match = report_to_dict(result)["rows"][0]["instance_match"]
+        self.assertEqual((match["mode"], match["query"], match["best_distance"], match["route_ignored"]),
+                         ("RS_inst", "CTRL_RS_DO", 1, True))
 
     def test_selected_one_still_checks_ports_step_and_duplicate_ownership(self):
         wrong = self.check(replace(self.row, step=0, clk="wrong"))
@@ -165,8 +168,9 @@ class RouteTests(unittest.TestCase):
         raw = config_to_dict(self.config)
         del raw["columns"]["RS_route"]
         old = config_from_dict(raw)
-        with self.assertRaisesRegex(WorkbookError, "RS_inst or RS_route"):
-            read_spec_rows(SAMPLE, old.excel)
+        without_route = read_spec_rows(SAMPLE, old.excel)
+        self.assertTrue(all(not s.has_route and not s.rs_inst_items for s in without_route))
+        self.assertTrue(all("RS_route" not in s.ignored_fields for s in without_route))
         rows = read_spec_rows(ROOT / "examples" / "specs.csv", old.excel)
         self.assertEqual([s.rs_route for s in rows], ["", ""])
         with tempfile.TemporaryDirectory() as tmp:
@@ -180,7 +184,7 @@ class RouteTests(unittest.TestCase):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
                     self.assertEqual(main(cmd[3:]), 0)
-                data = json.loads(out.getvalue())
+                data = json.loads(out.getvalue())["rows"]
                 self.assertEqual(data[0]["RS_route"], "CTRL_RS_DO" if file == legacy else "")
 
     def test_reordered_route_column_and_duplicate_after_alias_resolution(self):

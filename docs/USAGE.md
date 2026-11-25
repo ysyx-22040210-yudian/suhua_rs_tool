@@ -1,6 +1,6 @@
 # RTL 打拍例化检查工具使用手册
 
-本文对应工具版本 `0.11.0`，当前在线采集格式为 inventory v3，检查报告格式为 report v4。
+本文对应工具版本 `0.13.0`，当前在线采集格式为 inventory v4，检查报告格式为 report v4。
 
 本文档说明如何通过命令行（CLI）或工具自带的 Tkinter 桌面 GUI 准备规格表、配置检查规则、验证输入、使用可信 inventory 做离线检查，以及使用 Verdi elaborated KDB 做在线 NPI 检查。
 
@@ -97,20 +97,20 @@ python3 -c 'import tkinter; print(tkinter.TkVersion)'
 
 ### 2.1 内部属性与列映射
 
-工具使用以下十个区分大小写的内部属性键。它们只用于 JSON、CLI 和 GUI 中标识属性，不要求 Excel 对应列使用同名表头；实际表头可以是任意业务名称。每个内部属性的 1-based 列号唯一决定从哪一列读取。其中七项每行必填，另需至少填写 `RS_inst` 或 `RS_route` 之一；兼容内部属性 `RS_CFG_EN` 的列号映射始终必需，数据单元格可以为空或填写字面值。注意：`RS_CFG_EN` 是 Excel/config/report 中保留的标签字段名，不是当前匹配的 RTL parameter 名：
+工具使用以下十个区分大小写的内部属性键。它们只用于 JSON、CLI 和 GUI 中标识属性，不要求 Excel 对应列使用同名表头；实际表头可以是任意业务名称。每个内部属性的 1-based 列号唯一决定从哪一列读取。其中四项决定整行是否检查，其他字段可逐项跳过（见下文）；兼容内部属性 `RS_CFG_EN` 的列号映射始终必需，数据单元格可以为空或填写字面值。注意：`RS_CFG_EN` 是 Excel/config/report 中保留的标签字段名，不是当前匹配的 RTL parameter 名：
 
 | 内部属性 | 含义 | 检查方式 |
 |---|---|---|
 | `Intf_type` | 该组打拍 interface 的业务标签 | 当前仅写入报告，不参与 RTL 判定 |
 | `RS_module` | 打拍实例预期的模块定义名 | 与实例的 NPI `npiDefName` 精确比较 |
-| `RS_inst` | 本地实例名前缀或完整本地例化名（与 `RS_route` 至少填一项） | 对解析后的完整 `position` 直接子实例匹配；空 remainder 直接合法，非空 remainder 按后缀规则检查 |
-| `RS_route` | 本地例化参考名，示例配置映射到第 10 列，可改列号或不映射 | 仅在该行 `RS_inst` 留空时启用；从同层同模块的实例中选择唯一最近的一项 |
+| `RS_inst` | 可以填一个或多个本地实例名前缀或完整本地名（无有效名时可用 `RS_route`） | 逐项匹配完整名/合法前缀组；无成员才用该项自身，在解析后的 `position` 下选择同模块中唯一最近的一个本地名 |
+| `RS_route` | 本地例化参考名，示例配置映射到第 10 列，可改列号或不映射 | 仅在该行 `RS_inst` 没有有效项（含 `NA`）时启用；从同层同模块的实例中选择唯一最近的一项 |
 | `position` | 配置库中的 position 简写，或该组实例的直接父 scope 完整 NPI 层次路径 | 简写命中后转换为全路径；未命中时兼容完整路径输入；最终必须能在 elaborated 层次中找到 |
 | `step` | 当前组预期的有效总拍数 | 按解析后的默认或显式规则汇总逐实例贡献；必须为非负整数 |
-| `clk` | 每个匹配实例的预期 clk 连线 | 与配置的 clk formal port 的 high connection 比较 |
-| `rst` | 每个匹配实例的预期 rst 连线 | 与配置的 rst formal port 的 high connection 比较 |
-| `CRG_source` | 配置库中的来源简写，或 clk 来源模块的完整 RTL instance hierarchy | 简写命中后转换为全路径，未命中时兼容完整路径输入；有界追踪任一分支精确命中该全路径时 CRG 子检查 PASS，否则只报告 warning |
-| `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | 去除首尾空白后精确为大写 `NA` 时，仅跳过该行全部 `RS_CFG_EN`/RTL `RS_CRG_EN` 检查；否则 `has_rs_cfg_en=true` 时必须精确填写 `假门控`，`false` 时任意字面内容都不参与标签判定；内容均解析并写入报告 |
+| `clk` | 目标 CRG 的时钟输出实际所接的线名 | 从配置的 RS 时钟口反追，只比较这条路径抵达的目标输出的外侧连接 |
+| `rst` | 目标 CRG 的复位输出实际所接的线名 | 从配置的 RS 复位口独立反追，比较该目标输出的外侧连接 |
+| `CRG_source` | 配置库中的来源简写，或时钟和复位来源模块的完整 RTL instance hierarchy | 简写命中后转换为全路径，未命中时兼容完整路径输入；有界追踪任一分支精确命中该全路径时 CRG 子检查 PASS，否则只报告 warning |
+| `RS_CFG_EN` | 该组是否预期为假门控的兼容标签字段 | 去除首尾空白后留空或精确为大写 `NA` 时，仅跳过该行全部 `RS_CFG_EN`/RTL `RS_CRG_EN` 检查；否则 `has_rs_cfg_en=true` 时必须精确填写 `假门控`，`false` 时任意字面内容都不参与标签判定；内容均解析并写入报告 |
 
 填写 `RS_inst` 时，唯一组键是 `(解析后的完整 position, RS_inst)`。同一个完整 `position` 下可以有多组，每组占一行；即使两行使用不同文本，只要映射到同一完整路径且非空 `RS_inst` 相同，也属于重复组并会被拒绝。
 
@@ -165,28 +165,101 @@ python -m rscheck validate \
 ### 2.3 单元格和行规则
 
 - 映射数据单元格会去除首尾空白。
-- 所有映射字段均为空时跳过整行；其余行须填写七项常规字段，并至少提供一种例化名选择方式。
+- 数据行的取舍按下方「空值与 NA」规则；没有映射的业务列不参与读值和警告。
 - 若填写 `RS_route`，`RS_inst` 可以留空。可以填写组前缀，也可以填写完整的 NPI 本地例化名，例如 `CTRL_RS_D0`；不要填写 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
-- `RS_CFG_EN` 可以为空或填写字面值，去除首尾空白后的文本会保留到报告。规范化文本精确等于大写 `NA` 时，无论模块规则为何，都跳过该行全部 `RS_CFG_EN` 标签及 RTL `RS_CRG_EN` 参数存在性/值检查；`na`、`N/A`、`Na` 均不等价。`NA` 只豁免门控检查，`position`、实例分组、`RS_module`、动态 `step`、clk 和 rst 仍照常检查。非 `NA` 时，`RS_module` 对应规则的兼容键 `has_rs_cfg_en=true` 只接受精确文本 `假门控`；`false` 时该字段不参与 PASS/FAIL，不论为空、`假门控`、数字、布尔值还是其他文本都不产生标签 finding，但 RTL 若实际存在 `RS_CRG_EN` 仍报 `RS_CFG_EN_PARAMETER_UNEXPECTED`。该规则实际检查的 RTL parameter 是 `RS_CRG_EN`。
-- `step` 接受 `0`、`2` 或 Excel 常见的 `2.0`，但不接受负数、小数或科学计数法。
+- `RS_CFG_EN` 有效值按模块规则核对 RTL `RS_CRG_EN`；留空或 `NA` 则不检查该标签及其对应 RTL 参数。
+- `step` 必须是非负整数，接受 `0`、`2` 或 `2.0`。数值公式即使在文件中以 `2E+00` 保存，也按 2 拍处理；文本 `"2e0"`、负数、非整数和布尔值不作为拍数。
 - 默认 `excel.validate_headers=false`，不检查或比较映射列的表头文字。只有显式开启严格表头诊断时，才会在 `excel.header_row` 要求已映射列的表头精确等于内部属性名。
-- XLSX/XLSM 映射字段中的公式单元格和 Excel 错误值会被拒绝，防止使用未刷新的缓存值或无效内容；此通用解析限制也适用于 don't-care 或填写 `NA` 的 `RS_CFG_EN` 单元格。CSV/TSV 只有文本，没有可验证的 Excel 公式元数据。
-- `.xlsm` 中的宏不会执行。
+- XLSX/XLSM 的映射列可以是公式；读取的是已保存的结果。CSV/TSV 只有文本，其中的 `=...` 不会被计算。
 - CSV 优先按 UTF-8 BOM/UTF-8 读取，失败后尝试 GB18030；CSV 可探测逗号、分号或制表符，`.tsv` 固定使用制表符。
-- 至少要有一行有效规格。
+- 只有表头、没有数据行时提示没有规格数据；空白分隔行不计数。如果规格行全部被跳过或数据区只有空白行，RTL 检查结果为 `SKIPPED`，不运行 NPI。
+
+### 空值与 NA
+
+| 字段 | 留空（包括纯空白） | 填大写文本 `NA` |
+|---|---|---|
+| `RS_module`、`Intf_type`、`position`、`step` | 任一项为空即跳过整行，不报警 | 同样跳过整行，不报警 |
+| `RS_inst`、已映射的 `RS_route`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN` | 只跳过本项，每个原始行、每个空字段报一次 `EXCEL_FIELD_BLANK` | 只跳过本项，不产生该字段的空值警告 |
+
+先判整行，再解析简写、匹配例化、检查拍数。跳过的行不与其他行争用例化，也不进入 collector 请求。前后空白忽略，`0` 是有效拍数；`na`、`N/A` 和 Excel 错误值 `#N/A` 都不是这个标记。公式已保存的空字符串和文本 `NA` 与手填等效；已被明确跳过的行不要求修复其余格的公式。没有映射的 `RS_route` 不视为漏填。
+
+- `rst=NA`、`clk=clk_core`：不检查复位端口，时钟仍从 RS 的时钟端口追到 CRG，核对源端的 `clk_core`。交换两个字段，复位同样可以独立检查。若只填写了 `CRG_source` 而没有期望时钟或复位线名，则只用时钟路径判断该 CRG 是否可达，不比对线名。
+- `CRG_source=NA`：没有可比对的目标，源端线名显示未检查；已填写的 `clk`、`rst` 仍检查对应 RS 端口是否存在、是否已连接。没有目标不会导致虚假的线名不匹配。
+- `RS_inst=NA` 且填写了 `RS_route`：用 route 选择例化；若二者都不可用，仍检查 position 和该层是否存在预期模块，不合并整层例化，不以 0 代替未知拍数。未出现其他错误的这类行计入“部分检查”，不计为完整通过。
+
+GUI 的“验证 Excel”和“运行 RTL 检查”都会显示检查行数、跳过行数及空字段警告；选择一行可看具体字段。JSON 报告的 `skipped_rows` 列出每个整行跳过的原始行号、字段和原因；`rows[].spec.ignored_fields` 区分其他字段的 `blank` 与 `NA`。CSV 的整行状态为 `SKIPPED`。仅验证 Excel 时可用 `validate --json --include-skipped` 同时取得两类行；不加此选项的 `--json` 保持原有的规格行数组格式。
+
+### 公式单元格
+
+公式可以用在任意映射列。GUI 的“验证 Excel”和“运行 RTL 检查”与命令行使用同一读取方式，无需修改配置。可用[公式样表](../examples/specs_formulas.xlsx)和项目示例配置体验：
+
+| 样表位置 | 公式产生的值 | 检查行为 |
+|---|---|---|
+| `RS_Check!C2` 的 `RS_inst` | `="AAAA"&"_BBB"` 得到组前缀 `AAAA_BBB` | 用这个前缀匹配，不把公式表达式当成例化名 |
+| `RS_Check!E2` 的 `step` | 对“输入”表中的 2 和 3 求和，得到 5 | 与该组实际有效拍数比较；结果 0 也是合法拍数 |
+| `RS_Check!D2` 的 `position` | 拼接出 `tile_core` | 继续查位置库，得到 `top.u_tile`；`CRG_source` 简称同理 |
+| `RS_Check!C3` / `J3` 的 `RS_inst` / `RS_route` | 前者算出空字符串，后者跨表取到 `CTRL_RS_DO` | 提示一次 `RS_inst` 空值警告，再用 route 选中 `top.u_tile.CTRL_RS_D0`；若公式返回文本 `"NA"`，也用 route，但不报该空值警告 |
+| `RS_Check!I2:I3` 的 `RS_CFG_EN` | `IF` 分别返回文本 `假门控`、`NA` | 前者照常检查门控，后者只跳过该行门控检查；`=NA()` 返回的错误 `#N/A` 不等于文本 `NA` |
+
+`RS_inst` 也可以一次算出多个名字。例如 [换行样表](../examples/specs_multiline_inst.xlsx) 的 C4 使用 `="CTRL_RS_D0"&CHAR(10)&"CTRL_RS_DO"`：第一项精确命中，第二项模糊命中同一个实际例化，所以只计 **1 拍**。公式产生的其他分隔符也按手填规则处理。无须把公式粘贴为值。
+
+在 GUI 选中该行，打开**匹配明细**：可以对照公式单元格地址（如 `RS_Check!C4`）、检查器读到的已保存字符串、每项匹配到的实际路径。地址取自用户映射的列，不固定为 C 列。`validate --json` 和 RTL JSON 报告的规格记录用可选字段 `RS_inst_formula_cell` 保存该地址；`RS_inst` 保留供匹配的结果，不导出公式表达式。
+
+**以最后一次保存的计算结果为准。** 修改过输入、使用手动计算或文件由脚本生成时，请在 Excel 或 LibreOffice 中重新计算整本工作簿并保存，再交给检查机。工具不运行公式或宏、不刷新外部链接、不改写原文件，也无法从一个看似有效的旧值（包括某些生成器写入的占位 0）判断它是否过期。检查机本身不需要安装 Office。
+
+成功时，GUI 运行日志或 CLI 标准错误会给出一条 `info[EXCEL_FORMULA_CACHE]`，包含读取的公式格数和示例地址。若映射格缺少结果，例如 `RS_Check!E2 (step): formula has no cached result`，请先重算并保存；若出现 `#REF!`、`#DIV/0!` 等，请先修复表内公式。在参与检查的行中，这两种情况都在 RTL 采集前停止，不会把该格当作 0、空值或豁免。未映射列、未选择的工作表以及未启用严格表头验证的表头不会单独触发这类错误。
 
 ## 3. 分组和信号匹配语义
 
 ### 3.1 实例组
 
-**用参考名选单个实例。** 在 GUI「检查配置」中把可选的 `RS_route` 映射到自己的列号，例如第 13 列。保留原有 `RS_inst` 列映射，只把该行的 `RS_inst` 单元格留空。旧配置不填写 `columns.RS_route` 时该列禁用；GUI 可以清空这项列号，CLI 可以临时传 `--column RS_route=13` 或用 `--column RS_route=` 禁用。开启严格表头检查时，所有已映射的表头（包括此列）才须与属性名一致。
+#### 在一个 RS_inst 单元格填写多个名字
 
-1. 两项都填写时，工具只用 `RS_inst`。即使显式名匹配失败，也不会自动用参考名掩盖该错误。两项都为空时报出 Excel 行号。
+在 `RS_inst` 中，**空格（含全角空格）、制表符 Tab、实际换行、分号 `;` / `；`、逗号 `,` / `，`、顿号 `、` 和冒号 `:` / `：`** 都是分项标志。可以混用；首尾或连续出现的分隔符产生的空项忽略。例如 `AAAA_BBB_C3，： AAAA_BBB_C4` 只提取两个名字，仍是一条 Excel 规格，共用一个 `step`。下划线、点以及 `[0]` 不拆。RTL 转义标识符以反斜杠开始、以空白结束，内部标点是名字的一部分，例如 `\bus;A,1 ; B` 提取 `\bus;A,1` 和 `B`。CSV/TSV 的单元格若包含文件列分隔符或换行，请给整格加双引号，避免错列。
+
+**两个字段对冒号的处理不同：** `RS_inst=A::B` 提取 `A`、`B` 两项；若 `RS_inst` 为空或只有分隔符，`RS_route=A::B` 则按完整的 `A::B` 查询一次。旧表不必把空格、逗号等改写成分号。重新点「验证 Excel」可预览最新拆分；打开已保存的旧报告仍显示当时的匹配依据，不会套用新规则改写历史结果。
+
+在 Windows Excel 中，编辑 `RS_inst` 单元格时按 **Alt+Enter** 即可一行填一个例化名，不需要额外加分号。粘贴进同一格的多行文本、已计算并保存的 `="AAAA_BBB_C3"&CHAR(10)&"AAAA_BBB_C4"` 也可以；LF、CRLF 和单独的 CR 都按换行处理。仅开启「自动换行」造成的视觉折行、或手打反斜杠和字母 `n`（`\n`）不算分隔。可直接打开[单元格内换行样表](../examples/specs_multiline_inst.xlsx)，在 GUI 点「验证 Excel」查看每一格拆出的名字。
+
+同一格内也可以用行尾反斜杠 `\` 续行，例如：
+
+```text
+AAAA_BBB_C3；\
+AAAA_BBB_C4
+```
+
+这里只提取 `AAAA_BBB_C3`、`AAAA_BBB_C4` 两项。反斜杠自身不参与模糊匹配，也不把上下两行拼成一个名字。换行前允许留空格或制表符；若 `\` 开始的是实际转义标识符（如 `\bus[0]`），则完整保留。GUI「验证 Excel」可看提取后的两项，「运行 RTL 检查」可看每项的匹配路径；原始单元格文本保留在行证据里。
+
+- 每个名字在同一 `position` 内独立查完整名或合法前缀组；只有该项没有成员时才对该项做同模块模糊匹配。多个前缀组分别检查自己的后缀编号，不混在一起排序。只要提取出至少一项，就不使用 `RS_route`；如果没有有效项，才将 `RS_route` 当成**一个完整字符串**。两者都没有时仍核对层次和模块，不猜例化；依赖实例的拍数等检查标为未执行。
+- 一个 RTL 全路径的参数、clk/rst、CRG 和有效拍数只检查一次。即使名字重复，或前缀、完整名和错别字都选中同一实例，也不重复计拍。相反，**不同 Excel 行**争用同一个 RTL 实例仍报 `AMBIGUOUS_GROUP_MATCH`。
+- 任一项无候选或最近并列，整行 FAIL。已选中项的实例和贡献仍可查，但不会把部分拍数当作整行有效拍数。仅验证 Excel 时可以先看 `RS_inst_items`；完成 RTL 检查后在行证据中查看逐项选择原因、完整路径、重叠和并列信息。公式返回的字符串也按相同规则拆分。
+
+[多分隔符样表](../examples/specs_multi_inst.xlsx)可以直接用示例配置运行：第一条 `AAAA_BBB_C0  AAAA_BBB_X2` 用空格分为两项，前者精确命中 C0（1 拍），后者模糊命中 C2（0 拍），共 1 拍；第二条用连续的中文逗号、冒号分出 C3 和 C4，共 2 拍；第三条用顿号分开的两个拼写指向同一实例，只计 1 拍。
+
+例如，在示例设计的 `tile_core` 填 `AAAA_BBB_X1；AAAA_BBB_X2`，两个名字都没有直接命中。工具把每个**完整输入名字**分别与同层的 `rs_pipe` 实例名比较。两项唯一最近的实例分别是 `top.u_tile.AAAA_BBB_C1` 和 `top.u_tile.AAAA_BBB_C2`，距离都是 1。前者贡献 1 拍、后者贡献 0 拍，故本行 `step=1` 通过。即使第一项直接填对 `AAAA_BBB_C1`，第二项的选择也不变。GUI 结果列显示「2 项模糊命中」或「1 项模糊命中」；选中该行，在「诊断摘要」可按输入顺序看每项的选中路径，以及模糊匹配的候选数和距离。如果某项并列，仍继续匹配后面的名字，但整行 FAIL，不用部分结果计算总拍数。
+
+#### 每一项的匹配顺序
+
+对每个提取出的名字，先用完整本地名或「前缀＋配置的合法后缀」找组。只要命中成员，就检查整个组；即使命中实例的模块类型、拍数或连线不符合预期，也照常报错，不因此换一个实例。只有组里一个成员都没找到时，才用**该项的原始拼写**，在同一解析后 `position` 的同类型 `RS_module` 中按编辑距离找唯一最近的本地例化名。选中后只检查这一个物理实例，不按新名字再扩成组。无需新配置。
+
+例如，`RS_inst=CTRL_RS_DO` 在示例设计里找不到同名或合法前缀组；唯一最近的是 `top.u_tile.CTRL_RS_D0`（字母 O 与数字 0 相差一个字符）。点选「检查结果」中的该行，能看到「RS_inst 模糊回退」、Excel 原名、选中全路径、编辑距离和候选列表。如果把输入换成 `AAAA_BBB_X`，六个 `AAAA_BBB_C0…C5` 同样接近，工具报 `RS_INST_AMBIGUOUS`，不任选一个。同层无该模块候选时报 `GROUP_NOT_FOUND`，层次本身不存在时仍报 `POSITION_NOT_FOUND`。
+
+**用参考名选单个实例。** 在 GUI「检查配置」中把可选的 `RS_route` 映射到自己的列号，例如第 13 列。保留原有 `RS_inst` 列映射，不想检查 `RS_inst` 时该格填 `NA`；留空也能转用 `RS_route`，会多一条空字段警告。旧配置不填写 `columns.RS_route` 时该列禁用；GUI 可以清空这项列号，CLI 可以临时传 `--column RS_route=13` 或用 `--column RS_route=` 禁用。开启严格表头检查时，所有已映射的表头（包括此列）才须与属性名一致。
+
+1. 两项都填写时，工具只用 `RS_inst`（包括用它自身模糊回退）。`RS_inst` 无有效项时才用有效的 `RS_route` 选单个实例；两者都未指定时不选择任何实例。
 2. 按解析后的 `position` 限定直接子模块（沿用 collector 的 generate scope 展开规则），再按本行 `RS_module` 精确过滤。比较对象是**本地例化名**，不比较父路径、模块定义名、时钟连线或其他层次。参考名按普通文本、区分大小写处理，不支持通配符或正则。半角 `:`、全角 `：` 或连续的 `::` 可以直接填；它们参与整串比较，不会拆成多个名字，诊断中也保留原样。
 3. 插入、删除、替换一个字符各计 1 次。选**编辑距离最小且唯一**的物理实例，不扩展成同前缀组，不用 `clk`、`step` 反推。精确匹配距离为 0；无额外分数门槛，较大的唯一最小距离也会被选中，请结合诊断复核。仅选中的实例参与后续参数、有效拍数、clk/rst、CRG 检查。
 4. 同层没有该模块的实例时为 `RS_ROUTE_NO_CANDIDATES`；最近距离并列时为 `RS_ROUTE_AMBIGUOUS`。两种情况都不选实例，该行 FAIL。可细化参考名、填写 `RS_inst`，或缩小 `position`。两条不同的选择器命中同一实例仍会报告 `AMBIGUOUS_GROUP_MATCH`。
 
-**在哪里看原因。** 运行 RTL 检查，点选「检查结果」里的行。表格显示参考名和选中名（或失败原因），证据面板有中文说明。JSON 的 `rows[].instance_match` 和 CSV 的 `instance_match` 列保存查询、解析后的层次、模块、候选总数、选中全路径、最小距离、并列数，以及按距离升序列出的前五个候选（同分按全路径排序）。超过五个时只限制展示，不限制比较或并列计数。两种选择器和 Excel 输入均保留，工具不回写规格表。「验证 Excel」没有 RTL 数据，只能显示待匹配。
+#### 人工复核实例匹配
+
+运行「RTL 检查」→ 打开「检查结果」→ 选中目标 Excel 行 → 点击右下「匹配明细」。关闭「仅看问题」可检查 PASS 行。先核对两个字段的原文、实际使用的字段和 `position` 简写指向的层次，再逐项比对 RTL 全路径。原文用带引号的文本显示：实际换行显示为 `\n`，原本写入的反斜杠会转义，以便区分。复核不修改选择、检查结果或 Excel。
+
+- **完整名／前缀组：** 列出全部命中的物理实例，逐一注明是完整名相同还是哪个后缀符合配置规则，以及实际模块定义、可用的源文件和行号。发现后缀无效的告警也会列出。
+- **`RS_inst` 模糊回退／`RS_route`：** 显示同层同模块候选总数、排名、编辑距离、选中全路径，或未选原因。新报告默认列前 5 名；最小距离并列超过 5 个时额外列出并列者，合计最多显示 50 个，并明确显示数量与总数。比较和并列计数始终覆盖全部候选；同距按全路径排序仅为稳定显示，不用于打破并列。旧报告未保存的候选不会补猜。
+- **多项与计拍：** 按 Excel 输入顺序分别列证据。首次计入、贡献 0 拍、与前项重叠不重复计拍分别标明。存在未确定项时，可复核其他已选中的实例，但不把部分结果当成整行有效拍数。只做「验证 Excel」时尚无 RTL 匹配明细。
+
+「复制匹配明细」复制当前行。导出 CSV 的 `match_details` 列是相同的中文说明，原有 `instance_match` 仍为结构化数据。JSON 的 `rows[].instance_match` 保留查询及结果，多项见 `items`；常规排名见 `top_candidates`，新增保存的并列候选见 `extra_tied_candidates`。也可在现有 `check` 命令后加 `--match-details` 直接打印，或加 `--match-report output/match-details.txt` 输出所有行（UTF-8，不要求 GUI）。
 
 无需 Verdi 即可试用[参考名示例](../examples/specs_route.csv)。下面这条命令在仓库根目录运行：
 
@@ -218,7 +291,7 @@ python -m rscheck check --excel examples/specs_route.csv --config config/rscheck
 
 例如 RTL 本地例化名为 `CTRL_RS_D0` 时，可以在 Excel 直接填写 `RS_inst=CTRL_RS_D0`；此时 remainder 为空并匹配该实例。
 
-所有匹配实例，包括空后缀实例，都会照常检查 `RS_module`、模块规则要求的 parameters、逐实例 `step` 贡献和 clk/rst 连接，并从规则指定的 clk formal 执行 CRG 有界追踪。没有物理实例时始终报 `GROUP_NOT_FOUND`，即使 Excel `step=0` 也不通过。空后缀实例不具有 suffix tag/index，因此不参与 `SUFFIX_TAG_MISMATCH` 或连续编号检查。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，仅非空 remainder 且成功解析出 index 的成员必须从 `index_base` 开始连续并使用同一个 tag。连续性不按有效 `step` 截短。
+所有匹配实例，包括空后缀实例，都会照常检查 `RS_module`、模块规则要求的 parameters、逐实例 `step` 贡献和 clk/rst 连接，并从规则指定的 clk formal 执行 CRG 有界追踪。没有选中物理实例时，即使 Excel `step=0` 也不通过；诊断区分层次不存在、无候选和最近并列。空后缀实例不具有 suffix tag/index，因此不参与 `SUFFIX_TAG_MISMATCH` 或连续编号检查。默认不要求 index 从 0 连续；启用 `require_contiguous_indices` 后，仅非空 remainder 且成功解析出 index 的成员必须从 `index_base` 开始连续并使用同一个 tag。连续性不按有效 `step` 截短。
 
 完整名输入是对既有前缀匹配的补充，不是 exact-only 模式。若同一 scope 同时存在 `PFX` 和 `PFX_C0`，填写 `RS_inst=PFX` 会同时匹配前者的空 remainder 和后者符合默认 suffix 规则的 `_C0`；两行使用重叠 `RS_inst` 并命中同一实例时仍报 `AMBIGUOUS_GROUP_MATCH`。当前没有只匹配 `PFX` 的显式模式。
 
@@ -241,24 +314,31 @@ python -m rscheck check --excel examples/specs_route.csv --config config/rscheck
 
 因此映射拼写错误通常会在在线/离线检查阶段表现为 `POSITION_NOT_FOUND`。检查报告中的完整路径和简写证据，可以区分“映射已命中但 RTL 中路径不存在”和“Excel 值没有命中映射而被当作路径直通”。
 
-映射值不必手工输入。GUI 的 Position 映射编辑区提供“从 Verdi 选择”：它使用“检查配置”页当前的 collector、elaborated KDB、NPI 库目录和超时，打开独立候选窗口。用户输入针对完整 hierarchy path 的 Python 正则后显式查询，候选表显示完整路径、模块定义和 `module/interface/program/gen_scope` 类型；双击或点击“使用所选路径”只把候选写入完整路径编辑框，不改变已输入简写，也不会直接修改数据库。只有随后点击“应用修改”才产生未保存草稿，点击“保存映射库”才写回 JSON。
+**从 DUT 树选择映射值（position 和 CRG_source 通用）：**
 
-正则使用 `re.search` 包含语义，默认区分大小写：`u_lsu` 可匹配任意包含该片段的完整路径，`^top\.u_core\.` 可限定路径开头，`(?i)` 可忽略大小写。空正则、无效正则、换行/NUL 和超过 256 个字符的正则会在加载 KDB 前拒绝。默认最多返回 500 条候选。匹配数量超过显示上限时应收窄正则；层次超过 256 层、内部 scope 访问超过 1,000,000 个或 KDB 只能部分加载时，窗口会明确显示索引不完整，已显示路径仍可选择，但不能视为完整候选集合。非候选容器 scope 会继续向下遍历，但不会出现在候选表中。查询可取消，并且不会清空上一次 RTL 检查结果。
+1. 在“检查配置”选在线 NPI，填好 collector 和 Verdi elaborated KDB（例如 `top.elab++`）。离线 inventory 只记录检查用的局部信息，不能代替完整 DUT 树。
+2. 到对应的映射库输入简称，点击完整路径右侧的“选择 DUT 层次…”。窗口自动读取顶层；用箭头逐层展开，可见各节点的实例名、完整路径、模块定义和类型。不要求先输入正则。兄弟节点多时，每次显示 200 个，双击“显示更多…”或选中它按回车继续。
+3. 要过滤时，输入针对**完整路径**的 Python 正则并按回车或点“筛选”。命中项着色，祖先分支保留，方便区分不同父层下同名的实例；“清除筛选”返回同一棵树。例如 `(?i)\.u_crg$` 只找末级为 `u_crg` 的路径（忽略大小写）。本次打开期间反复过滤不重新加载 Verdi；关闭后再打开会重新读取当前 KDB。
+4. 选中一个节点点“使用所选路径”（或回车）；双击分支是展开/收起，双击叶节点可直接选用。只填回发起选择的那一个路径框，不动简称或另一套映射。先“应用修改”，再“保存映射库”，才会写入配置。
+
+正则使用 `re.search`，默认区分大小写：`u_lsu` 表示包含，`^top\.u_core\.` 限定路径开头。GUI 中留空表示浏览，非空正则限 256 字符；无效正则会提示，零匹配不会改动输入。**完整树浏览不受 500 条搜索上限限制**；正则筛选最多展示前 500 个命中，显示总数和截断提示。若 KDB 部分加载，或 collector 达到 256 层/1,000,000 次 scope 访问的保护上限，会提示索引不完整。后台读取或筛选可取消，不会清空上一次 RTL 检查结果。
 
 ### 3.3 clk/rst 连线
 
-formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 `rst_port` 指定。GUI 新建或修改规则时，这两个输入框留空会分别规范化为 `clk`、`rst_n`。Excel 中的 `clk`/`rst` 是这些 formal port 的预期实际连线，不是 formal port 名。checker 分别查找、连接检查并比较这两个端口；某一个 formal port 缺失不会清空另一个端口已经采集到的证据。
+formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 `rst_port` 指定。GUI 新建或修改规则时，这两个输入框留空会分别规范化为 `clk`、`rst_n`。这两个 formal port 是 **追踪起点**，Excel 的 `clk`/`rst` 却是 **目标 CRG 输出端实际所接的信号名**；不拿 RS 本地接线或 CRG 输出 formal 名代替。两条路径分别判断。
 
 没有精确显式规则的未知模块使用隐式默认端口 `clk`、`rst_n`。为兼容旧 JSON，已有显式模块规则若缺少 `clk_port/rst_port`，加载时继承历史全局 `rtl.clk_port/rst_port`；规则在内存中始终具有明确端口名，下一次通过 GUI 保存规则库或导出配置时会把两项显式写回。`rtl.clk_port/rst_port` 因此只承担旧配置迁移和 collector 命令兼容，不再覆盖一个已经带端口名的模块规则。
 
-端口名可自定义，但两个检查都不会被空字符串关闭。当前没有“该模块无 rst”或“跳过 rst 检查”的规则；若 RTL 模块确实没有规则指定的 rst formal port，该实例会报告 `RST_PORT_MISSING`。若同一实例的规则所指 clk formal port 确实存在且连接正确，则该行 FAIL，但 finding 只能是 `RST_PORT_MISSING`，不得连带产生 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
+模块规则中留空表示采用默认端口名，不是关闭检查。Excel 的 `rst` 填 `NA` 时则不检查该行复位，留空亦不检查、但提示一次 warning。若 `rst` 已填写期望值而 RTL 没有该 formal port，报告 `RST_PORT_MISSING`。若同一实例的规则所指 clk formal port 确实存在且连接正确，则该行 FAIL，但 finding 只能是 `RST_PORT_MISSING`，不得连带产生 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 
 比较时会忽略信号字符串中的空白，并接受：
 
 1. Excel 值与 NPI 完整连线名完全相同；
-2. NPI 连线名等于 `解析后的完整 position + "." + Excel值`。
+2. NPI 连线名等于 `目标 CRG 的父层全路径 + "." + Excel值`。
 
-例如 `position=tile_core` 映射为 `top.u_tile` 后，`clk=clk_rs` 可以匹配 `top.u_tile.clk_rs`。若 `allow_leaf_signal_match=true`，还允许只比较最后一级信号名，但这可能把不同 scope 的同名信号误判为一致，默认关闭。
+例如目标为 `top.u_tile.u_crg`，其 `.clk_out(clk_core)` 经过门控成为 `clk_rs`，`.reset_out(rst_core)` 经过 `u_reset` 成为 `rst_rs`。Excel 填 `clk_core` / `rst_core`（或其完整路径 `top.u_tile.clk_core` / `top.u_tile.rst_core`）；填接收端 `clk_rs` / `rst_rs` 是错的。若 `allow_leaf_signal_match=true`，还允许只比较最后一级信号名，但这可能把不同 scope 的同名信号误判为一致，默认关闭。
+
+运行后在「检查结果 → 诊断摘要 → CRG 源端连线 · clk / rst」可逐实例查看路径、输出口、实际信号和期望值。JSON/CSV 的 `source_signal_checks` 和 `source_signal_status` 是两条源线的结果；兼容字段 `crg_source_check` 仅描述时钟能否到达目标，不代表源线已全部验证。
 
 ### 3.4 CRG 来源简写与完整路径
 
@@ -273,19 +353,19 @@ formal port 名由当前行匹配到的 `module_rules.<RS_module>.clk_port` 和 
 
 解析每行时按区分大小写的 Excel 文本精确查找。命中时，`SpecRow.crg_source` 和 report/CSV 的 `CRG_source` 保存完整 RTL 路径，`crg_source_alias` 保留 Excel 简写；未命中时直接把 Excel 文本作为完整路径，alias 为空。和 position 映射一样，输入会先去除首尾空白，并去除路径首尾的 `.`；不做模糊、前缀或递归 alias 映射。
 
-`CRG_source` 是必填内部属性，也是有界追踪的目标。对每个匹配 RS 实例，collector 从该实例最终模块规则指定的 `clk_port` formal 出发，沿 Netlist driver 向上游查找：
+`CRG_source` 是必填内部属性，也是有界追踪的目标。对每个匹配 RS 实例，collector 从该实例最终模块规则指定的 `clk_port`、`rst_port` 两个 formal 各自出发，沿 Netlist driver 向上游查找：
 
-1. 从 RS clk formal 穿过 net、assign、concat、slice 和 primitive，找到驱动它的上游模块 output；
+1. 分别从 RS 时钟口、复位口穿过 net、assign、concat、slice 和 primitive，找到驱动它的上游模块 output；
 2. 记录该上游模块的完整 instance hierarchy、module definition、模块深度和当前 witness path；
-3. 若上游模块的完整 instance hierarchy 与解析后的 `CRG_source` 区分大小写精确相等，则该实例命中；
-4. 否则枚举该上游模块的所有 input formal，精确排除名称为小写 `clk` 和 `rst_n` 的 input，对其余 input 分支继续向上游查找；
-5. 任一分支命中即可通过，其他分支是否截断不影响该命中。
+3. 若完整实例路径精确等于解析后的 `CRG_source`，检查当前有证据的驱动输出及它的 high connection，不枚举无关输出作为候选；
+4. 枚举中间模块的 input：时钟路径精确排除 `clk` 和 `rst_n`；复位路径排除 `clk`，但允许继续沿 `rst_n` 输入追复位；
+5. 每一项须同时命中指定实例和该项实际源端连线。已确定的线名不符为 FAIL；若目标未到达、达到深度上限，或目标输出不可解析，给出 warning，不猜测信号名。时钟命中不能代替复位命中。
 
 深度按“经过的上游模块数”计算。RS 模块自身不计数，直接驱动 RS clk 的模块 A 为 depth 1；从 A 的 input 找到的模块 B 为 depth 2。depth N 的模块仍参与目标匹配，但达到配置上限后不再展开其 input。net、assign、concat、slice 和 primitive 不消耗模块深度。`rtl.crg_trace_max_depth` 默认 `16`，范围为 `1..256`；collector 还按对象已访问的最小模块深度终止环路，并对每个 trace 固定限制最多访问 100,000 个 Netlist 对象，因此不会无限递归。
 
-每个实例的结果为：命中目标时 `matched`；完整遍历但未命中时 `not_found`；达到配置/采集深度边界时 `depth_limited`；端口不一致、缺少 v3 trace 或 NPI 无法可靠解析时 `unavailable`。后三者分别产生 warning `CRG_SOURCE_NOT_FOUND`、`CRG_TRACE_DEPTH_LIMIT`、`CRG_TRACE_UNAVAILABLE`。这些 warning 会显示在行和报告中，但不改变 `RowResult.passed`，也不把仅有 warning 的 CLI 退出码从 `0` 改为 `1`。这不豁免 clk/rst formal port、连接和 Excel 连线比较；那些仍是独立硬检查。
+每个实例的结果为：命中目标时 `matched`；完整遍历但未命中时 `not_found`；达到配置/采集深度边界时 `depth_limited`；端口不一致、缺少 v3 trace 或 NPI 无法可靠解析时 `unavailable`。后三者分别产生 warning `CRG_SOURCE_NOT_FOUND`、`CRG_TRACE_DEPTH_LIMIT`、`CRG_TRACE_UNAVAILABLE`。复位同样有独立的 RST 来源诊断。这些 warning 会显示在行和报告中，但不改变 `RowResult.passed`，也不把仅有 warning 的 CLI 退出码从 `0` 改为 `1`。起点端口缺失、未连接以及已知源线名不符仍是错误。
 
-CRG_source 简称或完整路径不会加入 NPI collector 的 positions 请求；collector 仍只接收解析后的完整 `position`。Python runner 另行生成 `RS_module<TAB>clk_port` trace rule 文件。兼容配置键 `rtl.crg_match` 仍可加载，但不参与新的完整 hierarchy 精确匹配。inventory v3 使用 `clock_trace` 提供完整证据；旧 v2 只有同时带非空 `module`、且 `instance` 与目标完整路径精确相等的 `clk_sources` 项才能按 legacy 证据命中，否则报告 `CRG_TRACE_UNAVAILABLE` warning。
+CRG_source 简称或完整路径不会加入 NPI collector 的 positions 请求；collector 仍只接收解析后的完整 `position`。Python runner 另行生成 `RS_module<TAB>clk_port<TAB>rst_port` trace rule 文件。兼容配置键 `rtl.crg_match` 仍可加载，但不参与新的完整 hierarchy 精确匹配。当前在线采集要求 inventory v4；v2/v3 快照没有足够的源输出证据，离线打开会给 `SOURCE_INVENTORY_LEGACY`，不拿以前的 RS 本地线名判为匹配。
 
 ### 3.5 模块规则库
 
@@ -617,11 +697,13 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 简写和完整路径都必须为非空文本，简写不能重复。存在未保存映射时，“验证 Excel”和“运行 RTL 检查”都会被阻止；切换配置或关闭窗口也会先确认是否丢弃更改。保存后可直接用 Excel 中的简写运行，CLI/NPI 获得的是映射后的完整路径。
 
-“从 Verdi 选择”打开模态候选窗口。输入全路径正则并点击“查询”后，查询在后台进程组运行，主窗口不会卡死；“取消查询”会终止 CLI 和 collector 子进程。候选按完整路径排序，显示模块定义和 scope 类型。选中候选只回填“RTL 层次全路径”，不会覆盖“position 简写”、不会自动置 dirty，也不会自动保存；关闭或零匹配同样保留当前编辑值。查询使用当前设备路径，所以候选和正则不进入配置导出。
+点击“选择 DUT 层次…”即可逐层浏览或用正则过滤。选定路径、关闭或取消都不自动修改数据库；导出的配置只含保存的映射，不含临时树和正则。
 
 ### 5.5 “CRG Source映射库”页
 
 加载配置后，该页列出 Excel CRG_source 简写和 RTL 完整路径，支持搜索、新建、修改、删除和原子保存。操作、dirty 阻断、切换配置确认及保存冲突处理与 Position 映射库一致。
+
+完整路径框旁同样提供“选择 DUT 层次…”。例如要给 `crg_core` 选源模块，可展开 `top → u_tile → u_crg`，或筛选 `^top\.u_tile\.u_crg$`，确认完整路径后选用。应选 **CRG 模块实例**，不是它的时钟或复位信号。
 
 命中映射后，GUI 结果表、JSON report 和 CSV 同时显示或保存 `简称 -> 完整路径`；未命中时显示直通的完整路径。解析后的完整路径作为有界追踪目标，但不会加入 NPI positions。
 
@@ -646,11 +728,11 @@ Excel/CSV 文件、collector、Elab KDB、NPI 库目录、离线/保存 inventor
 
 “检查结果”页顶部显示状态、总行数、通过/失败行数、error 和 warning 数；主表显示解析后的完整 position/CRG_source 及各自 Excel 简写、新增的 `CRG Trace` 状态、“匹配实例”和“实际/期望拍”。新 report v4 的 CRG 列显示 `PASS` 或 `WARNING`；旧 report v2/v3 没有该结构时显示 `N/A`。只有 warning 的通过行以 `WARNING` 行状态显示，但仍计入 passed rows，CLI 退出码仍为 `0`。
 
-排查时可先勾选「仅看问题」：只显示失败、有警告的行及全局诊断，顶部六项统计仍针对整份报告。选中明细行后，左下显示诊断项，右下默认「诊断摘要」。使用 `RS_route` 的行可在这里看原字符串、同模块候选数、最小编辑距离，以及选中的完整实例名或无法唯一选中的原因。点击某条诊断可查看该问题的原因；拖动左右分隔条可给证据留出更多空间。
+排查时可先勾选「仅看问题」：只显示失败、有警告的行及全局诊断，顶部六项统计仍针对整份报告。选中明细行后，左下显示诊断项，右下默认「诊断摘要」。使用 `RS_inst` 模糊回退或 `RS_route` 的行可在这里看原字符串、同模块候选数、最小编辑距离，以及选中的完整实例名或无法唯一选中的原因。点击某条诊断可查看该问题的原因；拖动左右分隔条可给证据留出更多空间。
 
-「原始 JSON」保留 `spec`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、report v4 的 `crg_source_check` 与逐实例参数、端口、`clock_trace` 及源文件/行号。`clock_trace.modules` 可核对完整 hierarchy、depth 和 witness `path`。点击「复制 JSON」可取得当前证据。全局诊断作为 `GLOBAL` 行显示；只验证 Excel 时显示 `VALID`，不代表已检查 RTL。「运行日志」保留实际 CLI 命令、stdout、stderr 和退出码，并支持复制。
+切到「匹配明细」后可逐项核对并复制[人工复核说明](#人工复核实例匹配)。「原始 JSON」保留 `spec`、包含 `clk_port/rst_port` 的 `module_rule`、`step_check`、report v4 的 `crg_source_check` 与逐实例参数、端口、`clock_trace` 及源文件/行号。`clock_trace.modules` 可核对完整 hierarchy、depth 和 witness `path`。点击「复制 JSON」可取得当前证据。全局诊断作为 `GLOBAL` 行显示；只验证 Excel 时显示 `VALID`，不代表已检查 RTL。「运行日志」保留实际 CLI 命令、stdout、stderr 和退出码，并支持复制。
 
-GUI 在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义、报告或退出码。完整可见 smoke 会实际执行六根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules`，并输出 `schemas=report-v4/inventory-v3`。CRG 映射专项固定 marker 为 `crg-source-check=pass trace-depth=3 findings=none`；在线深度上限专项固定 marker 为 `crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6`，由 `GUI_CRG_TRACE_DEPTH_ITERATIONS` 控制并写入 `online_gui_crg_trace_depth_limit.log`。端到端脚本对包含该专项在内的十二份 GUI 日志执行配置往返和 schema 门禁。完整命令见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
+GUI 在后台调用同一 CLI，不改变第 2 至 4 节定义的数据语义、报告或退出码。完整可见 smoke 会实际执行六根配置的导出、导入和往返等价性检查，成功标记为 `config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules`，并输出 `schemas=report-v4/inventory-v4`。CRG 映射专项固定 marker 为 `crg-source-check=pass trace-depth=3 findings=none`；在线深度上限专项固定 marker 为 `crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6`，由 `GUI_CRG_TRACE_DEPTH_ITERATIONS` 控制并写入 `online_gui_crg_trace_depth_limit.log`。端到端脚本对包含该专项在内的十二份 GUI 日志执行配置往返和 schema 门禁。完整命令见 [测试指南](TESTING.md) 与 [VM GUI 复现指南](VM_GUI_TEST.md)。
 
 ## 6. 先运行 `validate`
 
@@ -683,7 +765,7 @@ python -m rscheck validate \
 
 ## 7. 可信离线 inventory 模式
 
-离线模式从已有的 schema v3 inventory 读取 elaborated 层次快照、逐实例 effective 参数和有界时钟追踪证据，不启动 collector；加载器也继续接受 schema v2：
+离线模式从 inventory v4 读取有界时钟和复位追踪证据，不启动 collector；旧 v2/v3 只兼容读取，无法校验源端连线：
 
 ```bash
 python -m rscheck check \
@@ -696,7 +778,7 @@ python -m rscheck check \
 
 `--inventory` 与 `--collector` 互斥。离线模式不能使用 `--elab-db`、`--keep-inventory` 或 `--npi-lib-dir`。
 
-仓库自带的当前格式样例可直接复现两行离线 PASS；它是 schema v3，主 RS 组的 `clock_trace` 与示例 RTL 的 `u_occ -> u_clk_mux -> {u_crg, u_aux_crg}` 三层分支一致：
+仓库自带的当前格式样例可直接复现两行离线 PASS；它是 schema v4，主 RS 组的 `clock_trace` 与示例 RTL 的 `u_occ -> u_clk_mux -> {u_crg, u_aux_crg}` 三层分支一致：
 
 ```bash
 python -m rscheck check \
@@ -732,6 +814,8 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 ```
 
 ### 7.2 inventory 基本结构
+
+当前完整可运行样例是 [inventory v4](../examples/inventory.json)。每个实例有 `clock_trace` 和 `reset_trace`（可为 null）；非空 trace 的 `endpoints[]` 记录 `instance`、输出 `port`、实际 `connection`、`depth` 及该输出自己的 `path`。下方片段只说明旧 v3 的模块路径格式，不包含源端线名。
 
 ```json
 {
@@ -804,7 +888,7 @@ inventory.top.<rtl-commit>.<kdb-timestamp>.json
 }
 ```
 
-加载器接受 `schema_version=2` 或 `3`，要求 `positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。`ports` 可以包含模块的全部 formal ports，checker 再按模块规则选择 clk/rst。
+加载器接受 `schema_version=2`、`3` 或 `4`，要求 `positions` 为对象、`found` 为布尔值、`instances` 为数组，并要求每个实例的 `parameters` 为对象、每个参数值只能是 JSON 字符串或 `null`。它还会检查实例 `name/full_name` 一致性和 `full_name` 唯一性。`parameters` 中没有某个键表示 collector 确认该实例没有该参数；键存在且值为 `null` 表示参数存在但 effective 值无法可靠解析。`ports` 可以包含模块的全部 formal ports，checker 再按模块规则选择 clk/rst。
 
 schema v3 的每个实例必须包含 `clock_trace` 键；不需要或无法创建 trace 时可为 `null`，匹配到的 RS 实例若为 `null` 会得到 `CRG_TRACE_UNAVAILABLE` warning。非空 `clock_trace` 严格要求 `clock_port`、`max_depth`、固定 `excluded_inputs=["clk","rst_n"]`、`status`、`modules` 和 `diagnostics`。`status` 只能是 `complete`、`depth_limited`、`unresolved`；每个 module node 的 `depth` 必须在 `1..max_depth`，`path` 末项必须等于该 node 的完整 `instance`。
 
@@ -877,10 +961,10 @@ Python runner 会尝试把标准 NPI 平台目录加入 collector 子进程的 `
 make -C npi clean
 ```
 
-通常不需要直接运行 collector。直接运行时，它要求一个每行一个 `position` 的文本文件，以及可选的 TAB 分隔 `module<TAB>clock_port` trace rule 文件；设计输入仍只接受 `--elab-db`：
+通常不需要直接运行 collector。直接运行时，它要求一个每行一个 `position` 的文本文件，以及可选的 TAB 分隔 `module<TAB>clock_port<TAB>reset_port` trace rule 文件；设计输入仍只接受 `--elab-db`：
 
 ```bash
-printf 'rs_pipe\tclk\nrs_custom\tclock_i\n' > trace_rules.tsv
+printf 'rs_pipe\tclk\trst\nrs_custom\tclock_i\treset_ni\n' > trace_rules.tsv
 npi/build/rs_npi_collector \
   --positions positions.txt \
   --output inventory.json \
@@ -891,7 +975,7 @@ npi/build/rs_npi_collector \
   --elab-db /absolute/path/to/kdb.elab++
 ```
 
-`--clk-port/--rst-port` 仍是 collector 命令行的必填兼容参数；没有对应 module trace rule 时，collector 可用 `--clk-port` 作为 fallback。`--trace-max-depth` 省略时默认 `16`，范围 `1..256`。Python runner 总会根据本次规格与模块数据库生成 trace rule 文件并显式传递配置深度。collector 会枚举每个实例的全部 formal ports，并用 NPI L1 `npi_mod_inst_get_port` 按实例全路径补采 Language Model 未返回的端口；最终由 Python checker 按逐模块 `clk_port/rst_port` 选择 clk/rst 端口并分别判定。
+`--clk-port/--rst-port` 仍是 collector 命令行的必填兼容参数；未提供规则文件时取这两项作全局起点；新规则文件每行指定模块、时钟口、复位口，手工提供的旧两列规则会使用 `--rst-port` 作为复位起点。`--trace-max-depth` 省略时默认 `16`，范围 `1..256`。Python runner 总会根据本次规格与模块数据库生成 trace rule 文件并显式传递配置深度。collector 会枚举每个实例的全部 formal ports，并用 NPI L1 `npi_mod_inst_get_port` 按实例全路径补采 Language Model 未返回的端口；最终由 Python checker 按逐模块 `clk_port/rst_port` 选择 clk/rst 端口并分别判定。
 
 ## 9. 生产 elaborated KDB 输入
 
@@ -957,11 +1041,11 @@ python -m rscheck check \
 在线流程为：
 
 1. Python 解析规格表和配置；
-2. 解析 position 和 CRG_source 简写；把唯一完整 `position` 写入临时 positions 文件，并按规格中的 `RS_module` 与最终模块规则生成 `module<TAB>clk_port` trace rule 文件；CRG_source 路径本身不会成为 positions；
+2. 解析 position 和 CRG_source 简写；把唯一完整 `position` 写入临时 positions 文件，并按规格中的 `RS_module` 与最终模块规则生成 `module<TAB>clk_port<TAB>rst_port` trace rule 文件；CRG_source 路径本身不会成为 positions；
 3. 确认 collector 和 KDB 目录存在；
 4. 启动 C++ collector；
 5. collector 构造且只构造 `{程序名, "-elab", KDB路径}` 交给 `npi_init/npi_load_design`；若 load 返回 0，则枚举 top，存在可查询 top 时记录 partial notice 并继续，否则退出 11；
-6. collector 遍历层次、逐实例全部 formal ports 和 effective parameters，并从各匹配 module 的规则 clk formal 执行有界上游 Netlist 追踪，生成 schema v3 inventory 的 `clock_trace`；
+6. collector 遍历层次、逐实例全部 formal ports 和 effective parameters，并从各匹配 module 的规则 clk/rst formal 执行有界上游 Netlist 追踪，生成 inventory v4 的 `clock_trace`、`reset_trace` 与输出端证据；
 7. Python 加载 inventory，执行组、拍数、模块、逐模块 clk/rst、RTL `RS_CRG_EN` 和 CRG 完整 hierarchy 精确匹配；未命中、深度截断或 trace 不可用只增加 warning；
 8. 可选保存 inventory 和 JSON/CSV 报告。
 
@@ -972,6 +1056,7 @@ python -m rscheck check \
 | `--collector PATH` | C++ collector 可执行文件；与 `--inventory` 互斥 |
 | `--elab-db DIR` | 必需，现存 Verdi elaborated KDB 目录 |
 | `--keep-inventory PATH` | 保存本次实时采集结果，供审计或可信离线复用 |
+| `--match-details` / `--match-report PATH` | 在终端打印／保存所有规格行的中文匹配明细；在线和离线模式都可用 |
 | `--npi-timeout SECONDS` | 可选，collector 超时秒数，必须大于等于 1 |
 | `--npi-lib-dir DIR` | 可选，直接包含 `libNPI.so` 的目录 |
 | `--crg-trace-max-depth N` | 可选，单次覆盖配置的 CRG 模块跳数上限；`1..256` |
@@ -1036,10 +1121,11 @@ RESULT: PASS | rows=2 errors=0 warnings=0
 
 `--json-report` 写 UTF-8 JSON，包含：
 
-- `schema_version`：当前固定为 `4`；当前 collector 的 NPI inventory schema 为 `3`；
-- `summary`：是否通过、总行数、通过/失败行数、error/warning 数；
+- `schema_version`：报告和当前 collector 的 inventory 均为 `4`；
+- `check_status`：`PASS`、`FAIL`、`PARTIAL`（有行无法定位例化）或 `SKIPPED`（无行需检查）。兼容布尔值 `summary.passed` 表示没有硬错误，不能据此判断是否做过完整检查；
+- `summary.rows` 只统计参与检查的行。整行跳过的原行号及原因在顶层 `skipped_rows`；`summary.skipped_rows`、`summary.partial_rows` 有相应记录时给出数量。通过、失败、部分检查三者之和等于参与检查的行数；
 - `global_findings`：例如硬错误 `NPI_UNRESOLVED`、`AMBIGUOUS_GROUP_MATCH`，或非致命 warning `NPI_LOAD_PARTIAL`；
-- `rows[].instance_match`：`mode` 标识实际采用的字段。参考名模式下的 `selected.full_name` 是唯一选中路径，未选中时 `selected=null`；`candidate_count`、`best_distance`、`tied_best_count` 和 `top_candidates` 可用于复核。旧报告可以没有这一项；
+- `rows[].instance_match`：`mode` 标识实际采用的字段。多项时 `mode=RS_inst`、`rule=per_item_union`，`query` 保留整格，`items` 按填写顺序保存每项的查询、规则、状态、完整路径 `matched_paths`、新增实例数 `added_count` 和适用的模糊排名；`matched_count` 是整行去重数。单项没有匹配组而进入模糊回退时，`rule=nearest_name_after_no_group_match`，`query` 是提取出的名字；普通完整名/组的 `rule=exact_name_or_prefix_with_configured_suffix`。两种模糊选择（`RS_inst` 回退、`RS_route`）的 `selected.full_name` 都是唯一选中路径，未选中时 `selected=null`；`candidate_count`、`best_distance`、`tied_best_count` 和 `top_candidates` 可用于复核。旧报告可以没有这一项；
 - `rows[].spec`：规范化后的规格字段（含原始 `RS_inst`、`RS_route`）和源行号；`position`、`CRG_source` 是各自解析后的完整 RTL 路径，命中映射时 `position_alias`、`crg_source_alias` 保存对应 Excel 原始简写，未命中时为空；兼容标签字段 `RS_CFG_EN` 可以是空字符串；
 - `rows[].module_rule`：本行最终采用的规则；始终包含最终生效的 `clk_port/rst_port`；无显式覆盖时记录隐式默认的 `has_rs_cfg_en=true`、空 `step_parameters`、`clk_port="clk"`、`rst_port="rst_n"`；
 - `rows[].step_check`：`expected`、`physical_instances`、`effective_step` 和逐实例 `contributions`；贡献为 `0`、`1` 或未知的 `null`；
@@ -1058,10 +1144,10 @@ GUI 为历史问题复现保留 report schema v2/v3 的只读兼容显示；这�
 `--csv-report` 写 UTF-8 BOM CSV，可直接用 Excel 打开。列包括：
 
 ```text
-status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,crg_trace_max_depth,crg_trace_evidence,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual,RS_route,instance_match
+status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,crg_trace_max_depth,crg_trace_evidence,source_signal_checks,source_signal_status,RS_module,RS_inst,RS_CFG_EN,physical_instances,effective_step,step_contributions,instance,code,message,expected,actual,RS_route,instance_match,match_details
 ```
 
-无 finding 的规格行写一条 `PASS`；有 finding 时每个 finding 写一条记录。
+整行跳过写一条 `SKIPPED`；其余行若有 finding 则每个 finding 写一条记录。无 finding 且无法定位例化的行写 `PARTIAL`；已执行的检查全部通过则写 `PASS`。
 `position` 与 `CRG_source` 始终是解析后的 RTL 全路径；`position_alias` 与 `crg_source_alias` 是各自命中映射时的 Excel 简写。`crg_trace_status` 为行级 `pass|warning|not_run`，`crg_trace_max_depth` 保存配置上限，`crg_trace_evidence` 是逐实例 evaluation 的 JSON 文本。`step_contributions` 记录每个实例的 parameter 状态和贡献。逐实例完整证据保存在 JSON report v4 中。
 
 ### 11.4 Python CLI 退出码
@@ -1095,12 +1181,13 @@ status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,
 | `header validation failed` | 已显式开启严格诊断，但列号、表头行或标准表头大小写不匹配 | 若规格表应使用标准表头，修正列映射或表头；若业务表头本来就自定义，关闭该可选诊断并以列号映射为准 |
 | `missing/unknown column mappings` | 九个内部属性映射不完整或属性键拼写错误 | `columns` 需包含九个必需键，可另外配置 `RS_route` |
 | `column mappings must be unique` | 两个内部属性映射到同一列 | 调整为互不重复的 1-based 列号 |
-| `blank required fields` | 七项常规必填字段不完整，或 `RS_inst`、`RS_route` 都为空 | 补齐必填字段和至少一个选择器，或清空整行使其被跳过；不要仅为消除此错误而填写 `RS_CFG_EN` |
-| `step must be a non-negative integer` | `step` 为负数、小数或科学计数法 | 改为非负整数，如 `0` 或 `2` |
-| `duplicate group` | 多行使用同一 `(position, RS_inst)` 或同一 `(position, RS_module, RS_route)` 备用选择器，包括不同简写指向同一路径 | 合并或修改重复组/映射 |
+| `ROWS_SKIPPED` / `EXCEL_FIELD_BLANK` | 前者是四项关键字段触发的整行跳过（信息）；后者是本行其他已映射字段留空（警告） | 按工作表、行号和字段补值；明确不检查的字段可填 `NA` |
+| `step must be a non-negative integer` | `step` 不是非负整数，或用文本写成科学计数法 | 改为非负整数，如 `0` 或 `2` |
+| `duplicate group` | 多行在同一 `position` 使用相同的 `RS_inst` 名字集合（顺序、分隔符与重复项不影响），或同一 `(position, RS_module, RS_route)` 备用选择器，包括不同简写指向同一路径 | 合并或修改重复组/映射 |
 | `sheet ... not found` | sheet 名/序号不对 | 用实际工作表名或 1-based 序号覆盖 `--sheet` |
 | `legacy .xls is not supported` | 输入是旧二进制 Excel | 另存为 `.xlsx` 或 CSV |
-| `formula cells are not supported` / `Excel error value ... is not supported` | XLSX/XLSM 的映射字段是公式单元格或 Excel 错误值，包括 don't-care 或拟填写 `NA` 的 `RS_CFG_EN` | 将值固化为普通文本/数字；额外未映射列不受影响 |
+| `formula has no cached result` | 文件有公式，但没有保存可用的计算结果 | 按工作表、地址和字段找到单元格，用 Excel 或 LibreOffice 重算并保存，无需删除公式 |
+| `formula returned Excel error` / `Excel error value` | 映射格包含 `#REF!`、`#N/A` 等真正的 Excel 错误 | 修复公式或引用，然后重算并保存；若要豁免门控，应返回文本 `"NA"` 而非错误值 |
 | collector executable not found | 未构建或路径不对 | 执行 `make -C npi ...` 并检查 `npi/build/rs_npi_collector` |
 | `npi_L1.h` / `libnpiL1.so` / `libNPI.so` 找不到 | Verdi NPI/L1 安装布局、`VERDI_HOME`、`NPI_PLATFORM` 或目录变量错误 | 设置 `NPI_INC_DIR`、`NPI_LIB_DIR`、`NPI_L1_INC_DIR`、`NPI_L1_LIB_DIR`；用 `ldd` 同时确认 `libNPI.so` 与 `libnpiL1.so` |
 | elaborated database not found/must be a directory | `--elab-db` 路径不存在，或传入了普通文件 | 传入现存的 `elabcom -elab` KDB 目录 |
@@ -1110,9 +1197,10 @@ status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,
 | `error[NPI_LOAD]` / collector 退出 11 | load 返回 0，且没有任何 top 可查询 | 确认 collector 的 `ldd`、`VERDI_HOME` 与生成 KDB 的工具版本一致；查看 collector stdout、stderr 和 `rs_npi_collectorLog/compiler.log`，必要时重新 elaboration；`work.lib++` 会更早被拒绝 |
 | collector timeout | KDB 很大或 NPI 卡住 | 调高 `--npi-timeout`，同时检查 license/存储/设计状态 |
 | `POSITION_NOT_FOUND` | 映射后的路径不属于当前 elaborated top；或 Excel 简写未命中数据库，被当作完整路径直通 | 查看 report 的 `position`/`position_alias`，核对映射键、映射值和同一 KDB 中的完整 hierarchy |
-| `GROUP_NOT_FOUND` | 没有实例与完整本地名相同，也没有实例同时满足前缀和 suffix regex | 核对非空 `RS_inst` 是否为本地名/前缀，并核对 `rtl.suffix_regex` |
+| `GROUP_NOT_FOUND` | 非空 `RS_inst` 没有命中完整名或合法前缀组，且该层次下没有可供模糊匹配的同模块实例 | 核对 `position` 和大小写敏感的 `RS_module` |
+| `RS_INST_AMBIGUOUS` | 组未命中，多个同模块实例与 `RS_inst` 并列最近，未选中任何一个 | 查看行证据中的排名，填写目标的完整本地名或纠正 `position`；同一行的 `RS_route` 不用于打破并列 |
 | `RS_ROUTE_NO_CANDIDATES` | 解析后的层次里没有本行 `RS_module` 的实例 | 核对 Position 映射与模块定义名（大小写敏感） |
-| `RS_ROUTE_AMBIGUOUS` | 多个实例的本地名与 `RS_route` 的最小编辑距离相同 | 在行证据中查看候选数及前五项，细化参考名、填写 `RS_inst` 或缩小 `position` |
+| `RS_ROUTE_AMBIGUOUS` | 多个实例的本地名与 `RS_route` 的最小编辑距离相同 | 在「匹配明细」查看并列候选及数量，细化参考名、填写 `RS_inst` 或缩小 `position` |
 | `INSTANCE_SUFFIX_INVALID` | 有前缀相同实例，但非空 suffix 不符合规则 | 修正命名或 regex；空 suffix 本身合法，该 finding 默认是 warning |
 | 显式模块规则未生效 | 规则键与 Excel/RTL `RS_module` 大小写不完全一致 | 核对名称；没有精确匹配时工具会正常采用默认规则，而不是把近似名称当作覆盖项 |
 | `STEP_PARAMETER_MISSING` | 规则要求的 parameter 未出现在实例证据中 | 核对模块规则拼写、实际 RTL module 和 fresh elaborated KDB |
@@ -1124,16 +1212,16 @@ status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,
 | `RS_MODULE_MISMATCH` | 实例 definition 与 `RS_module` 不同 | 核对模块替换、wrapper 和规格模块名 |
 | `CLK_PORT_MISSING` / `RST_PORT_MISSING` | 当前模块规则指定的对应 formal port 不存在，或复用了只采旧全局端口的历史 offline inventory | 核对 report 的 `module_rule.clk_port/rst_port` 与 RTL；旧 inventory 用当前 collector 重采。两个端口独立判定：clk 存在且已连接、rst 不存在时只允许 `RST_PORT_MISSING`，不得再有 `CLK_PORT_MISSING`/`CLK_UNCONNECTED`；当前没有“跳过 rst”开关 |
 | `CLK_UNCONNECTED` / `RST_UNCONNECTED` | formal port 没有 high connection | 修正例化连线 |
-| `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对 `position` 的简单名或完整层次名，并核对连接 |
-| `UNSUPPORTED_CONNECTION` | clk/rst 经 concat、运算、mux 等复杂表达式连接 | 改为可追踪的直接信号，或扩展采集/规则模型 |
+| `CLK_CONNECTION_MISMATCH` / `RST_CONNECTION_MISMATCH` | Excel 预期信号与实际连接不一致 | 使用相对目标 CRG 父层的简单名或完整源端线名，并核对该输出的实际连线 |
+| `CLK_SOURCE_SIGNAL_UNAVAILABLE` / `RST_SOURCE_SIGNAL_UNAVAILABLE` | 未能取得已到达目标的输出连线或对应起点追踪 | warning；检查 KDB 和采集器，不能用 RS 端的线名补上 |
 | `CRG_SOURCE_NOT_FOUND` | v3 trace 完整结束，但没有任何上游模块完整 instance hierarchy 精确匹配目标 | warning；核对 `crg-source-db resolve --json`、目标是否写到模块实例层次，以及 `clock_trace.modules/path` |
 | `CRG_TRACE_DEPTH_LIMIT` | 目标可能在 `rtl.crg_trace_max_depth` 之外，或离线 v3 trace 比本次配置更深但已被本次上限截断 | warning；在确认设计规模后适度增大 `1..256` 范围内的上限并重新在线采集 |
-| `CRG_TRACE_UNAVAILABLE` | 缺少可靠 trace、trace formal 与模块规则不一致、NPI traversal 未解析，或旧 v2 `clk_sources` 未精确命中 | warning；优先用当前 collector 对当前 KDB 生成 inventory v3，核对 `clock_trace.diagnostics` |
-| `RS_CFG_EN_PARAMETER_MISSING` | 非 `NA` 行的兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
-| `RS_CFG_EN_PARAMETER_UNEXPECTED` | 非 `NA` 行为 `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
-| `RS_CFG_EN_LABEL_MISMATCH` | 非 `NA` 行为 `has_rs_cfg_en=true`，但 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；`has_rs_cfg_en=false` 时任意字面内容都不会产生本 finding |
-| `RS_CFG_EN_VALUE_MISMATCH` | 非 `NA` 行的实例有 `RS_CRG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
-| `RS_CFG_EN_VALUE_UNRESOLVED` | 非 `NA` 行中 collector 找到 `RS_CRG_EN` 但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CRG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
+| `CRG_TRACE_UNAVAILABLE` | 缺少可靠 trace、trace formal 与模块规则不一致、NPI traversal 未解析，或旧 v2 `clk_sources` 未精确命中 | warning；优先用当前 collector 对当前 KDB 生成 inventory v4，核对 `clock_trace.diagnostics` |
+| `RS_CFG_EN_PARAMETER_MISSING` | 本项已填写且非 `NA` 的行的兼容规则键 `has_rs_cfg_en=true`，但实例没有 RTL `RS_CRG_EN` | 修正规则或 RTL/KDB；不能把缺失当作值 0 |
+| `RS_CFG_EN_PARAMETER_UNEXPECTED` | 本项已填写且非 `NA` 的行为 `has_rs_cfg_en=false`，但实例实际存在 RTL `RS_CRG_EN` | 修正规则数据库或核对是否匹配错误模块/KDB |
+| `RS_CFG_EN_LABEL_MISMATCH` | 本项已填写且非 `NA` 的行为 `has_rs_cfg_en=true`，但 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控` | 使用文本 `假门控`，不要使用布尔值、数字或别名；`has_rs_cfg_en=false` 时任意字面内容都不会产生本 finding |
+| `RS_CFG_EN_VALUE_MISMATCH` | 本项已填写且非 `NA` 的行的实例有 `RS_CRG_EN`，但 effective 字符串不表示数值 `0` | 核对实例 parameter override 和 elaborated KDB；不能仅修改 Excel 标签规避非零或非数值状态 |
+| `RS_CFG_EN_VALUE_UNRESOLVED` | 本项已填写且非 `NA` 的行中 collector 找到 `RS_CRG_EN` 但无法可靠解析 effective 值 | 查看 inventory 中该实例的 `parameters.RS_CRG_EN=null`，检查 NPI/KDB 和参数表达式；该状态 fail-closed |
 | `AMBIGUOUS_GROUP_MATCH` | 同一实例同时匹配多个重叠 `RS_inst`；完整名也可能与较短前缀重叠 | 重新设计互不重叠的组名；当前没有 exact-only 模式 |
 | `NPI_UNRESOLVED` | collector 产生层次/端口遍历 warning | 视为硬错误；检查 KDB、层次和 NPI Language/L1 端口信息，不要忽略 |
 | `NPI_LOAD_PARTIAL` | KDB 有 elaboration error，但 top 可查询 | severity 为 warning；仅表示允许继续，不能覆盖后续任何硬 finding |
@@ -1167,7 +1255,7 @@ status,row,position,position_alias,CRG_source,crg_source_alias,crg_trace_status,
 4. 按最终解析规则填写 Excel/internal `RS_CFG_EN` 标签和预期有效 `step`；默认规则要求标签为 `假门控`、实际 RTL `RS_CRG_EN=0`，显式 `has_rs_cfg_en=false` 时该 Excel 字段任意字面内容均不参与标签判定；只有需要逐行跳过全部门控检查时才填写精确大写 `NA`。每个物理实例默认贡献 1，有效拍可为 0。
 5. 执行 `validate`，确认 sheet、列号映射、position/CRG_source 解析结果和规范化内容；只有主动采用标准表头时才开启严格表头诊断。
 6. 使用 `--collector + --elab-db` 做在线检查；设计输入只能是 Verdi elaborated KDB。
-7. 同时输出 report schema v4 JSON/CSV，并用 `--keep-inventory` 保存 schema v3 快照；检查 `crg_source_check`、matched depth/path 和 warning。
-8. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。旧 v2 未精确 legacy 命中时只能得到 unavailable warning，应优先重采 v3。
+7. 同时输出 report schema v4 JSON/CSV，并用 `--keep-inventory` 保存 schema v4 快照；检查 `crg_source_check`、matched depth/path 和 warning。
+8. 只有在来源和新鲜度都可证明时，才使用该 inventory 做离线复查。旧 v2 未精确 legacy 命中时只能得到 unavailable warning，应优先重采 v4。
 9. RTL、KDB、两套路径映射、模块规则或 trace 深度变化后重新在线采集或检查。
 10. 需要人工核对时，用 `launch_verdi_gui.sh --elab-db "$ELAB_DB"` 打开同一个 KDB。

@@ -261,7 +261,7 @@ assert_no_unexpected_collector_logs() {
 
 write_sample_trace_rules() {
   local output_path=$1
-  printf 'rs_pipe\tclk\nrs_custom\tclock_i\nrs_clk_only\tclk\n' >"$output_path"
+  printf 'rs_pipe\tclk\trst\nrs_custom\tclock_i\treset_ni\nrs_clk_only\tclk\trst_n\n' >"$output_path"
 }
 
 assert_sample_clock_traces() {
@@ -275,9 +275,9 @@ inventory_path, inventory_label = sys.argv[1:]
 with open(inventory_path, "r", encoding="utf-8") as stream:
     inventory = json.load(stream)
 
-if inventory.get("schema_version") != 3:
+if inventory.get("schema_version") != 4:
     raise SystemExit(
-        "{} inventory schema is not v3: {!r}".format(
+        "{} inventory schema is not v4: {!r}".format(
             inventory_label, inventory.get("schema_version")
         )
     )
@@ -394,6 +394,21 @@ assert_trace(
 assert_trace(
     "CTRL_RS_D0", "clk", peer_direct_aux_nodes, "complete", peer_instances
 )
+for scope, records in (("top.u_tile", instances), ("top.u_tile_peer", peer_instances)):
+    for name in ("AAAA_BBB_C0", "CUSTOM_RS", "CTRL_RS_D0"):
+        aux = name == "CTRL_RS_D0"
+        target = scope + (".u_aux_crg" if aux else ".u_crg")
+        for key, formal, net, depth in (
+            ("clock_trace", "clk_out", "clk_aux" if aux else "clk_core", 1 if aux else 3),
+            ("reset_trace", "reset_out", "rst_aux" if aux else "rst_core", 2),
+        ):
+            trace = records[name][key]
+            if key == "reset_trace" and trace["reset_port"] != ("reset_ni" if name == "CUSTOM_RS" else "rst"):
+                raise SystemExit("incorrect reset start for " + name)
+            outputs = [(e["port"], e["connection"], e["depth"], e["path"][-1]) for e in trace["endpoints"]
+                       if e["instance"] == target]
+            if outputs != [(formal, scope+"."+net, depth, target)]:
+                raise SystemExit("incorrect CRG source endpoint: " + repr(outputs))
 print(
     "{} NPI clock trace evidence OK: "
     "RS->u_occ->u_clk_mux->{{u_crg,u_aux_crg}}, custom clock_i, witness-depth=3".format(
@@ -720,8 +735,8 @@ expected_ports_by_module = {
     "rs_pipe": {"clk", "rst", "d", "q"},
     "rs_custom": {"clock_i", "reset_ni", "d", "q"},
     "rs_clk_only": {"clk", "d", "q"},
-    "crg_core": {"ref_clk", "clk_out"},
-    "crg_aux": {"ref_clk", "clk_out"},
+    "crg_core": {"ref_clk", "clk_out", "ref_rst_n", "reset_out"},
+    "crg_aux": {"ref_clk", "clk_out", "ref_rst_n", "reset_out"},
 }
 for instance in position.get("instances", []):
     module = instance.get("module")
@@ -844,7 +859,7 @@ grep -Fq \
   "$PARTIAL_GUI_LOG"
 grep -Fq 'notice=NPI_LOAD_PARTIAL' "$PARTIAL_GUI_LOG"
 grep -Fq 'contract=elab-only' "$PARTIAL_GUI_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$PARTIAL_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$PARTIAL_GUI_LOG"
 assert_no_collector_errors "$PARTIAL_GUI_LOG"
 
 ELAB_ROOT="$TEST_ROOT/example_elab"
@@ -1065,6 +1080,16 @@ grep -Fq \
   "$POSITION_HIERARCHY_GUI_LOG"
 assert_no_collector_errors "$POSITION_HIERARCHY_GUI_LOG"
 
+CRG_HIERARCHY_GUI_LOG="$TEST_ROOT/online_gui_crg_hierarchy.log"
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+  --target CRG_source --project-root "$PROJECT_ROOT" \
+  --collector "$COLLECTOR" --elab-db "$ELAB_DB" --npi-lib-dir "$NPI_LIB_DIR" \
+  --regex '^top\.u_tile(_peer)?\.u_crg$' --expected-path top.u_tile.u_crg \
+  --timeout "$NPI_TIMEOUT" --iterations "$GUI_POSITION_HIERARCHY_ITERATIONS" \
+  --visible-seconds "$GUI_VISIBLE_SECONDS" 2>&1 | tee "$CRG_HIERARCHY_GUI_LOG"
+grep -Fq 'CRG_SOURCE_HIERARCHY_GUI_PASS:' "$CRG_HIERARCHY_GUI_LOG"
+assert_no_collector_errors "$CRG_HIERARCHY_GUI_LOG"
+
 "$PYTHON_BIN" - \
   "$PROJECT_ROOT/examples/specs.csv" \
   "$PROJECT_ROOT/config/rscheck.example.json" <<'PY'
@@ -1082,6 +1107,7 @@ internal_fields = [
     "rst",
     "CRG_source",
     "RS_CFG_EN",
+    "RS_route",
 ]
 expected_headers = [
     "接口分类",
@@ -1089,10 +1115,11 @@ expected_headers = [
     "实例组",
     "位置简称",
     "有效拍数",
-    "时钟连接",
-    "复位连接",
-    "时钟源模块",
+    "源端时钟线",
+    "源端复位线",
+    "时钟复位源",
     "假门控标记",
+    "例化参考名",
 ]
 with open(sys.argv[1], "r", encoding="utf-8-sig", newline="") as stream:
     actual_headers = next(csv.reader(stream))
@@ -1152,7 +1179,7 @@ with open(sys.argv[3], "r", encoding="utf-8-sig", newline="") as stream:
 
 if report.get("schema_version") != 4:
     raise SystemExit("unexpected report schema: {!r}".format(report.get("schema_version")))
-if inventory.get("schema_version") != 3:
+if inventory.get("schema_version") != 4:
     raise SystemExit(
         "unexpected inventory schema: {!r}".format(inventory.get("schema_version"))
     )
@@ -1192,8 +1219,8 @@ expected_ports_by_module = {
     "rs_pipe": {"clk", "rst", "d", "q"},
     "rs_custom": {"clock_i", "reset_ni", "d", "q"},
     "rs_clk_only": {"clk", "d", "q"},
-    "crg_core": {"ref_clk", "clk_out"},
-    "crg_aux": {"ref_clk", "clk_out"},
+    "crg_core": {"ref_clk", "clk_out", "ref_rst_n", "reset_out"},
+    "crg_aux": {"ref_clk", "clk_out", "ref_rst_n", "reset_out"},
 }
 for instance in instances.values():
     module = instance.get("module")
@@ -1498,10 +1525,11 @@ with open(sys.argv[3], "w", encoding="utf-8", newline="") as stream:
             "CUSTOM_RS",
             "tile_core",
             1,
-            "clk_rs",
-            "rst_n",
+            "clk_core",
+            "rst_core",
             "intentionally_wrong_source",
             "假门控",
+            "NA",
         ]
     )
 with open(sys.argv[4], "w", encoding="utf-8") as stream:
@@ -1515,7 +1543,7 @@ PY
   --inventory "$CLEAN_INVENTORY" \
   --json-report "$CUSTOM_PORT_REPORT" \
   2>&1 | tee "$CUSTOM_PORT_LOG"
-grep -Fq 'RESULT: PASS | rows=1 errors=0 warnings=1' "$CUSTOM_PORT_LOG"
+grep -Fq 'RESULT: PASS | rows=1 errors=0 warnings=2' "$CUSTOM_PORT_LOG"
 grep -Fq '[WARNING] row' "$CUSTOM_PORT_LOG"
 
 "$PYTHON_BIN" - "$CUSTOM_PORT_REPORT" <<'PY'
@@ -1553,10 +1581,10 @@ crg_check = row.get("crg_source_check", {})
 evaluations = crg_check.get("instances", []) if isinstance(crg_check, dict) else []
 if (
     report.get("schema_version") != 4
-    or report.get("summary", {}).get("warnings") != 1
-    or codes != {"CRG_SOURCE_NOT_FOUND"}
-    or len(findings) != 1
-    or findings[0].get("severity") != "warning"
+    or report.get("summary", {}).get("warnings") != 2
+    or codes != {"CRG_SOURCE_NOT_FOUND", "RST_SOURCE_NOT_FOUND"}
+    or len(findings) != 2
+    or any(f.get("severity") != "warning" for f in findings)
     or crg_check.get("status") != "warning"
     or len(evaluations) != 1
     or evaluations[0].get("clock_port") != "clock_i"
@@ -1605,10 +1633,11 @@ with open(sys.argv[3], "w", encoding="utf-8", newline="") as stream:
             "CLK_ONLY_RS",
             "tile_core",
             1,
-            "clk_rs",
-            "rst_n",
+            "clk_core",
+            "rst_core",
             "crg_core",
             "假门控",
+            "NA",
         ]
     )
 with open(sys.argv[4], "w", encoding="utf-8") as stream:
@@ -1713,7 +1742,7 @@ grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=$GUI_ONLINE_ITERATIONS" \
   "$ONLINE_GUI_LOG"
 grep -Fq 'contract=elab-only' "$ONLINE_GUI_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$ONLINE_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$ONLINE_GUI_LOG"
 grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$ONLINE_GUI_LOG"
@@ -1738,7 +1767,7 @@ grep -Fq 'contract=elab-only' "$CRG_TRACE_DEPTH_LOG"
 grep -Fq \
   'crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6' \
   "$CRG_TRACE_DEPTH_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$CRG_TRACE_DEPTH_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$CRG_TRACE_DEPTH_LOG"
 assert_no_collector_errors "$CRG_TRACE_DEPTH_LOG"
 
 CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
@@ -1754,14 +1783,14 @@ CUSTOM_PORT_GUI_LOG="$TEST_ROOT/online_gui_custom_port.log"
   --visible-seconds "$GUI_VISIBLE_SECONDS" \
   2>&1 | tee "$CUSTOM_PORT_GUI_LOG"
 grep -Fq \
-  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 1 mode=online case=custom-port iterations=1' \
+  'state=PASS rows=行数 1 errors=错误 0 warnings=警告 2 mode=online case=custom-port iterations=1' \
   "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'contract=elab-only' "$CUSTOM_PORT_GUI_LOG"
 grep -Fq 'rule-ports=clock_i/reset_ni' "$CUSTOM_PORT_GUI_LOG"
 grep -Fq \
   'crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND' \
   "$CUSTOM_PORT_GUI_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$CUSTOM_PORT_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$CUSTOM_PORT_GUI_LOG"
 assert_no_collector_errors "$CUSTOM_PORT_GUI_LOG"
 
 CLK_WITHOUT_RST_GUI_LOG="$TEST_ROOT/online_gui_clk_present_rst_missing.log"
@@ -1784,7 +1813,7 @@ grep -Fq 'rule-ports=clk/rst_n' "$CLK_WITHOUT_RST_GUI_LOG"
 grep -Fq \
   'clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING' \
   "$CLK_WITHOUT_RST_GUI_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$CLK_WITHOUT_RST_GUI_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$CLK_WITHOUT_RST_GUI_LOG"
 if grep -Fq 'CLK_PORT_MISSING' "$CLK_WITHOUT_RST_GUI_LOG"; then
   fail "online GUI incorrectly reported the existing clk as missing"
 fi
@@ -1809,7 +1838,7 @@ grep -Eq \
   'state=FAIL rows=行数 1 errors=错误 [1-9][0-9]* warnings=警告 0 mode=online case=negative iterations=1' \
   "$ONLINE_NEGATIVE_LOG"
 grep -Fq 'contract=elab-only' "$ONLINE_NEGATIVE_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$ONLINE_NEGATIVE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$ONLINE_NEGATIVE_LOG"
 assert_no_collector_errors "$ONLINE_NEGATIVE_LOG"
 
 DEFAULT_RULE_LOG="$TEST_ROOT/offline_gui_default_rule.log"
@@ -1826,7 +1855,7 @@ grep -Fq \
 grep -Fq \
   'rule=unregistered-default has-rs-cfg-en=true step-parameters=[] physical=2 effective=2 contributions=1,1' \
   "$DEFAULT_RULE_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$DEFAULT_RULE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$DEFAULT_RULE_LOG"
 
 RS_CFG_DONTCARE_LOG="$TEST_ROOT/offline_gui_rs_cfg_dontcare.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1842,7 +1871,7 @@ grep -Fq \
 grep -Fq \
   'has-rs-cfg-en=false label=dont-care rs-crg-en=absent findings=none' \
   "$RS_CFG_DONTCARE_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$RS_CFG_DONTCARE_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$RS_CFG_DONTCARE_LOG"
 
 RS_CFG_NA_LOG="$TEST_ROOT/offline_gui_rs_cfg_na.log"
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_rscheck_gui_smoke.py" \
@@ -1858,7 +1887,7 @@ grep -Fq \
 grep -Fq \
   'rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' \
   "$RS_CFG_NA_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$RS_CFG_NA_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$RS_CFG_NA_LOG"
 if grep -Eq 'RS_CFG_EN_[A-Z_]+' "$RS_CFG_NA_LOG"; then
   fail "offline GUI RS_CFG_EN=NA case emitted an RS_CFG_EN_* finding"
 fi
@@ -1877,7 +1906,7 @@ grep -Fq \
 grep -Fq \
   'crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=pass trace-depth=3 findings=none' \
   "$CRG_SOURCE_MAPPING_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$CRG_SOURCE_MAPPING_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$CRG_SOURCE_MAPPING_LOG"
 if grep -Eq 'CRG_SOURCE_[A-Z_]+' "$CRG_SOURCE_MAPPING_LOG"; then
   fail "offline GUI CRG_source mapping case emitted a CRG_SOURCE_* finding"
 fi
@@ -1892,7 +1921,7 @@ OFFLINE_STRESS_LOG="$TEST_ROOT/offline_gui_100_rounds.log"
 grep -Fq \
   "state=PASS rows=行数 2 errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=$GUI_STRESS_ITERATIONS" \
   "$OFFLINE_STRESS_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$OFFLINE_STRESS_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$OFFLINE_STRESS_LOG"
 grep -Fq \
   'position-map=tile_core->top.u_tile npi-positions=full-path-only' \
   "$OFFLINE_STRESS_LOG"
@@ -1909,7 +1938,7 @@ OFFLINE_LOAD_LOG="$TEST_ROOT/offline_gui_10000_rows.log"
 grep -Fq \
   "state=PASS rows=行数 $GUI_LOAD_ROWS errors=错误 0 warnings=警告 0 mode=offline case=positive iterations=1" \
   "$OFFLINE_LOAD_LOG"
-grep -Fq 'schemas=report-v4/inventory-v3' "$OFFLINE_LOAD_LOG"
+grep -Fq 'schemas=report-v4/inventory-v4' "$OFFLINE_LOAD_LOG"
 
 for gui_log in \
   "$ONLINE_GUI_LOG" \
@@ -1931,7 +1960,7 @@ for gui_log in \
   grep -Fq 'module-rule-ports=preserved' "$gui_log"
   grep -Fq 'crg-source-db=crud-complete' "$gui_log"
   grep -Fq 'dirty-copy=export-preserved/import-cleared' "$gui_log"
-  grep -Fq 'schemas=report-v4/inventory-v3' "$gui_log"
+  grep -Fq 'schemas=report-v4/inventory-v4' "$gui_log"
 done
 
 assert_no_unexpected_collector_logs
@@ -1947,6 +1976,7 @@ echo "VERDI_LOG=$VERDI_LOG"
 echo "HIERARCHY_SEARCH_RESULTS=$PARTIAL_HIERARCHY_JSON,$CLEAN_HIERARCHY_EXACT_JSON,$CLEAN_HIERARCHY_LIMIT_JSON,$CLEAN_HIERARCHY_NO_MATCH_JSON"
 echo "HIERARCHY_SEARCH_STDERR=$PARTIAL_HIERARCHY_STDERR,$CLEAN_HIERARCHY_EXACT_STDERR,$CLEAN_HIERARCHY_LIMIT_STDERR,$CLEAN_HIERARCHY_NO_MATCH_STDERR"
 echo "POSITION_HIERARCHY_GUI_LOG=$POSITION_HIERARCHY_GUI_LOG"
+echo "CRG_HIERARCHY_GUI_LOG=$CRG_HIERARCHY_GUI_LOG"
 echo "GUI_LOGS=$PARTIAL_GUI_LOG,$ONLINE_GUI_LOG,$CRG_TRACE_DEPTH_LOG,$CUSTOM_PORT_GUI_LOG,$CLK_WITHOUT_RST_GUI_LOG,$ONLINE_NEGATIVE_LOG,$DEFAULT_RULE_LOG,$RS_CFG_DONTCARE_LOG,$RS_CFG_NA_LOG,$CRG_SOURCE_MAPPING_LOG,$OFFLINE_STRESS_LOG,$OFFLINE_LOAD_LOG"
 case "$DISPLAY" in
   localhost:*|127.0.0.1:*)

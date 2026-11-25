@@ -101,7 +101,7 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, self.inventory, self.rtl, self.rules)
         self.assertTrue(report.passed)
         self.assertEqual(report.error_count, 0)
-        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(report.warning_count, 1)
         self.assertEqual(self.inventory.schema_version, 2)
         self.assertEqual(report.rows[0].effective_step, 5)
         self.assertEqual(len(report.rows[0].instances), 6)
@@ -344,7 +344,7 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(mismatch.actual, "1")
 
     def test_default_rule_requires_fake_gating_excel_label(self) -> None:
-        spec = replace(self.specs[0], step=6, rs_cfg_en="")
+        spec = replace(self.specs[0], step=6, rs_cfg_en="真门控")
         report = check_specs([spec], self._default_rule_inventory(), self.rtl, {})
 
         self.assertFalse(report.passed)
@@ -354,7 +354,7 @@ class CheckerTests(unittest.TestCase):
         )
         mismatch = report.rows[0].findings[0]
         self.assertEqual(mismatch.expected, "假门控")
-        self.assertEqual(mismatch.actual, "")
+        self.assertEqual(mismatch.actual, "真门控")
 
     def test_explicit_module_rule_takes_priority_over_default(self) -> None:
         report = check_specs(
@@ -382,8 +382,8 @@ class CheckerTests(unittest.TestCase):
                 "missing_blank",
                 missing,
                 "",
-                False,
-                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_PARAMETER_MISSING"},
+                True,
+                {"EXCEL_FIELD_BLANK"},
             ),
             (
                 "missing_false_gate",
@@ -403,8 +403,8 @@ class CheckerTests(unittest.TestCase):
                 "zero_blank",
                 "0",
                 "",
-                False,
-                {"RS_CFG_EN_LABEL_MISMATCH"},
+                True,
+                {"EXCEL_FIELD_BLANK"},
             ),
             (
                 "zero_other_label",
@@ -424,8 +424,8 @@ class CheckerTests(unittest.TestCase):
                 "one_blank",
                 "1",
                 "",
-                False,
-                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_MISMATCH"},
+                True,
+                {"EXCEL_FIELD_BLANK"},
             ),
             (
                 "one_other_label",
@@ -459,8 +459,8 @@ class CheckerTests(unittest.TestCase):
                 "unresolved_blank",
                 None,
                 "",
-                False,
-                {"RS_CFG_EN_LABEL_MISMATCH", "RS_CFG_EN_VALUE_UNRESOLVED"},
+                True,
+                {"EXCEL_FIELD_BLANK"},
             ),
             (
                 "unresolved_other_label",
@@ -563,13 +563,15 @@ class CheckerTests(unittest.TestCase):
         def mutate(raw) -> None:
             instance = raw["positions"]["top.u_tile"]["instances"][0]
             instance["parameters"]["RS_CRG_EN"] = "1"
-            instance["ports"]["clk"]["connection"] = "top.u_tile.wrong_clk"
-            instance["ports"]["rst"]["connection"] = "top.u_tile.wrong_rst"
+            for role in ("clock_trace", "reset_trace"):
+                for end in instance[role]["endpoints"]:
+                    if end["instance"] == "top.u_tile.u_crg":
+                        end["connection"] = "top.u_tile.wrong"
 
         spec = replace(self.specs[0], rs_cfg_en="NA", step=6)
-        report = check_specs(
-            [spec], self._mutated_inventory(mutate), self.rtl, self.rules
-        )
+        raw = json.loads((ROOT / "examples/inventory.json").read_text("utf-8"))
+        mutate(raw)
+        report = check_specs([spec], self._load_raw_inventory(raw), self.rtl, self.rules)
 
         self.assertFalse(report.passed)
         self.assertEqual(len(report.rows[0].instances), 6)
@@ -638,7 +640,7 @@ class CheckerTests(unittest.TestCase):
                 )
 
                 self.assertTrue(report.passed)
-                self.assertEqual(report.rows[0].findings, ())
+                self.assertEqual([f.code for f in report.rows[0].findings], [] if excel_value else ["EXCEL_FIELD_BLANK"])
                 self.assertEqual(
                     report_to_dict(report)["rows"][0]["spec"]["RS_CFG_EN"],
                     excel_value,
@@ -770,7 +772,7 @@ class CheckerTests(unittest.TestCase):
                     raw["schema_version"] = schema_version
 
                 with self.assertRaisesRegex(
-                    InventoryError, "schema_version.*expected 2 or 3"
+                    InventoryError, "schema_version.*expected 2, 3 or 4"
                 ):
                     self._mutated_inventory(mutate)
 
@@ -966,10 +968,14 @@ class CheckerTests(unittest.TestCase):
         )
         self.assertIn("STAGE_INDEX_MISMATCH", {item.code for item in report.rows[0].findings})
 
-    def test_missing_group_has_specific_diagnostic(self) -> None:
+    def test_missing_group_without_same_module_candidate_has_specific_diagnostic(self) -> None:
         missing = replace(self.specs[0], rs_inst="DOES_NOT_EXIST", step=0)
-        report = check_specs([missing], self.inventory, self.rtl, self.rules)
+        def remove_candidates(raw):
+            position = raw["positions"][missing.position]
+            position["instances"] = [i for i in position["instances"] if i["module"] != missing.rs_module]
+        report = check_specs([missing], self._mutated_inventory(remove_candidates), self.rtl, self.rules)
         self.assertEqual({item.code for item in report.rows[0].findings}, {"GROUP_NOT_FOUND"})
+        self.assertEqual(report.rows[0].nearest_match.status, "no_candidates")
 
     def test_missing_position_fails(self) -> None:
         missing = replace(self.specs[0], position="top.no_such_scope")
@@ -978,7 +984,7 @@ class CheckerTests(unittest.TestCase):
             {item.code for item in report.rows[0].findings}, {"POSITION_NOT_FOUND"}
         )
 
-    def test_unconnected_port_and_unsupported_expression_fail(self) -> None:
+    def test_unconnected_port_fails_but_sink_expression_is_not_compared(self) -> None:
         def mutate(raw) -> None:
             instance = raw["positions"]["top.u_tile"]["instances"][0]
             instance["ports"]["clk"] = {
@@ -995,7 +1001,7 @@ class CheckerTests(unittest.TestCase):
         )
         codes = {item.code for item in report.rows[0].findings}
         self.assertIn("CLK_UNCONNECTED", codes)
-        self.assertIn("UNSUPPORTED_CONNECTION", codes)
+        self.assertNotIn("UNSUPPORTED_CONNECTION", codes)
 
     def test_module_rule_selects_custom_clk_and_rst_formal_names(self) -> None:
         def mutate(raw) -> None:
@@ -1063,7 +1069,7 @@ class CheckerTests(unittest.TestCase):
             {item.code for item in report.rows[0].findings},
             {"CRG_TRACE_UNAVAILABLE"},
         )
-        self.assertEqual(report.warning_count, 6)
+        self.assertEqual(report.warning_count, 7)
 
     def test_legacy_v2_empty_clock_sources_are_unavailable_warnings(self) -> None:
         def mutate(raw) -> None:
@@ -1111,7 +1117,7 @@ class CheckerTests(unittest.TestCase):
         )
 
         self.assertTrue(report.passed)
-        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(report.warning_count, 1)
         self.assertTrue(
             all(item.status == "matched" for item in report.rows[0].crg_evaluations)
         )
@@ -1181,7 +1187,7 @@ class CheckerTests(unittest.TestCase):
             [self.specs[0]], self._v3_inventory(mutate), self.rtl, self.rules
         )
 
-        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(report.warning_count, 1)
         self.assertTrue(
             all(item.status == "matched" for item in report.rows[0].crg_evaluations)
         )
@@ -1236,7 +1242,7 @@ class CheckerTests(unittest.TestCase):
             {item.code for item in limited.rows[0].findings},
             {"CRG_TRACE_DEPTH_LIMIT"},
         )
-        self.assertEqual(boundary.warning_count, 0)
+        self.assertEqual(boundary.warning_count, 1)
         self.assertTrue(
             all(item.matched.depth == 3 for item in boundary.rows[0].crg_evaluations)
         )
@@ -1275,7 +1281,7 @@ class CheckerTests(unittest.TestCase):
         )
 
         self.assertTrue(report.passed)
-        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(report.warning_count, 1)
         self.assertTrue(
             all(item.clock_port == "pipe_clock" for item in report.rows[0].crg_evaluations)
         )
@@ -1317,9 +1323,9 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, warned, self.rtl, self.rules)
 
         self.assertTrue(report.passed)
-        self.assertEqual(report.global_findings, ())
+        self.assertEqual([f.code for f in report.global_findings], ["SOURCE_INVENTORY_LEGACY"])
         self.assertEqual(report.error_count, 0)
-        self.assertEqual(report.warning_count, 0)
+        self.assertEqual(report.warning_count, 1)
 
     def test_non_crg_collector_warning_fails_closed(self) -> None:
         warned = replace(
@@ -1349,7 +1355,7 @@ class CheckerTests(unittest.TestCase):
         report = check_specs(self.specs, warned, self.rtl, self.rules)
 
         self.assertFalse(report.passed)
-        self.assertEqual(len(report.global_findings), 1)
+        self.assertEqual(len(report.global_findings), 2)
         self.assertEqual(report.global_findings[0].code, "NPI_UNRESOLVED")
         self.assertEqual(report.global_findings[0].message, generic_warning)
 
@@ -1364,7 +1370,7 @@ class CheckerTests(unittest.TestCase):
 
         self.assertTrue(report.passed)
         self.assertEqual(report.error_count, 0)
-        self.assertEqual(report.warning_count, 1)
+        self.assertEqual(report.warning_count, 2)
         self.assertEqual(report.global_findings[0].severity, "warning")
         self.assertEqual(report.global_findings[0].code, "NPI_LOAD_PARTIAL")
 

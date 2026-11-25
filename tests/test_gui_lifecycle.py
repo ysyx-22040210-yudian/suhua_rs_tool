@@ -34,7 +34,8 @@ from rscheck.model import (
     RtlConfig,
     ToolConfig,
 )
-from rscheck.npi_runner import HierarchyScope, HierarchySearchResult
+from rscheck.hierarchy_tree import ScopeTree
+from rscheck.npi_runner import HierarchyIndex, HierarchyScope, HierarchySearchResult
 
 
 class _FakeRoot:
@@ -80,7 +81,7 @@ class _FakeTree:
     def delete(self, item) -> None:
         self.items.pop(item, None)
 
-    def insert(self, _parent, _index, *, iid, values) -> None:
+    def insert(self, _parent, _index, *, iid, values=(), **_options) -> None:
         self.items[iid] = tuple(values)
 
     def selection(self):
@@ -872,6 +873,8 @@ class GuiLifecycleTests(unittest.TestCase):
         app._running = False
         app._position_hierarchy_tree = _FakeTree()
         app._position_hierarchy_paths = {}
+        app._hierarchy_target = "position"
+        app._hierarchy_hits, app._hierarchy_offsets, app._hierarchy_more = set(), {}, {}
         app.position_hierarchy_use_button = _FakeWidget()
         app.position_hierarchy_status_var = _FakeVar("尚未查询")
         app.position_alias_var = _FakeVar("my_alias")
@@ -897,10 +900,11 @@ class GuiLifecycleTests(unittest.TestCase):
             visited_scopes=8,
         )
 
+        app._hierarchy_model = ScopeTree.from_index(HierarchyIndex(result.matches, (), (), False, 8))
         app._render_position_hierarchy_candidates(result)
 
         self.assertEqual(
-            app._position_hierarchy_tree.items["position-hierarchy-0"],
+            app._position_hierarchy_tree.items["scope:top.u_tile"],
             ("top.u_tile", "tile", "module"),
         )
         self.assertEqual(app.position_hierarchy_use_button.state, "normal")
@@ -916,6 +920,7 @@ class GuiLifecycleTests(unittest.TestCase):
 
     def test_position_hierarchy_empty_selection_keeps_current_path(self) -> None:
         app = object.__new__(RsCheckApp)
+        app._running = False
         app._position_hierarchy_tree = _FakeTree()
         app._position_hierarchy_paths = {"candidate": "top.u_tile"}
         app.position_path_var = _FakeVar("top.manual")
@@ -956,6 +961,8 @@ class GuiLifecycleTests(unittest.TestCase):
         )
         app._request = Mock(return_value=request)
         app.position_hierarchy_regex_var = _FakeVar("u_tile")
+        app._hierarchy_model = None
+        app._hierarchy_temp = SimpleNamespace(name="temporary-picker-directory")
         app._cancel_guard = threading.Lock()
         app._cancel_requested = threading.Event()
         app._clear_position_hierarchy_candidates = Mock()

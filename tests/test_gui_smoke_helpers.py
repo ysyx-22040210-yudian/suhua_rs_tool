@@ -41,7 +41,7 @@ class GuiSmokeHelperTests(unittest.TestCase):
         self.assertIn("POSITION_HIERARCHY_GUI_PASS", source)
         self.assertIn("dialog=mapped", source)
 
-    def test_common_smoke_uses_current_v3_inventory_and_keeps_legacy_v2(self) -> None:
+    def test_common_smoke_uses_current_v4_inventory_and_keeps_legacy_v2(self) -> None:
         sample_path = _current_sample_inventory_path(ROOT)
         sample_raw = json.loads(sample_path.read_text(encoding="utf-8"))
         sample = load_inventory(sample_path)
@@ -50,8 +50,8 @@ class GuiSmokeHelperTests(unittest.TestCase):
         legacy = load_inventory(legacy_path)
 
         self.assertEqual(sample_path, ROOT / "examples" / "inventory.json")
-        self.assertEqual(sample.schema_version, 3)
-        self.assertEqual(sample_raw["schema_version"], 3)
+        self.assertEqual(sample.schema_version, 4)
+        self.assertEqual(sample_raw["schema_version"], 4)
         self.assertTrue(
             all(
                 "clock_trace" in instance

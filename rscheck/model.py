@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,10 +19,53 @@ REQUIRED_COLUMN_FIELDS = (
 )
 
 FIELD_NAMES = REQUIRED_COLUMN_FIELDS + ("RS_route",)
-REQUIRED_ROW_FIELDS = tuple(
-    name for name in REQUIRED_COLUMN_FIELDS if name not in {"RS_inst", "RS_CFG_EN"}
-)
-ROUTE_CANDIDATE_LIMIT = 5
+REQUIRED_ROW_FIELDS = ("Intf_type", "RS_module", "position", "step")
+OPTIONAL_ROW_FIELDS = tuple(name for name in FIELD_NAMES if name not in REQUIRED_ROW_FIELDS)
+
+
+def skip_reason(value: str) -> str | None:
+    """Only the whole, trimmed, case-sensitive marker is special."""
+    value = value.strip()
+    return "blank" if not value else "NA" if value == "NA" else None
+NAME_CANDIDATE_LIMIT = 5
+NAME_TIE_REVIEW_LIMIT = 50
+RS_INST_GROUP_RULE = "exact_name_or_prefix_with_configured_suffix"
+RS_INST_FUZZY_RULE = "nearest_name_after_no_group_match"
+RS_INST_LIST_RULE = "per_item_union"
+RS_INST_LEGACY_SPLIT_RULE = "semicolon_or_linebreak"
+RS_INST_SPLIT_RULE = "whitespace_semicolon_comma_dunhao_colon"
+_RS_INST_PUNCTUATION = ";；,，、:："
+# Skip an RTL escaped identifier as one unit (it ends at whitespace). Group
+# horizontal whitespace with an immediately following newline for continuation handling.
+_RS_INST_BOUNDARIES = {
+    RS_INST_SPLIT_RULE: re.compile(
+        rf"(?<![^\s{_RS_INST_PUNCTUATION}])\\\S+|"
+        rf"(?P<boundary>[^\S\r\n]+(?:\r\n|[\r\n])?|\r\n|[\r\n{_RS_INST_PUNCTUATION}])"
+    ),
+    RS_INST_LEGACY_SPLIT_RULE: re.compile(r"(?<![^\s;；])\\\S+|(?P<boundary>[;；]|\r\n|[\r\n])"),
+}
+
+
+def split_rs_inst(value: str, *, rule: str = RS_INST_SPLIT_RULE) -> tuple[str, ...]:
+    """Return selectors in source order; the legacy rule is for saved reports only."""
+    items = []
+    start = escaped_end = 0
+    for match in _RS_INST_BOUNDARIES[rule].finditer(value):
+        if match.lastgroup is None:  # part of the segment, not a separator
+            escaped_end = match.end()
+            continue
+        segment = value[start:match.start()].rstrip()
+        if match[0][-1] in "\r\n" and segment.endswith("\\") and start + len(segment) != escaped_end:
+            segment = segment[:-1]
+        token = segment.strip()
+        if token:
+            items.append(token)
+        start = match.end()
+    tail = value[start:].strip()
+    if tail:
+        items.append(tail)
+    return tuple(items)
+
 
 DEFAULT_CRG_TRACE_MAX_DEPTH = 16
 MAX_CRG_TRACE_DEPTH = 256
@@ -129,16 +173,49 @@ class SpecRow:
     position_alias: str = ""
     crg_source_alias: str = ""
     rs_route: str = ""
+    rs_route_mapped: bool = False
+    rs_inst_formula_cell: str | None = None
+
+    @property
+    def ignored_fields(self) -> dict[str, str]:
+        values = {"RS_inst": self.rs_inst, "clk": self.clk, "rst": self.rst,
+                  "CRG_source": self.crg_source_alias or self.crg_source, "RS_CFG_EN": self.rs_cfg_en}
+        if self.rs_route_mapped or self.rs_route:
+            values["RS_route"] = self.rs_route
+        return {field: reason for field, value in values.items() if (reason := skip_reason(value))}
+
+    @property
+    def blank_findings(self) -> tuple[Finding, ...]:
+        return tuple(Finding("warning", "EXCEL_FIELD_BLANK",
+                             blank_field_message(self.sheet, self.row_number, name),
+                             self.row_number, self.position, self.rs_inst, self.rs_cfg_en,
+                             actual={"field": name, "reason": "blank"})
+                     for name, reason in self.ignored_fields.items() if reason == "blank")
+
+    @property
+    def has_route(self) -> bool:
+        return skip_reason(self.rs_route) is None
+
+    @property
+    def rs_inst_items(self) -> tuple[str, ...]:
+        return split_rs_inst(self.rs_inst) if skip_reason(self.rs_inst) is None else ()
 
     @property
     def key(self) -> tuple[str, ...]:
-        if self.rs_inst:
-            return self.position, self.rs_inst
-        return self.position, self.rs_module, self.rs_route
+        items = self.rs_inst_items
+        if items:
+            return ("inst", self.position, *sorted(set(items)))
+        return "route", self.position, self.rs_module, self.rs_route
 
     @property
     def selector_label(self) -> str:
-        return self.rs_inst or f"RS_route={self.rs_route}"
+        items = self.rs_inst_items
+        if not items:
+            return f"RS_route={self.rs_route}" if self.has_route else "未指定例化"
+        # Keep a single line per specification in console summaries. JSON/CSV retain the cell value.
+        if "\n" in self.rs_inst or "\r" in self.rs_inst:
+            return "; ".join(items)
+        return self.rs_inst
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +225,9 @@ class SpecRow:
             "Intf_type": self.intf_type,
             "RS_module": self.rs_module,
             "RS_inst": self.rs_inst,
+            **({"RS_inst_formula_cell": self.rs_inst_formula_cell} if self.rs_inst_formula_cell else {}),
+            "RS_inst_items": list(self.rs_inst_items),
+            "RS_inst_split_rule": RS_INST_SPLIT_RULE,
             "RS_route": self.rs_route,
             "position": self.position,
             "position_alias": self.position_alias,
@@ -157,7 +237,26 @@ class SpecRow:
             "CRG_source": self.crg_source,
             "crg_source_alias": self.crg_source_alias,
             "RS_CFG_EN": self.rs_cfg_en,
+            "ignored_fields": self.ignored_fields,
         }
+
+
+@dataclass(frozen=True)
+class SkippedRow:
+    sheet: str
+    row: int
+    fields: Mapping[str, str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"sheet": self.sheet, "row": self.row, "fields": dict(self.fields)}
+
+    def describe(self) -> str:
+        return f"{self.sheet} 第 {self.row} 行：" + "、".join(
+            f"{key}={'空' if reason == 'blank' else 'NA'}" for key, reason in self.fields.items())
+
+
+def blank_field_message(sheet: str, row: int, name: str) -> str:
+    return f"{sheet} 第 {row} 行：{name} 为空，已跳过该项检查。"
 
 
 @dataclass(frozen=True)
@@ -223,6 +322,40 @@ class ClockTraceNode:
 
 
 @dataclass(frozen=True)
+class SourceEndpoint:
+    instance: str
+    port: str
+    connection: str
+    depth: int
+    path: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"instance": self.instance, "port": self.port, "connection": self.connection,
+                "depth": self.depth, "path": list(self.path)}
+
+
+@dataclass(frozen=True)
+class SourceSignalCheck:
+    instance: str
+    role: str
+    start_port: str
+    target: str
+    expected: str
+    status: str
+    endpoints: tuple[SourceEndpoint, ...]
+    matching: tuple[SourceEndpoint, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+    allow_leaf_signal_match: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"instance": self.instance, "role": self.role, "start_port": self.start_port,
+                "target": self.target, "expected": self.expected, "status": self.status,
+                "endpoints": [e.as_dict() for e in self.endpoints],
+                "matching": [e.as_dict() for e in self.matching], "diagnostics": list(self.diagnostics),
+                "allow_leaf_signal_match": self.allow_leaf_signal_match}
+
+
+@dataclass(frozen=True)
 class ClockTrace:
     clock_port: str
     max_depth: int
@@ -230,26 +363,30 @@ class ClockTrace:
     status: str
     modules: tuple[ClockTraceNode, ...]
     diagnostics: tuple[str, ...] = ()
+    endpoints: tuple[SourceEndpoint, ...] = ()
+    is_reset: bool = False
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "ClockTrace":
-        clock_port = value.get("clock_port")
+    def from_mapping(cls, value: Mapping[str, Any], *, reset: bool = False, endpoints_required: bool = False) -> "ClockTrace":
+        clock_port = value.get("reset_port" if reset else "clock_port")
         max_depth = value.get("max_depth")
         excluded_inputs = value.get("excluded_inputs")
         status = value.get("status")
         raw_modules = value.get("modules")
         raw_diagnostics = value.get("diagnostics")
+        label = "reset_trace" if reset else "clock_trace"
         if not isinstance(clock_port, str) or not clock_port.strip():
-            raise InventoryError("clock_trace.clock_port must be a non-empty string")
+            raise InventoryError(f"{label} start port must be a non-empty string")
         if type(max_depth) is not int or not 1 <= max_depth <= MAX_CRG_TRACE_DEPTH:
             raise InventoryError(
                 f"clock_trace.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
             )
-        if excluded_inputs != list(CRG_TRACE_EXCLUDED_INPUTS):
+        required_exclusions = ["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS)
+        if excluded_inputs != required_exclusions:
             raise InventoryError(
-                "clock_trace.excluded_inputs must be exactly ['clk', 'rst_n']"
+                f"{label}.excluded_inputs must be exactly {required_exclusions!r}"
             )
-        if status not in CRG_TRACE_STATUSES:
+        if not isinstance(status, str) or status not in CRG_TRACE_STATUSES:
             raise InventoryError(
                 "clock_trace.status must be one of: complete, depth_limited, unresolved"
             )
@@ -265,6 +402,24 @@ class ClockTrace:
             ClockTraceNode.from_mapping(item, max_depth=max_depth)
             for item in raw_modules
         )
+        raw_endpoints = value.get("endpoints", None if endpoints_required else [])
+        if not isinstance(raw_endpoints, list):
+            raise InventoryError("signal trace endpoints must be an array")
+        by_name = {node.instance: node for node in modules}
+        endpoints = []
+        keys: set[tuple[str, str]] = set()
+        for entry in raw_endpoints:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("instance"), str):
+                raise InventoryError("invalid trace endpoint")
+            owner = by_name.get(entry["instance"])
+            if owner is None or not all(isinstance(entry.get(k), str) for k in ("port", "connection")):
+                raise InventoryError("trace endpoint requires a reachable instance, port and connection")
+            node = ClockTraceNode.from_mapping({**entry, "module": owner.module}, max_depth=max_depth)
+            key = (node.instance, entry["port"])
+            if key in keys or (not entry["port"] and entry["connection"]) or node.depth < owner.depth:
+                raise InventoryError("duplicate or inconsistent trace endpoint")
+            keys.add(key)
+            endpoints.append(SourceEndpoint(node.instance, entry["port"], entry["connection"], node.depth, node.path))
         return cls(
             clock_port=clock_port,
             max_depth=max_depth,
@@ -272,16 +427,18 @@ class ClockTrace:
             status=status,
             modules=modules,
             diagnostics=tuple(raw_diagnostics),
+            endpoints=tuple(endpoints), is_reset=reset,
         )
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "clock_port": self.clock_port,
+            ("reset_port" if self.is_reset else "clock_port"): self.clock_port,
             "max_depth": self.max_depth,
             "excluded_inputs": list(self.excluded_inputs),
             "status": self.status,
             "modules": [module.as_dict() for module in self.modules],
             "diagnostics": list(self.diagnostics),
+            **({"endpoints": [e.as_dict() for e in self.endpoints]} if self.endpoints or self.is_reset else {}),
         }
 
 
@@ -313,6 +470,7 @@ class ActualInstance:
     ports: Mapping[str, PortConnection]
     clk_sources: tuple[DriverSource, ...]
     clock_trace: ClockTrace | None = None
+    reset_trace: ClockTrace | None = None
 
     @classmethod
     def from_mapping(
@@ -347,17 +505,26 @@ class ActualInstance:
             raise InventoryError(
                 "instance 'clock_trace' is not allowed by schema_version 2"
             )
-        if schema_version == 3 and "clock_trace" not in value:
+        if schema_version >= 3 and "clock_trace" not in value:
             raise InventoryError(
-                "instance 'clock_trace' is required by schema_version 3"
+                f"instance 'clock_trace' is required by schema_version {schema_version}"
             )
         raw_clock_trace = value.get("clock_trace")
         if raw_clock_trace is None:
             clock_trace = None
         elif isinstance(raw_clock_trace, Mapping):
-            clock_trace = ClockTrace.from_mapping(raw_clock_trace)
+            clock_trace = ClockTrace.from_mapping(raw_clock_trace, endpoints_required=schema_version >= 4)
         else:
             raise InventoryError("instance 'clock_trace' must be an object or null")
+        reset_trace = None
+        if schema_version >= 4:
+            if "reset_trace" not in value:
+                raise InventoryError("instance 'reset_trace' is required by schema_version 4")
+            raw_reset = value["reset_trace"]
+            if raw_reset is not None:
+                if not isinstance(raw_reset, Mapping):
+                    raise InventoryError("instance 'reset_trace' must be an object or null")
+                reset_trace = ClockTrace.from_mapping(raw_reset, reset=True, endpoints_required=True)
         raw_line = value.get("line")
         try:
             line = int(raw_line) if raw_line not in (None, "") else None
@@ -373,6 +540,7 @@ class ActualInstance:
             ports={str(k): PortConnection.from_value(v) for k, v in raw_ports.items()},
             clk_sources=tuple(DriverSource.from_mapping(v) for v in raw_sources),
             clock_trace=clock_trace,
+            reset_trace=reset_trace,
         )
 
 
@@ -431,11 +599,13 @@ class CrgTraceEvaluation:
     trace_status: str
     matched: ClockTraceNode | None = None
     diagnostics: tuple[str, ...] = ()
+    trace_role: str = "clk"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "instance": self.instance,
             "clock_port": self.clock_port,
+            "trace_role": self.trace_role,
             "expected": self.expected,
             "max_depth": self.max_depth,
             "status": self.status,
@@ -474,7 +644,7 @@ class Finding:
 
 
 @dataclass(frozen=True)
-class RouteCandidate:
+class NameCandidate:
     name: str
     full_name: str
     distance: int
@@ -484,11 +654,12 @@ class RouteCandidate:
 
 
 @dataclass(frozen=True)
-class RouteMatch:
+class NearestNameMatch:
     status: str
     candidate_count: int = 0
     tied_best_count: int = 0
-    ranked: tuple[RouteCandidate, ...] = ()
+    ranked: tuple[NameCandidate, ...] = ()
+    extra_tied: tuple[NameCandidate, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -499,6 +670,29 @@ class RouteMatch:
             "tied_best_count": self.tied_best_count,
             "selected": self.ranked[0].as_dict() if self.status == "matched" else None,
             "top_candidates": [item.as_dict() for item in self.ranked],
+            **({"extra_tied_candidates": [item.as_dict() for item in self.extra_tied]} if self.extra_tied else {}),
+        }
+
+
+@dataclass(frozen=True)
+class InstanceItemMatch:
+    query: str
+    rule: str
+    paths: tuple[str, ...] = ()
+    added_count: int = 0
+    nearest: NearestNameMatch | None = None
+
+    @property
+    def status(self) -> str:
+        if self.nearest is not None:
+            return self.nearest.status
+        return "matched" if self.paths else "position_not_found"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query, "rule": self.rule, "status": self.status,
+            "matched_paths": list(self.paths), "added_count": self.added_count,
+            **(self.nearest.as_dict() if self.nearest is not None else {}),
         }
 
 
@@ -510,7 +704,22 @@ class RowResult:
     module_rule: ModuleRule | None = None
     step_evaluations: tuple[InstanceStepEvaluation, ...] = ()
     crg_evaluations: tuple[CrgTraceEvaluation, ...] = ()
-    route_match: RouteMatch | None = None
+    source_signals: tuple[SourceSignalCheck, ...] = ()
+    nearest_match: NearestNameMatch | None = None
+    item_matches: tuple[InstanceItemMatch, ...] = ()
+    suffix_regex: str | None = None
+
+    @property
+    def source_signal_status(self) -> str:
+        statuses = {s.status for s in self.source_signals}
+        if statuses & {"invalid_start", "mismatch"}:
+            return "fail"
+        return "not_run" if not statuses else "pass" if statuses == {"matched"} else "warning"
+
+    @property
+    def route_match(self) -> NearestNameMatch | None:
+        """Legacy accessor: an RS_inst fallback does not consume RS_route."""
+        return self.nearest_match if not self.spec.rs_inst_items else None
 
     @property
     def passed(self) -> bool:
@@ -518,7 +727,8 @@ class RowResult:
 
     @property
     def effective_step(self) -> int | None:
-        if not self.instances or len(self.step_evaluations) != len(self.instances):
+        if (not self.instances or len(self.step_evaluations) != len(self.instances)
+                or any(item.status != "matched" for item in self.item_matches)):
             return None
         contributions = [item.contribution for item in self.step_evaluations]
         if any(value is None for value in contributions):
@@ -530,6 +740,16 @@ class RowResult:
 class CheckReport:
     rows: tuple[RowResult, ...]
     global_findings: tuple[Finding, ...] = ()
+    skipped_rows: tuple[SkippedRow, ...] = ()
+
+    @property
+    def partial_count(self) -> int:
+        return sum(r.passed and not (r.spec.rs_inst_items or r.spec.has_route) for r in self.rows)
+
+    @property
+    def status(self) -> str:
+        return ("FAIL" if not self.passed else "SKIPPED" if not self.rows else
+                "PARTIAL" if self.partial_count else "PASS")
 
     @property
     def passed(self) -> bool:

@@ -212,7 +212,7 @@ def normalize_hierarchy_query(value: str) -> str:
         )
     try:
         re.compile(value)
-    except re.error as exc:
+    except (re.error, OverflowError, RecursionError) as exc:
         raise InventoryError(f"invalid hierarchy regex: {exc}") from exc
     return value
 
@@ -327,7 +327,7 @@ def _resolve_live_paths(
     return collector_path, elab_db_path
 
 
-def _load_hierarchy_index(path: str | Path) -> HierarchyIndex:
+def load_hierarchy_index(path: str | Path) -> HierarchyIndex:
     try:
         with Path(path).open(encoding="utf-8") as stream:
             value = json.load(stream)
@@ -394,6 +394,7 @@ def collect_hierarchy(
     elab_db: str | Path,
     timeout_seconds: int | None = None,
     npi_lib_dir: str | Path | None = None,
+    index_output: Path | None = None,
 ) -> HierarchyIndex:
     collector_path, elab_db_path = _resolve_live_paths(collector, elab_db)
     if timeout_seconds is not None and (
@@ -445,7 +446,7 @@ def collect_hierarchy(
                 raise InventoryError(
                     "NPI hierarchy collector succeeded but did not create its output"
                 )
-            hierarchy = _load_hierarchy_index(output_path)
+            hierarchy = load_hierarchy_index(output_path)
             if hierarchy.notices:
                 detail = _collector_diagnostics(completed, temp_dir)
                 if detail:
@@ -453,6 +454,17 @@ def collect_hierarchy(
                         "NPI hierarchy partial-load diagnostics:\n" + detail,
                         file=sys.stderr,
                     )
+            if index_output is not None:
+                # Publish only a successfully parsed snapshot. Never expose a
+                # partially copied index, including when the GUI cancels us.
+                with tempfile.NamedTemporaryFile(dir=index_output.parent, delete=False) as staging:
+                    staging_path = Path(staging.name)
+                try:
+                    shutil.copyfile(output_path, staging_path)
+                    staging_path.replace(index_output)
+                finally:
+                    if staging_path.exists():
+                        staging_path.unlink()
             return hierarchy
     except OSError as exc:
         raise InventoryError(
@@ -468,26 +480,32 @@ def search_hierarchy(
     limit: int = DEFAULT_HIERARCHY_SEARCH_LIMIT,
     timeout_seconds: int | None = None,
     npi_lib_dir: str | Path | None = None,
+    cached_index: Path | None = None,
 ) -> HierarchySearchResult:
     normalized_query = normalize_hierarchy_query(query)
     normalized_limit = validate_hierarchy_search_limit(limit)
     pattern = re.compile(normalized_query)
-    hierarchy = collect_hierarchy(
-        collector,
-        elab_db=elab_db,
-        timeout_seconds=timeout_seconds,
-        npi_lib_dir=npi_lib_dir,
-    )
-    matching = tuple(
-        scope for scope in hierarchy.scopes if pattern.search(scope.path) is not None
-    )
-    returned = matching[:normalized_limit]
-    truncated = hierarchy.truncated or len(matching) > len(returned)
+    if cached_index is None:
+        hierarchy = collect_hierarchy(collector, elab_db=elab_db,
+                                      timeout_seconds=timeout_seconds, npi_lib_dir=npi_lib_dir)
+    else:
+        # Private to one modal picker on one KDB; not a persistent project cache.
+        hierarchy = (load_hierarchy_index(cached_index) if cached_index.exists() else
+                     collect_hierarchy(collector, elab_db=elab_db, timeout_seconds=timeout_seconds,
+                                       npi_lib_dir=npi_lib_dir, index_output=cached_index))
+    returned = []
+    count = 0
+    for scope in hierarchy.scopes:
+        if pattern.search(scope.path) is not None:
+            count += 1
+            if len(returned) < normalized_limit:
+                returned.append(scope)
+    truncated = hierarchy.truncated or count > len(returned)
     return HierarchySearchResult(
         query=normalized_query,
         limit=normalized_limit,
-        matches=returned,
-        total_matches=len(matching),
+        matches=tuple(returned),
+        total_matches=count,
         truncated=truncated,
         index_truncated=hierarchy.truncated,
         visited_scopes=hierarchy.visited_scopes,
@@ -527,6 +545,7 @@ def collect_inventory(
         for label, value in (
             ("module name", rule.name),
             ("clock port", rule.clk_port),
+            ("reset port", rule.rst_port),
         ):
             if any(character in value for character in "\t\r\n"):
                 raise InventoryError(
@@ -541,7 +560,7 @@ def collect_inventory(
             positions_path.write_text("\n".join(positions) + "\n", encoding="utf-8")
             trace_rules_path.write_text(
                 "".join(
-                    f"{rule.name}\t{rule.clk_port}\n"
+                    f"{rule.name}\t{rule.clk_port}\t{rule.rst_port}\n"
                     for _, rule in sorted(trace_rules.items())
                 ),
                 encoding="utf-8",
@@ -584,6 +603,8 @@ def collect_inventory(
                 ) from exc
             if completed.returncode != 0:
                 detail = _collector_diagnostics(completed, temp_dir)
+                if "exactly module<TAB>clock_port" in detail:
+                    detail += "\nOld collector: rebuild rs_npi_collector for clock and reset source tracing (inventory v4)."
                 raise InventoryError(
                     f"NPI collector exited with code {completed.returncode}"
                     + (f":\n{detail}" if detail else "")
@@ -591,11 +612,11 @@ def collect_inventory(
             if not output_path.is_file():
                 raise InventoryError("NPI collector succeeded but did not create its inventory")
             inventory = load_inventory(output_path)
-            if inventory.schema_version != 3:
+            if inventory.schema_version != 4:
                 raise InventoryError(
                     "NPI collector returned legacy inventory schema_version "
                     f"{inventory.schema_version}; rebuild rs_npi_collector for "
-                    "recursive CRG tracing"
+                    "clock and reset source-connection tracing (inventory v4)"
                 )
             if inventory.notices:
                 detail = _collector_diagnostics(completed, temp_dir)

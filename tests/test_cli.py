@@ -13,6 +13,7 @@ from rscheck.cli import main
 from rscheck.config import load_config
 from rscheck.inventory import load_inventory
 from rscheck.npi_runner import HierarchyScope, HierarchySearchResult
+from tests.test_excel_reader import _xlsx
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,7 +154,7 @@ class CliTests(unittest.TestCase):
                 [1, 1, 0, 1, 1, 1],
             )
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
             self.assertEqual(csv_rows[0]["status"], "PASS")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "假门控")
             self.assertEqual(csv_rows[0]["physical_instances"], "6")
@@ -175,7 +176,7 @@ class CliTests(unittest.TestCase):
                     "Intf_type,RS_module,RS_inst,position,step,clk,rst,"
                     "CRG_source,RS_CFG_EN\n"
                     "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,5,clk_rs,rst_n,"
-                    "not_checked,用户任意填写\n"
+                    "not_checked,用户任意填写,NA\n"
                 ),
                 encoding="utf-8",
             )
@@ -230,7 +231,7 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "用户任意填写")
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
             self.assertEqual(csv_rows[0]["status"], "WARNING")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "用户任意填写")
 
@@ -247,7 +248,7 @@ class CliTests(unittest.TestCase):
                     "Intf_type,RS_module,RS_inst,position,step,clk,rst,"
                     "CRG_source,RS_CFG_EN\n"
                     "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,5,clk_rs,rst_n,"
-                    "not_checked,NA\n"
+                    "not_checked,NA,NA\n"
                 ),
                 encoding="utf-8",
             )
@@ -290,7 +291,7 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(report["rows"][0]["spec"]["RS_CFG_EN"], "NA")
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
             self.assertEqual(len(csv_rows), 6)
             self.assertEqual(csv_rows[0]["status"], "WARNING")
             self.assertEqual(csv_rows[0]["RS_CFG_EN"], "NA")
@@ -324,7 +325,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(codes, {"STEP_MISMATCH", "RS_CFG_EN_LABEL_MISMATCH"})
             self.assertEqual(result["rows"][0]["step_check"]["effective_step"], 5)
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
             self.assertTrue(csv_rows)
             self.assertTrue(all(row["RS_CFG_EN"] == "真门控" for row in csv_rows))
             self.assertTrue(all(row["effective_step"] == "5" for row in csv_rows))
@@ -345,6 +346,38 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         rows = json.loads(output.getvalue())
         self.assertEqual(rows[0]["RS_CFG_EN"], "假门控")
+
+    def test_formula_workbook_validates_and_checks_without_office(self) -> None:
+        args = ["--excel", str(ROOT / "examples/specs_formulas.xlsx"),
+                "--config", str(ROOT / "config/rscheck.example.json")]
+        out, err = StringIO(), StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(main(["validate", *args, "--json"]), 0)
+        first, second = json.loads(out.getvalue())
+        self.assertEqual([first["step"], second["step"]], [5, 1])
+        self.assertEqual([first["RS_CFG_EN"], second["RS_CFG_EN"]], ["假门控", "NA"])
+        self.assertEqual((second["RS_inst"], second["RS_route"]), ("", "CTRL_RS_DO"))
+        self.assertIn("15 formula cell(s)", err.getvalue())
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.json"
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(main(["check", *args, "--inventory", str(ROOT / "examples/inventory.json"),
+                                       "--json-report", str(report)]), 0)
+            data = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(data["summary"]["passed_rows"], 2)
+        self.assertEqual(data["rows"][1]["instance_match"]["selected"]["full_name"], "top.u_tile.CTRL_RS_D0")
+
+    def test_missing_formula_cache_stops_check_before_collector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "uncalculated.xlsx"
+            _xlsx(path, cell_overrides={"E2": '<c r="E2"><f>SUM(1,1)</f><v/></c>'})
+            err = StringIO()
+            with patch("rscheck.cli.collect_inventory") as collector, redirect_stderr(err):
+                code = main(["check", "--excel", str(path), "--config", str(ROOT / "config/rscheck.example.json"),
+                             "--collector", "unused", "--elab-db", "unused.elab++"])
+            self.assertEqual(code, 2)
+            collector.assert_not_called()
+            self.assertIn("RS_Check!E2 (step): formula has no cached result", err.getvalue())
 
     def test_validate_json_contains_resolved_position_and_alias(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -719,7 +752,7 @@ class CliTests(unittest.TestCase):
                 )
             report = json.loads(json_report.read_text("utf-8"))
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
         self.assertEqual(code, 0)
         self.assertEqual(report["rows"][0]["spec"]["position"], "top.u_tile")
         self.assertEqual(report["rows"][0]["spec"]["position_alias"], "tile_alias")
@@ -774,7 +807,7 @@ class CliTests(unittest.TestCase):
                     ]
                 )
             with csv_report.open(encoding="utf-8-sig", newline="") as stream:
-                csv_rows = list(csv.DictReader(stream))
+                csv_rows = [r for r in csv.DictReader(stream) if r["row"]]  # Global warnings are not row findings.
         self.assertEqual(code, 1)
         self.assertGreaterEqual(len(csv_rows), 2)
         self.assertTrue(all(row["position"] == "top.u_tile" for row in csv_rows))
@@ -814,7 +847,7 @@ class CliTests(unittest.TestCase):
             specs = directory / "default_rule.csv"
             specs.write_text(
                 "Intf_type,RS_module,RS_inst,position,step,clk,rst,CRG_source,RS_CFG_EN\n"
-                "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,6,clk_rs,rst_n,crg_core,假门控\n",
+                "OUT_IF,rs_pipe,AAAA_BBB,top.u_tile,6,clk_rs,rst_n,crg_core,假门控,NA\n",
                 encoding="utf-8",
             )
             raw_config = json.loads(
@@ -905,7 +938,7 @@ class CliTests(unittest.TestCase):
             (
                 "old_schema",
                 lambda raw: raw.__setitem__("schema_version", 1),
-                "expected 2 or 3",
+                "expected 2, 3 or 4",
             ),
             (
                 "missing_parameters",

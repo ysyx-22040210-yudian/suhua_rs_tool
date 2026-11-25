@@ -5,20 +5,27 @@ import io
 import posixpath
 import re
 import zipfile
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping
+from typing import Callable, Iterable, Iterator, Mapping
 from xml.etree import ElementTree as ET
 
 from .model import (
     REQUIRED_ROW_FIELDS,
     ExcelConfig,
+    SkippedRow,
     SpecRow,
     WorkbookError,
+    skip_reason,
 )
 
 
 _CELL_REF_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
+_EXCEL_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?")
+_XLSX_TEXT_ESCAPE = re.compile(r"_x000[9ADad]_|_x005[Ff]_(?=x[0-9A-Fa-f]{4}_)")
+_XLSX_TEXT_CHARS = {"_x0009_": "\t", "_x000d_": "\r", "_x000a_": "\n", "_x005f_": "_"}
+_RECALCULATE = "Recalculate the workbook in Excel or LibreOffice, save it, then retry."
 
 
 def _local_name(tag: str) -> str:
@@ -80,50 +87,75 @@ def _validate_headers(rows: Iterable[tuple[int, Mapping[int, str]]], config: Exc
     raise WorkbookError(f"header row {config.header_row} was not found")
 
 
+def _xlsx_text(value: str) -> str:
+    """Restore XLSX tabs/line breaks without reinterpreting protected literal markers."""
+    if "_x" not in value:
+        return value
+    return _XLSX_TEXT_ESCAPE.sub(lambda m: _XLSX_TEXT_CHARS[m[0].lower()], value)
+
+
 def _rich_text(container: ET.Element) -> str:
     parts: list[str] = []
     for child in container:
         if _local_name(child.tag) == "t":
-            parts.append(child.text or "")
+            parts.append(_xlsx_text(child.text or ""))
         elif _local_name(child.tag) == "r":
             text = _first_child(child, "t")
             if text is not None:
-                parts.append(text.text or "")
+                parts.append(_xlsx_text(text.text or ""))
     return "".join(parts)
+
+
+@dataclass(frozen=True)
+class _InputRow:
+    number: int
+    cells: Mapping[int, str] | SkippedRow
+    rs_inst_formula_cell: str | None = None
 
 
 def _rows_to_specs(
     path: Path,
     sheet_name: str,
-    rows: Iterable[tuple[int, Mapping[int, str]]],
+    rows: Iterable[_InputRow],
     config: ExcelConfig,
     position_mappings: Mapping[str, str],
     crg_source_mappings: Mapping[str, str],
+    on_skip: Callable[[SkippedRow], None] | None,
 ) -> list[SpecRow]:
-    materialised = list(rows)
-    if config.validate_headers:
-        _validate_headers(materialised, config)
-
     specs: list[SpecRow] = []
     errors: list[str] = []
+    saw_data_row = False
+    header_seen = False
     seen: dict[tuple[str, ...], tuple[int, str]] = {}
-    for row_number, cells in materialised:
+    for row in rows:
+        row_number, cells = row.number, row.cells
+        if isinstance(cells, SkippedRow):
+            saw_data_row = True
+            if on_skip:
+                on_skip(cells)
+            continue
+        if config.validate_headers and row_number == config.header_row:
+            _validate_headers([(row_number, cells)], config)
+            header_seen = True
         if row_number < config.data_start_row:
             continue
+        saw_data_row = True
         values = {
             field_name: _normalise_text(cells.get(column, ""))
             for field_name, column in config.columns.items()
         }
-        if not any(values.values()):
+        if not any(values.values()) and not any(_normalise_text(v) for v in cells.values()):
             continue
-        missing = [
-            field_name for field_name in REQUIRED_ROW_FIELDS if not values[field_name]
-        ]
-        if not values["RS_inst"] and not values.get("RS_route"):
-            missing.append("RS_inst or RS_route (provide at least one)")
-        if missing:
-            errors.append(f"row {row_number}: blank required fields: {', '.join(missing)}")
+        excluded = {f: reason for f in REQUIRED_ROW_FIELDS if (reason := skip_reason(values[f]))}
+        if excluded:
+            if on_skip:
+                on_skip(SkippedRow(sheet_name, row_number, excluded))
             continue
+        # Keep physical newlines, including a final one after a continuation.
+        # Tokenization and JSON/GUI validation must see the same original text.
+        raw_inst = cells.get(config.columns["RS_inst"], "")
+        if "\n" in raw_inst or "\r" in raw_inst:
+            values["RS_inst"] = raw_inst
         try:
             step = _parse_step(values["step"], row_number)
         except WorkbookError as exc:
@@ -137,7 +169,7 @@ def _rows_to_specs(
             position = position_input
             position_alias = ""
         crg_source_input = values["CRG_source"].strip(".")
-        if crg_source_input in crg_source_mappings:
+        if skip_reason(values["CRG_source"]) is None and crg_source_input in crg_source_mappings:
             crg_source = crg_source_mappings[crg_source_input].strip(".")
             crg_source_alias = crg_source_input
         else:
@@ -151,7 +183,9 @@ def _rows_to_specs(
             intf_type=values["Intf_type"],
             rs_module=values["RS_module"],
             rs_inst=values["RS_inst"],
+            rs_inst_formula_cell=row.rs_inst_formula_cell,
             rs_route=values.get("RS_route", ""),
+            rs_route_mapped="RS_route" in config.columns,
             position=position,
             step=step,
             clk=values["clk"],
@@ -164,10 +198,10 @@ def _rows_to_specs(
         if not spec.position:
             errors.append(f"row {row_number}: position cannot be empty")
             continue
-        if not spec.crg_source:
+        if not spec.crg_source and values["CRG_source"]:
             errors.append(f"row {row_number}: CRG_source cannot be empty")
             continue
-        if spec.key in seen:
+        if (spec.rs_inst_items or spec.has_route) and spec.key in seen:
             first_row, first_position_input = seen[spec.key]
             errors.append(
                 f"row {row_number}: duplicate group ({spec.position}, {spec.selector_label}) "
@@ -178,9 +212,11 @@ def _rows_to_specs(
         seen[spec.key] = (row_number, position_input)
         specs.append(spec)
 
+    if config.validate_headers and not header_seen:
+        raise WorkbookError(f"header row {config.header_row} was not found")
     if errors:
         raise WorkbookError("invalid workbook data:\n  " + "\n  ".join(errors))
-    if not specs:
+    if not saw_data_row:
         raise WorkbookError("no specification rows were found")
     return specs
 
@@ -250,12 +286,79 @@ def _sheet_target(archive: zipfile.ZipFile, selector: str | int) -> tuple[str, s
     raise WorkbookError(f"sheet {selector!r} not found; available sheets: {available}")
 
 
+def _xlsx_cell_value(
+    cell: ET.Element, shared_strings: list[str], location: str, *, formula: bool, numeric_step: bool
+) -> str:
+    """Read the stored value; never interpret the formula or follow external references."""
+    kind = cell.get("t", "n")
+    value = _first_child(cell, "v")
+    raw = value.text if value is not None and value.text is not None else ""
+    inline = _first_child(cell, "is") if kind == "inlineStr" else None
+
+    if formula:
+        # Only an explicitly stored empty *string* is an empty result. In
+        # particular, many non-calculating writers emit <f>...</f><v/> (numeric).
+        missing = inline is None if kind == "inlineStr" else (
+            value is None or (kind != "str" and not raw.strip())
+        )
+        if missing:
+            raise WorkbookError(f"{location}: formula has no cached result. {_RECALCULATE}")
+    if kind == "e":
+        reason = "formula returned Excel error" if formula else "Excel error value"
+        raise WorkbookError(f"{location}: {reason} {raw!r}. Fix the referenced cells and save.")
+    if kind == "inlineStr":
+        return _rich_text(inline) if inline is not None else ""
+    if kind == "str":
+        return _xlsx_text(raw)
+    if kind == "s" and raw:
+        try:
+            index = int(raw)
+            if index < 0:
+                raise IndexError
+            return shared_strings[index]
+        except (ValueError, IndexError) as exc:
+            raise WorkbookError(f"{location}: invalid shared-string index {raw!r}") from exc
+    if kind == "b":
+        if raw in ("1", "true"):
+            return "TRUE"
+        if raw in ("0", "false"):
+            return "FALSE"
+        raise WorkbookError(f"{location}: invalid Excel boolean {raw!r}")
+    if formula and kind == "n":
+        if not _EXCEL_NUMBER.fullmatch(raw):
+            raise WorkbookError(f"{location}: invalid cached number {raw!r}. {_RECALCULATE}")
+        if numeric_step:
+            # Excel may serialize an integral number in scientific notation.
+            # Limit expansion to Excel's numeric range before converting to int.
+            try:
+                number = Decimal(raw)
+                if number.is_zero():
+                    return "0"
+                if (
+                    number > 0
+                    and 0 <= number.adjusted() <= 308
+                    and number == number.to_integral_value()
+                ):
+                    return str(int(number))
+            except InvalidOperation:
+                pass
+            raise WorkbookError(f"{location}: step must be a non-negative integer, got {raw!r}")
+    elif formula and kind != "d":
+        raise WorkbookError(f"{location}: unsupported formula result type {kind!r}. {_RECALCULATE}")
+    return raw
+
+
 def _xlsx_rows(
     archive: zipfile.ZipFile,
     sheet_path: str,
-    wanted_columns: set[int],
+    sheet_name: str,
+    config: ExcelConfig,
     shared_strings: list[str],
-) -> Iterator[tuple[int, dict[int, str]]]:
+    on_notice: Callable[[str], None] | None,
+) -> Iterator[_InputRow]:
+    field_for_column = {column: name for name, column in config.columns.items()}
+    formula_count = 0
+    examples: list[str] = []
     try:
         stream = archive.open(sheet_path)
     except KeyError as exc:
@@ -268,44 +371,81 @@ def _xlsx_rows(
                 if _local_name(element.tag) != "row":
                     continue
                 row_number = int(element.attrib.get("r", "0"))
-                cells: dict[int, str] = {}
+                is_data = row_number >= config.data_start_row
+                if not is_data and not (config.validate_headers and row_number == config.header_row):
+                    element.clear()
+                    continue
+                mapped: dict[int, ET.Element] = {}
                 for cell in element:
                     if _local_name(cell.tag) != "c":
                         continue
                     reference = cell.attrib.get("r", "")
                     column = _cell_column(reference)
-                    if column not in wanted_columns:
-                        continue
-                    if _first_child(cell, "f") is not None:
-                        raise WorkbookError(
-                            f"formula cells are not supported in mapped fields: {reference}"
-                        )
-                    cell_type = cell.attrib.get("t", "")
-                    value_element = _first_child(cell, "v")
-                    raw = value_element.text if value_element is not None else None
-                    if cell_type == "s" and raw is not None:
+                    if column in field_for_column:
+                        mapped[column] = cell
+
+                cells: dict[int, str] = {}
+                formulas: list[str] = []
+                rs_inst_formula_cell = None
+
+                def read(column: int) -> None:
+                    nonlocal rs_inst_formula_cell
+                    cell = mapped[column]
+                    reference = cell.attrib["r"]
+                    field_name = field_for_column[column]
+                    formula = _first_child(cell, "f") is not None
+                    location = f"{sheet_name}!{reference} ({field_name})"
+                    cells[column] = _xlsx_cell_value(
+                        cell, shared_strings, location, formula=formula,
+                        numeric_step=is_data and field_name == "step",
+                    )
+                    if formula:
+                        formulas.append(reference)
+                        if is_data and field_name == "RS_inst":
+                            # Only the cached result is a selector. Record its address
+                            # for review without exporting or interpreting the formula.
+                            rs_inst_formula_cell = reference.upper()
+
+                if is_data:
+                    gate_errors = {}
+                    excluded = {}
+                    for field in REQUIRED_ROW_FIELDS:
+                        column = config.columns[field]
                         try:
-                            value = shared_strings[int(raw)]
-                        except (ValueError, IndexError) as exc:
-                            raise WorkbookError(
-                                f"invalid shared-string index {raw!r} in cell {reference}"
-                            ) from exc
-                    elif cell_type == "inlineStr":
-                        inline = _first_child(cell, "is")
-                        value = _rich_text(inline) if inline is not None else ""
-                    elif cell_type == "b":
-                        value = "TRUE" if raw == "1" else "FALSE"
-                    elif cell_type == "e":
-                        raise WorkbookError(
-                            f"Excel error value {raw!r} is not supported in mapped cell {reference}"
-                        )
-                    else:
-                        value = raw or ""
-                    cells[column] = value
-                yield row_number, cells
+                            if column in mapped:
+                                read(column)
+                        except WorkbookError as exc:
+                            gate_errors[field] = exc
+                            continue
+                        reason = skip_reason(cells.get(column, ""))
+                        if reason:
+                            excluded[field] = reason
+                    if excluded:
+                        # Ignore unused/styled empty rows, but keep an audit record for
+                        # excluded data rows. Never evaluate other formulas or their caches.
+                        populated = (any(v.strip() for v in cells.values()) or gate_errors or formulas or
+                                     any(_first_child(c, "f") is not None or
+                                         any((e.text or "").strip() for e in c.iter() if _local_name(e.tag) in {"v", "t"})
+                                         for c in element if _local_name(c.tag) == "c"))
+                        yield _InputRow(row_number, SkippedRow(sheet_name, row_number, excluded) if populated else {})
+                        element.clear()
+                        continue
+                    if gate_errors:
+                        raise next(iter(gate_errors.values()))
+                for column in mapped:
+                    if column not in cells:
+                        read(column)
+                formula_count += len(formulas)
+                examples.extend(formulas[:3 - len(examples)])
+                yield _InputRow(row_number, cells, rs_inst_formula_cell)
                 element.clear()
         except ET.ParseError as exc:
             raise WorkbookError(f"invalid XLSX worksheet XML: {exc}") from exc
+    if formula_count and on_notice is not None:
+        on_notice(
+            f"info[EXCEL_FORMULA_CACHE]: {sheet_name}: used saved results for {formula_count} "
+            f"formula cell(s) (e.g. {', '.join(examples)}); if inputs changed, recalculate and save."
+        )
 
 
 def _read_xlsx(
@@ -313,6 +453,8 @@ def _read_xlsx(
     config: ExcelConfig,
     position_mappings: Mapping[str, str],
     crg_source_mappings: Mapping[str, str],
+    on_notice: Callable[[str], None] | None,
+    on_skip: Callable[[SkippedRow], None] | None,
 ) -> list[SpecRow]:
     try:
         archive = zipfile.ZipFile(path)
@@ -325,7 +467,7 @@ def _read_xlsx(
     with archive:
         sheet_name, sheet_path = _sheet_target(archive, config.sheet)
         strings = _shared_strings(archive)
-        rows = _xlsx_rows(archive, sheet_path, set(config.columns.values()), strings)
+        rows = _xlsx_rows(archive, sheet_path, sheet_name, config, strings, on_notice)
         return _rows_to_specs(
             path,
             sheet_name,
@@ -333,6 +475,7 @@ def _read_xlsx(
             config,
             position_mappings,
             crg_source_mappings,
+            on_skip,
         )
 
 
@@ -341,6 +484,7 @@ def _read_csv(
     config: ExcelConfig,
     position_mappings: Mapping[str, str],
     crg_source_mappings: Mapping[str, str],
+    on_skip: Callable[[SkippedRow], None] | None,
 ) -> list[SpecRow]:
     last_error: UnicodeDecodeError | None = None
     text = ""
@@ -364,9 +508,8 @@ def _read_csv(
             dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t")
         except csv.Error:
             dialect = csv.excel
-    parsed_rows = []
-    for row_number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
-        parsed_rows.append((row_number, {index: value for index, value in enumerate(values, start=1)}))
+    parsed_rows = (_InputRow(number, dict(enumerate(values, start=1)))
+                   for number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1))
     return _rows_to_specs(
         path,
         "CSV",
@@ -374,6 +517,7 @@ def _read_csv(
         config,
         position_mappings,
         crg_source_mappings,
+        on_skip,
     )
 
 
@@ -382,15 +526,18 @@ def read_spec_rows(
     config: ExcelConfig,
     position_mappings: Mapping[str, str] | None = None,
     crg_source_mappings: Mapping[str, str] | None = None,
+    *,
+    on_notice: Callable[[str], None] | None = None,
+    on_skip: Callable[[SkippedRow], None] | None = None,
 ) -> list[SpecRow]:
     workbook_path = Path(path).resolve()
     suffix = workbook_path.suffix.lower()
     mappings = position_mappings or {}
     crg_mappings = crg_source_mappings or {}
     if suffix in {".xlsx", ".xlsm"}:
-        return _read_xlsx(workbook_path, config, mappings, crg_mappings)
+        return _read_xlsx(workbook_path, config, mappings, crg_mappings, on_notice, on_skip)
     if suffix in {".csv", ".tsv"}:
-        return _read_csv(workbook_path, config, mappings, crg_mappings)
+        return _read_csv(workbook_path, config, mappings, crg_mappings, on_skip)
     if suffix == ".xls":
         raise WorkbookError("legacy .xls is not supported; save the workbook as .xlsx or CSV")
     raise WorkbookError(f"unsupported workbook format {suffix!r}; use .xlsx, .xlsm, .csv, or .tsv")

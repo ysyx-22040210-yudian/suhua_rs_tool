@@ -52,10 +52,12 @@ from .gui_backend import (
     format_command,
     load_report,
     load_position_hierarchy_search,
-    load_validation_rows,
+    load_validation_result,
 )
-from .model import FIELD_NAMES, ModuleRule, RsCheckError, ToolConfig
-from .npi_runner import HierarchySearchResult
+from .model import FIELD_NAMES, RS_INST_FUZZY_RULE, RS_INST_LIST_RULE, ModuleRule, RsCheckError, ToolConfig, blank_field_message
+from .match_review import format_match_details
+from .hierarchy_tree import ScopeTree
+from .npi_runner import HierarchySearchResult, load_hierarchy_index
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,33 @@ class WorkerOutcome:
     hierarchy_search: HierarchySearchResult | None = None
     validation_rows: tuple[Mapping[str, Any], ...] = ()
     error: str = ""
+    skipped_rows: tuple[Mapping[str, Any], ...] = ()
+    hierarchy_tree: ScopeTree | None = None
+
+
+def _uses_ranked_names(match: Mapping[str, Any]) -> bool:
+    return match.get("mode") == "RS_route" or match.get("rule") == RS_INST_FUZZY_RULE
+
+
+def _item_description(item: Mapping[str, Any]) -> str:
+    paths = item["matched_paths"]
+    if item["status"] == "ambiguous":
+        distance, ties = item["best_distance"], item["tied_best_count"]
+        closest = [c["full_name"] for c in item["top_candidates"] if c["distance"] == distance]
+        detail = (f"模糊匹配：{item['candidate_count']} 个同模块候选中，{ties} 个在距离 {distance} 并列，未选中。"
+                  f"并列候选（显示 {len(closest)}/{ties}）：{'、'.join(closest)}")
+    elif item["status"] == "no_candidates":
+        detail = "无同模块候选"
+    elif item["status"] == "position_not_found":
+        detail = "层次不存在，未执行匹配"
+    else:
+        how = (f"模糊匹配（{item['candidate_count']} 个同模块候选，唯一最近，距离 {item['best_distance']}）"
+               if item["rule"] == RS_INST_FUZZY_RULE else "完整名或前缀组")
+        names = "、".join(paths[:3]) + (f" 等 {len(paths)} 个" if len(paths) > 3 else "")
+        detail = f"{how} → {names}"
+        if len(paths) > item["added_count"]:
+            detail += f"（与前项重叠 {len(paths) - item['added_count']} 个，仅计一次）"
+    return f"{item['query']}：{detail}"
 
 
 def _evidence_payload(
@@ -78,13 +107,23 @@ def _evidence_payload(
         "module_rule": record.get("module_rule"),
         "step_check": record.get("step_check"),
         "crg_source_check": record.get("crg_source_check"),
+        "source_signal_checks": record.get("source_signal_checks", []),
         "matched_instances": record.get("matched_instances", []),
     }
     match = record.get("instance_match")
     if isinstance(match, Mapping):
-        if match.get("mode") == "RS_route":
+        if match.get("mode") == "none":
+            explanation = "RS_inst 和 RS_route 均无有效值，未选择例化；拍数、实例参数和端口检查未执行。"
+        elif match.get("rule") == RS_INST_LIST_RULE:
+            explanation = (f"RS_inst 拆为 {len(match['items'])} 项；逐项查完整名或前缀组，未命中的项独立做模糊匹配。"
+                           f"按完整 RTL 路径去重后选中 "
+                           f"{match['matched_count']} 个物理实例。\n" +
+                           "\n".join(f"[{idx}] {_item_description(item)}" for idx, item in enumerate(match["items"], 1)))
+        elif _uses_ranked_names(match):
+            reason = ("RS_inst 的完整名和组前缀均未命中，使用 RS_inst 本身模糊匹配。"
+                      if match.get("mode") == "RS_inst" else "RS_inst 没有有效项，使用 RS_route。")
             explanation = (
-                f"RS_inst 为空。在 {match.get('position')} 中找到 {match.get('candidate_count')} 个 "
+                f"{reason}在 {match.get('position')} 中找到 {match.get('candidate_count')} 个 "
                 f"{match.get('RS_module')} 实例，仅用本地例化名与 {match.get('query')!r} 比较。"
                 "区分大小写，增、删、改一个字符各计 1，距离越小越接近。"
             )
@@ -96,11 +135,13 @@ def _evidence_payload(
                 explanation += f"唯一最近实例：{match['selected'].get('full_name')}（距离 {match.get('best_distance')}）。"
             else:
                 explanation += "没有同模块候选，未选中。"
-            explanation += " top_candidates 最多列出前 5 项。"
+            explanation += " 常规排名最多列前 5 项；更多并列候选见「匹配明细」。"
+        elif match.get("status") == "position_not_found":
+            explanation = f"未找到层次 {match.get('position')}，未执行 RS_inst 匹配。"
         else:
             explanation = "已填写 RS_inst，按完整本地名称或前缀加配置的后缀规则匹配。"
-            if match.get("route_ignored"):
-                explanation += " 本行填写的 RS_route 不参与选择。"
+        if match.get("route_ignored"):
+            explanation += " 本行填写的 RS_route 不参与选择。"
         evidence = {"例化匹配说明": explanation, **evidence}
     if isinstance(spec, Mapping):
         evidence["crg_source_resolution"] = _crg_source_display(spec)
@@ -117,10 +158,32 @@ def _evidence_payload(
 
 
 def _instance_display(spec: Mapping[str, Any], record: Mapping[str, Any]) -> str:
-    if spec.get("RS_inst") or not spec.get("RS_route"):
-        return str(spec.get("RS_inst", ""))
     match = record.get("instance_match")
-    label = f"RS_route: {spec['RS_route']}"
+    if isinstance(match, Mapping) and match.get("mode") == "none":
+        return "未指定例化（未计拍）"
+    items = spec.get("RS_inst_items")
+    if items and len(items) > 1:
+        names = "；".join(items)
+        if not isinstance(match, Mapping):
+            return f"{len(items)} 项：{names}（待 RTL 匹配）"
+        results = match["items"]
+        fuzzy_hits = sum(item["rule"] == RS_INST_FUZZY_RULE and item["status"] == "matched" for item in results)
+        missing = sum(item["status"] != "matched" for item in results)
+        labels = []
+        if fuzzy_hits:
+            labels.append(f"{fuzzy_hits} 项模糊命中")
+        if missing:
+            labels.append(f"{missing} 项未选中")
+        return " · ".join([*labels, f"{names} → {match['matched_count']} 个实例"])
+    explicit_name = items[0] if items else (spec.get("RS_inst") if items is None else "")
+    if explicit_name:
+        if not isinstance(match, Mapping) or match.get("rule") != RS_INST_FUZZY_RULE:
+            return str(explicit_name)
+        label = f"RS_inst 模糊: {match['query']}"
+    elif spec.get("RS_route") and "RS_route" not in spec.get("ignored_fields", {}):
+        label = f"RS_route: {spec['RS_route']}"
+    else:
+        return ""
     if not isinstance(match, Mapping):
         return f"{label}（待 RTL 匹配）"
     selected = match.get("selected")
@@ -147,6 +210,8 @@ def _review_sections(
             if isinstance(value, (str, int, float, bool)):
                 lines.append(f"{label}：{value}")
         sections.append((f"{str(finding.get('severity', '')).upper()}   /   {finding.get('code', '')}", "\n".join(lines)))
+        if "passed" not in record:
+            sections.append(("Excel 已验证", "此步骤仅验证规格表，尚未检查 RTL。"))
     elif is_global:
         sections.append(("全局诊断", "从左侧选择一项查看原因，原始 JSON 保留完整证据。"))
     elif "passed" not in record:
@@ -155,15 +220,24 @@ def _review_sections(
         step = record.get("step_check") or {}
         # Report v2 has only a physical count; mirror the legacy table column.
         actual = step.get("effective_step", len(record.get("matched_instances", [])))
-        title = "需处理" if not record["passed"] else "有警告" if findings else "检查通过"
+        title = ("需处理" if not record["passed"] else "有警告" if findings else "仅检查层次和模块"
+                 if (record.get("instance_match") or {}).get("mode") == "none" else "检查通过")
         sections.append((title, f"实际 {'未确定' if actual is None else actual} / 期望 {spec.get('step', '—')} 拍"
                          f"     ·     匹配 {len(record.get('matched_instances', []))} 个物理实例"))
     if not is_global:
+        ignored = spec.get("ignored_fields", {})
+        if ignored:
+            lines = [f"{field}：{'空值（警告）' if reason == 'blank' else 'NA（不报警）'}" for field, reason in ignored.items()]
+            if "CRG_source" in ignored and any(role not in ignored for role in ("clk", "rst")):
+                lines.append("没有目标 CRG 层次：仍检查已填写的 RS 端口，不比对源端信号名。")
+            sections.append(("本行跳过的字段", "\n".join(lines)))
         scope = _position_display(spec)
         if scope:
             sections.append(("检查对象", f"{spec.get('RS_module', '')}   /   {scope}"))
         match = record.get("instance_match") or {}
-        if match.get("mode") == "RS_route":
+        if match.get("rule") == RS_INST_LIST_RULE:
+            sections.append(("例化匹配 · RS_inst 多项", payload["例化匹配说明"]))
+        elif _uses_ranked_names(match):
             selected = match.get("selected") or {}
             result = selected.get("full_name") or {
                 "ambiguous": "最小距离并列，未选择实例", "position_not_found": "层次不存在",
@@ -172,7 +246,13 @@ def _review_sections(
             detail = f"{match.get('candidate_count', 0)} 个候选"
             if match.get("best_distance") is not None:
                 detail += f"   ·   最小编辑距离 {match['best_distance']}   ·   最近候选 {match['tied_best_count']} 个"
-            sections.append(("例化匹配 · RS_route", f"{match['query']} → {result}\n{detail}"))
+            is_fallback = match.get("mode") == "RS_inst"
+            title = "例化匹配 · RS_inst 模糊回退" if is_fallback else "例化匹配 · RS_route"
+            if is_fallback:
+                detail = "完整名和组前缀均未命中。 " + detail
+                if match.get("route_ignored"):
+                    detail += "；RS_route 未参与。"
+            sections.append((title, f"{match['query']} → {result}\n{detail}"))
         elif payload.get("例化匹配说明"):
             sections.append(("例化匹配 · RS_inst", payload["例化匹配说明"]))
         if match.get("top_candidates"):
@@ -183,6 +263,19 @@ def _review_sections(
             if len(record["matched_instances"]) > len(names):
                 names.append("更多实例见原始 JSON")
             sections.append(("选中的实例", "\n".join(names)))
+    signals = record.get("source_signal_checks") or []
+    if signals:
+        labels = {"matched": "匹配", "mismatch": "不匹配", "unavailable": "证据不足",
+                  "invalid_start": "起点端口无效", "depth_limited": "达到深度上限", "not_found": "未到达目标"}
+        lines = []
+        for check in signals:
+            lines.append(f"{check['instance']}.{check['start_port']} · {check['role']} 期望 {check['expected']} · "
+                         f"{labels[check['status']]}")
+            if not check["endpoints"]:
+                lines.append(f"  {check['target']}：无已确认的源端连线")
+            for e in check["endpoints"]:
+                lines.append(f"  {' → '.join(e['path'])} · {e['port'] or '?'} 接 {e['connection'] or '?'}")
+        sections.append(("CRG 源端连线 · clk / rst", "\n".join(lines)))
     return sections
 
 
@@ -276,6 +369,9 @@ def _crg_source_display(spec: Mapping[str, Any]) -> str:
 
 def _crg_trace_display(record: Mapping[str, Any]) -> str:
     check = record.get("crg_source_check")
+    signals = record.get("source_signal_checks", ())
+    if signals and record.get("source_signal_status"):
+        return record["source_signal_status"].upper()
     if not isinstance(check, Mapping):
         return "N/A"
     status = check.get("status")
@@ -342,6 +438,13 @@ class RsCheckApp:
         self._position_hierarchy_tree: Any | None = None
         self._position_hierarchy_paths: dict[str, str] = {}
         self._position_hierarchy_close_pending = False
+        self._hierarchy_target = "position"
+        self._hierarchy_temp: tempfile.TemporaryDirectory | None = None
+        self._hierarchy_model: ScopeTree | None = None
+        self._hierarchy_children: dict[str, list[str]] = {}
+        self._hierarchy_offsets: dict[str, int] = {}
+        self._hierarchy_more: dict[str, str] = {}
+        self._hierarchy_hits: set[str] = set()
         self._crg_source_mappings: dict[str, str] = {}
         self._crg_source_mappings_dirty = False
         self._editing_crg_source_alias = ""
@@ -534,7 +637,7 @@ class RsCheckApp:
         self.setup_form = design.ScrollForm(self.setup_tab)
         tab = self.setup_form.body
         tab.columnconfigure(0, weight=1)
-        sheet_card, input_group = self.ui.card(tab, "01", "规格与配置", "Excel / CSV / TSV")
+        sheet_card, input_group = self.ui.card(tab, "01", "规格与配置", "Excel 公式请先重算并保存")
         sheet_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         input_group.columnconfigure(1, weight=1)
         self._path_row(
@@ -621,7 +724,7 @@ class RsCheckApp:
                 textvariable=self.column_vars[name],
                 width=4,
             ).grid(row=row, column=label_column + 1, sticky="w", pady=4)
-        ttk.Label(columns_group, text="RS_inst 留空时使用 RS_route。", style="Muted.TLabel").grid(
+        ttk.Label(columns_group, text="RS_inst 分隔：空格、Tab、换行、分号、逗号、顿号、冒号。", style="Muted.TLabel").grid(
             row=rows_per_block, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
         source_card, self.source_group = self.ui.card(middle, "02", "RTL 数据来源")
@@ -924,7 +1027,7 @@ class RsCheckApp:
         )
         self.position_hierarchy_pick_button = ttk.Button(
             editor,
-            text="从 Verdi 选择",
+            text="选择 DUT 层次…",
             style="Quiet.TButton",
             command=self._open_position_hierarchy_search,
         )
@@ -950,7 +1053,7 @@ class RsCheckApp:
             "write", lambda *_: self._render_position_tree()
         )
 
-    def _open_position_hierarchy_search(self) -> None:
+    def _open_position_hierarchy_search(self, target: str = "position") -> None:
         if self.running or self.controller.is_running:
             return
         existing = self._position_hierarchy_dialog
@@ -964,12 +1067,26 @@ class RsCheckApp:
             except tk.TclError:
                 pass
 
+        request = self._request()
+        try:
+            build_position_hierarchy_search_command(request, ".*")
+            session_dir = tempfile.TemporaryDirectory(prefix="rscheck-dut-tree-")
+        except (GuiInputError, OSError) as exc:
+            messagebox.showerror("无法浏览 DUT 层次",
+                                 f"请先在「检查配置」选择在线 NPI、collector 和 Verdi *.elab++。\n{exc}",
+                                 parent=self.root)
+            return
+
+        self._hierarchy_target = target
+        self._hierarchy_temp = session_dir
+        self._hierarchy_model = None
+        self.position_hierarchy_regex_var.set("")
         dialog = tk.Toplevel(self.root)
         self._position_hierarchy_dialog = dialog
         self._position_hierarchy_close_pending = False
         self._position_hierarchy_paths.clear()
         self.position_hierarchy_status_var.set("尚未查询")
-        dialog.title("从 Verdi 选择 Position 全路径")
+        dialog.title(f"{target} · DUT 层次树")
         dialog.geometry("980x560")
         dialog.minsize(760, 420)
         dialog.configure(background=design.PAGE)
@@ -980,8 +1097,8 @@ class RsCheckApp:
 
         header = ttk.Frame(dialog, style="Page.TFrame", padding=(18, 12))
         header.grid(row=0, column=0, sticky="ew")
-        ttk.Label(header, text="选择 Position 全路径", style="Page.Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="输入名称片段或正则，双击候选可回填；映射仍需应用并保存。",
+        ttk.Label(header, text=f"选择 {target} 的 DUT 全路径", style="Page.Title.TLabel").pack(anchor="w")
+        ttk.Label(header, text="展开分支浏览，或按完整路径筛选。选中节点后点击「使用所选路径」回填。",
                   style="Page.Muted.TLabel").pack(anchor="w")
         toolbar = ttk.Frame(dialog, style="Surface.TFrame", padding=(15, 11))
         toolbar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
@@ -997,11 +1114,13 @@ class RsCheckApp:
             "<Return>", lambda _event: self._start_position_hierarchy_search()
         )
         self.position_hierarchy_search_button = ttk.Button(
-            toolbar, text="查询", command=self._start_position_hierarchy_search
+            toolbar, text="筛选", command=self._start_position_hierarchy_search
         )
         self.position_hierarchy_search_button.grid(row=0, column=2)
+        self.hierarchy_clear_button = ttk.Button(toolbar, text="清除筛选", command=self._clear_hierarchy_filter)
+        self.hierarchy_clear_button.grid(row=0, column=3, padx=(6, 0))
         ttk.Label(toolbar, textvariable=self.position_hierarchy_status_var, style="Badge.TLabel").grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(8, 0)
+            row=1, column=0, columnspan=4, sticky="w", pady=(8, 0)
         )
 
         tree_frame = ttk.Frame(dialog, style="Surface.TFrame", padding=10)
@@ -1011,17 +1130,18 @@ class RsCheckApp:
         tree = ttk.Treeview(
             tree_frame,
             columns=("path", "definition", "kind"),
-            show="headings",
+            show="tree headings",
             selectmode="browse",
         )
         self._position_hierarchy_tree = tree
         for name, title, width in (
-            ("path", "RTL 层次全路径", 720),
-            ("definition", "模块定义", 180),
-            ("kind", "类型", 100),
+            ("#0", "DUT 分支", 255),
+            ("path", "RTL 层次全路径", 420),
+            ("definition", "模块定义", 145),
+            ("kind", "类型", 95),
         ):
             tree.heading(name, text=title, anchor="w")
-            tree.column(name, width=width, minwidth=90, stretch=False)
+            tree.column(name, width=width, minwidth=90, stretch=name == "path")
         vertical = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         horizontal = ttk.Scrollbar(
             tree_frame, orient="horizontal", command=tree.xview
@@ -1036,9 +1156,10 @@ class RsCheckApp:
         tree.bind(
             "<<TreeviewSelect>>", self._on_position_hierarchy_candidate_selected
         )
-        tree.bind(
-            "<Double-1>", lambda _event: self._use_selected_position_hierarchy()
-        )
+        tree.tag_configure("hit", foreground=design.CLAY_INK)
+        tree.bind("<<TreeviewOpen>>", self._on_hierarchy_open)
+        tree.bind("<Double-1>", self._on_hierarchy_double_click)
+        tree.bind("<Return>", self._on_hierarchy_return)
 
         actions = ttk.Frame(dialog, padding=10)
         actions.grid(row=3, column=0, sticky="ew")
@@ -1063,12 +1184,25 @@ class RsCheckApp:
         self.position_hierarchy_use_button.pack(side="right", padx=(0, 8))
         dialog.grab_set()
         self.position_hierarchy_query_entry.focus_set()
+        self._start_position_hierarchy_search()
+
+    def _clear_hierarchy_filter(self) -> None:
+        self.position_hierarchy_regex_var.set("")
+        self._start_position_hierarchy_search()
 
     def _destroy_position_hierarchy_search(self) -> None:
         dialog = self._position_hierarchy_dialog
         self._position_hierarchy_dialog = None
         self._position_hierarchy_tree = None
         self._position_hierarchy_paths.clear()
+        self._hierarchy_model = None
+        self._hierarchy_children = {}
+        self._hierarchy_hits.clear()
+        self._hierarchy_offsets.clear()
+        self._hierarchy_more.clear()
+        if self._hierarchy_temp is not None:
+            self._hierarchy_temp.cleanup()
+            self._hierarchy_temp = None
         self._position_hierarchy_close_pending = False
         if dialog is None:
             return
@@ -1106,11 +1240,9 @@ class RsCheckApp:
             self.position_hierarchy_search_button.configure(
                 state="disabled" if running else "normal"
             )
+            self.hierarchy_clear_button.configure(state="disabled" if running else "normal")
             self.position_hierarchy_cancel_button.configure(
                 state="normal" if running else "disabled"
-            )
-            self.position_hierarchy_close_button.configure(
-                state="disabled" if running else "normal"
             )
             if running:
                 self.position_hierarchy_use_button.configure(state="disabled")
@@ -1122,41 +1254,121 @@ class RsCheckApp:
     def _clear_position_hierarchy_candidates(self) -> None:
         tree = self._position_hierarchy_tree
         self._position_hierarchy_paths.clear()
+        self._hierarchy_children = {}
+        self._hierarchy_hits.clear()
+        self._hierarchy_offsets.clear()
+        self._hierarchy_more.clear()
         if tree is None:
             return
         for item in tree.get_children():
             tree.delete(item)
         self.position_hierarchy_use_button.configure(state="disabled")
 
-    def _render_position_hierarchy_candidates(
-        self, result: HierarchySearchResult
-    ) -> None:
+    def _render_position_hierarchy_candidates(self, result: HierarchySearchResult | None) -> None:
+        model = self._hierarchy_model
         tree = self._position_hierarchy_tree
-        if tree is None:
+        if tree is None or model is None:
             return
         self._clear_position_hierarchy_candidates()
-        for index, match in enumerate(result.matches):
-            iid = f"position-hierarchy-{index}"
-            self._position_hierarchy_paths[iid] = match.path
-            tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(match.path, match.definition, match.kind),
-            )
-        if result.matches:
-            first = "position-hierarchy-0"
-            tree.selection_set(first)
-            tree.see(first)
-        status = f"匹配 {result.total_matches}，显示 {len(result.matches)}"
-        if result.index_truncated:
+        if result is None:
+            self._hierarchy_children = model.children
+            status = f"DUT 层次 · {len(model.by_path)} 个节点 · 展开箭头浏览" if model.by_path else "DUT 层次为空"
+        else:
+            self._hierarchy_hits.update(match.path for match in result.matches)
+            self._hierarchy_children = model.filtered_children(self._hierarchy_hits)
+            status = f"匹配 {result.total_matches}，显示 {len(result.matches)}"
+            if result.total_matches > len(result.matches):
+                status += " · 结果已截断，请收窄正则"
+            if result.total_matches == 0:
+                status += " · 未找到匹配路径，可清除筛选"
+        self._append_hierarchy_page("")
+        if result is not None and result.matches:
+            # Expand all of a small filtered tree so same-named leaves in e.g.
+            # two tiles are visible together. Keep very broad/deep views lazy.
+            first = result.matches[0].path
+            if sum(map(len, self._hierarchy_children.values())) <= 200:
+                ancestors = sorted(path for path in self._hierarchy_children if path)
+            else:
+                ancestors = []
+                parent = model.parents[first]
+                while parent:
+                    ancestors.append(parent)
+                    parent = model.parents[parent]
+                ancestors.reverse()
+            for parent in ancestors:
+                self._expand_hierarchy(parent)
+                tree.item(self._scope_iid(parent), open=True)
+            tree.selection_set(self._scope_iid(first))
+            tree.see(self._scope_iid(first))
+        if model.index.truncated:
             status += " · 层次索引不完整"
-        elif result.truncated:
-            status += " · 请收窄正则"
-        if result.notices:
+        if model.index.notices:
             status += " · KDB 部分加载"
         self.position_hierarchy_status_var.set(status)
         self._on_position_hierarchy_candidate_selected()
+
+    @staticmethod
+    def _scope_iid(path: str) -> str:
+        return "scope:" + path if path else ""
+
+    def _append_hierarchy_page(self, parent: str) -> None:
+        # Broad scopes must not create tens of thousands of Tk widgets at once.
+        tree = self._position_hierarchy_tree
+        children = self._hierarchy_children.get(parent, ())
+        start = self._hierarchy_offsets.get(parent, 0)
+        end = min(start + 200, len(children))
+        self._hierarchy_offsets[parent] = end
+        parent_id = self._scope_iid(parent)
+        more = "more:" + parent
+        if more in self._hierarchy_more:
+            tree.delete(more)
+            del self._hierarchy_more[more]
+        for path in children[start:end]:
+            scope = self._hierarchy_model.by_path[path]
+            iid = self._scope_iid(path)
+            self._position_hierarchy_paths[iid] = path
+            tree.insert(parent_id, "end", iid=iid, text=scope.name or path,
+                        values=(path, scope.definition, scope.kind),
+                        tags=("hit",) if path in self._hierarchy_hits else ())
+            if path in self._hierarchy_children:
+                tree.insert(iid, "end", iid="pending:" + path)
+        if end < len(children):
+            self._hierarchy_more[more] = parent
+            tree.insert(parent_id, "end", iid=more, text=f"显示更多…（还有 {len(children)-end} 项）")
+
+    def _expand_hierarchy(self, path: str) -> None:
+        if path in self._hierarchy_children and path not in self._hierarchy_offsets:
+            self._position_hierarchy_tree.delete("pending:" + path)
+            self._append_hierarchy_page(path)
+
+    def _on_hierarchy_open(self, _event: Any) -> None:
+        tree = self._position_hierarchy_tree
+        path = self._position_hierarchy_paths.get(tree.focus())
+        if path is not None:
+            self._expand_hierarchy(path)
+
+    def _on_hierarchy_return(self, _event: Any) -> str:
+        tree = self._position_hierarchy_tree
+        selected = tree.selection()
+        if selected and selected[0] in self._hierarchy_more:
+            self._append_hierarchy_page(self._hierarchy_more[selected[0]])
+        else:
+            self._use_selected_position_hierarchy()
+        return "break"
+
+    def _on_hierarchy_double_click(self, event: Any) -> str | None:
+        tree = self._position_hierarchy_tree
+        iid = tree.identify_row(event.y)
+        if not iid or self.running:
+            return "break"
+        if iid in self._hierarchy_more:
+            self._append_hierarchy_page(self._hierarchy_more[iid])
+            return "break"
+        if self._position_hierarchy_paths.get(iid) in self._hierarchy_children:
+            return None  # Native Tk toggles branches, including a matched branch.
+        tree.selection_set(iid)
+        self._use_selected_position_hierarchy()
+        return "break"
 
     def _on_position_hierarchy_candidate_selected(self, _event: Any = None) -> None:
         tree = self._position_hierarchy_tree
@@ -1170,7 +1382,7 @@ class RsCheckApp:
 
     def _use_selected_position_hierarchy(self) -> None:
         tree = self._position_hierarchy_tree
-        if tree is None:
+        if tree is None or self.running:
             return
         selected = tree.selection()
         if not selected:
@@ -1178,8 +1390,9 @@ class RsCheckApp:
         path = self._position_hierarchy_paths.get(selected[0])
         if not path:
             return
-        self.position_path_var.set(path)
-        self.status_var.set("已选择 Verdi Position 全路径")
+        target = self.position_path_var if self._hierarchy_target == "position" else self.crg_source_path_var
+        target.set(path)
+        self.status_var.set(f"已选择 Verdi {self._hierarchy_target} 全路径")
         self._destroy_position_hierarchy_search()
 
     def _build_crg_sources_tab(self) -> None:
@@ -1235,8 +1448,12 @@ class RsCheckApp:
             row=0, column=2, sticky="w"
         )
         ttk.Entry(editor, textvariable=self.crg_source_path_var).grid(
-            row=0, column=3, sticky="ew", padx=(8, 0)
+            row=0, column=3, sticky="ew", padx=(8, 8)
         )
+        self.crg_source_hierarchy_pick_button = ttk.Button(
+            editor, text="选择 DUT 层次…", style="Quiet.TButton",
+            command=lambda: self._open_position_hierarchy_search("CRG_source"))
+        self.crg_source_hierarchy_pick_button.grid(row=0, column=4, sticky="e")
 
         actions = ttk.Frame(tab, style="Page.TFrame")
         actions.grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -1432,7 +1649,18 @@ class RsCheckApp:
         self.inspector_tabs.grid(row=1, column=0, sticky="nsew")
         summary_view, raw_view = ttk.Frame(self.inspector_tabs), ttk.Frame(self.inspector_tabs)
         self.inspector_tabs.add(summary_view, text="诊断摘要")
+        self.match_view = ttk.Frame(self.inspector_tabs)
+        self.inspector_tabs.add(self.match_view, text="匹配明细")
         self.inspector_tabs.add(raw_view, text="原始 JSON")
+        self.copy_match_button = ttk.Button(
+            inspector_bar, text="复制匹配明细", style="Quiet.TButton",
+            command=lambda: self._copy_text(self.match_text, "匹配明细"))
+        self.copy_match_button.pack(side="right")
+        box, self.match_text = self.ui.text_panel(
+            self.match_view, wrap="char", width=1, height=2, font=self.ui.f(10), bg=design.PAPER,
+            fg=design.INK, padx=10, pady=4, highlightthickness=0, relief="flat", borderwidth=0)
+        box.pack(fill="both", expand=True)
+        self.match_text.configure(state="disabled")
         box, self.review_text = self.ui.text_panel(
             summary_view, wrap="word", width=1, height=2, font=self.ui.f(10), bg=design.PAPER,
             fg=design.INK, padx=10, pady=4, highlightthickness=0, relief="flat", borderwidth=0)
@@ -2388,9 +2616,15 @@ class RsCheckApp:
             return
         request = self._request()
         query = self.position_hierarchy_regex_var.get()
+        if not query and self._hierarchy_model is not None:
+            self._render_position_hierarchy_candidates(None)
+            return
+        index_path = Path(self._hierarchy_temp.name) / "index.json"
         try:
-            build_position_hierarchy_search_command(request, query)
+            build_position_hierarchy_search_command(request, query, session_index=index_path)
         except GuiInputError as exc:
+            self.position_hierarchy_status_var.set("筛选无效，未执行查询")
+            self._clear_position_hierarchy_candidates()
             messagebox.showerror(
                 "查询输入错误",
                 str(exc),
@@ -2401,14 +2635,14 @@ class RsCheckApp:
         with self._cancel_guard:
             self._cancel_requested.clear()
         self._clear_position_hierarchy_candidates()
-        self.position_hierarchy_status_var.set("正在查询 Verdi 层次")
+        self.position_hierarchy_status_var.set("正在按全路径筛选…" if query else "正在读取 Verdi DUT 层次…")
         self._active_action = "hierarchy-search"
         self._set_running(True)
-        self.status_var.set("正在查询 Verdi Position 层次")
+        self.status_var.set("正在查询 Verdi DUT 层次")
         self._append_log("\n" + "=" * 72 + "\n")
         worker = threading.Thread(
             target=self._run_worker,
-            args=("hierarchy-search", request, query),
+            args=("hierarchy-search", request, query, index_path, self._hierarchy_model is None),
             name="rscheck-gui-hierarchy-search",
             daemon=True,
         )
@@ -2496,7 +2730,8 @@ class RsCheckApp:
         worker.start()
 
     def _run_worker(
-        self, action: str, request: GuiRunRequest, hierarchy_query: str = ""
+        self, action: str, request: GuiRunRequest, hierarchy_query: str = "",
+        index_path: Path | None = None, needs_model: bool = False,
     ) -> None:
         try:
             if action == "hierarchy-search":
@@ -2504,19 +2739,22 @@ class RsCheckApp:
                     self.events.put(WorkerOutcome(action=action))
                     return
                 command = build_position_hierarchy_search_command(
-                    request, hierarchy_query
+                    request, hierarchy_query, session_index=index_path
                 )
                 process = self.controller.run(command, cwd=self.project_root)
                 if process.cancelled or self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action, process=process))
                     return
                 if process.returncode == 0:
-                    result = load_position_hierarchy_search(process.stdout)
+                    result = load_position_hierarchy_search(process.stdout) if hierarchy_query else None
+                    model = (ScopeTree.from_index(load_hierarchy_index(index_path))
+                             if needs_model and index_path is not None else None)
                     self.events.put(
                         WorkerOutcome(
                             action=action,
                             process=process,
                             hierarchy_search=result,
+                            hierarchy_tree=model,
                         )
                     )
                     return
@@ -2547,9 +2785,9 @@ class RsCheckApp:
                     self.events.put(WorkerOutcome(action=action, process=process))
                     return
                 if action == "validate" and process.returncode == 0:
-                    rows = load_validation_rows(process.stdout)
+                    rows, skipped = load_validation_result(process.stdout)
                     self.events.put(
-                        WorkerOutcome(action=action, process=process, validation_rows=rows)
+                        WorkerOutcome(action=action, process=process, validation_rows=rows, skipped_rows=skipped)
                     )
                     return
                 if action == "check" and process.returncode in (0, 1):
@@ -2634,7 +2872,7 @@ class RsCheckApp:
             if process.cancelled:
                 if hierarchy_action:
                     self.position_hierarchy_status_var.set("查询已取消")
-                    self.status_var.set("Verdi Position 层次查询已取消")
+                    self.status_var.set("Verdi DUT 层次查询已取消")
                     if self._position_hierarchy_close_pending:
                         self._destroy_position_hierarchy_search()
                 else:
@@ -2644,7 +2882,7 @@ class RsCheckApp:
         if self._cancel_requested.is_set():
             if hierarchy_action:
                 self.position_hierarchy_status_var.set("查询已取消")
-                self.status_var.set("Verdi Position 层次查询已取消")
+                self.status_var.set("Verdi DUT 层次查询已取消")
                 if self._position_hierarchy_close_pending:
                     self._destroy_position_hierarchy_search()
             else:
@@ -2655,7 +2893,7 @@ class RsCheckApp:
             self._append_log(outcome.error + "\n")
             if hierarchy_action:
                 self.position_hierarchy_status_var.set("查询失败")
-                self.status_var.set("Verdi Position 层次查询失败")
+                self.status_var.set("Verdi DUT 层次查询失败")
                 messagebox.showerror(
                     "层次查询失败",
                     outcome.error,
@@ -2669,35 +2907,37 @@ class RsCheckApp:
         if process is None:
             if hierarchy_action:
                 self.position_hierarchy_status_var.set("查询失败")
-                self.status_var.set("Verdi Position 层次查询失败")
+                self.status_var.set("Verdi DUT 层次查询失败")
             else:
                 self._reset_summary("ERROR")
                 self.status_var.set("执行失败")
             return
-        if hierarchy_action and process.returncode == 0 and outcome.hierarchy_search:
+        if hierarchy_action and process.returncode == 0 and (outcome.hierarchy_search or outcome.hierarchy_tree):
+            if outcome.hierarchy_tree is not None:
+                self._hierarchy_model = outcome.hierarchy_tree
             result = outcome.hierarchy_search
             self._render_position_hierarchy_candidates(result)
+            index = result if result is not None else outcome.hierarchy_tree.index
             self._append_log(
-                "[hierarchy-search "
-                f"matches={result.total_matches} displayed={len(result.matches)} "
-                f"visited={result.visited_scopes} truncated={str(result.truncated).lower()}]\n"
+                "[DUT 层次] " + self.position_hierarchy_status_var.get()
+                + f" · 已访问 {index.visited_scopes} 个 scope\n"
             )
-            for notice in result.notices:
+            for notice in index.notices:
                 self._append_log(f"[hierarchy notice] {notice}\n")
-            for warning in result.warnings:
+            for warning in index.warnings:
                 self._append_log(f"[hierarchy warning] {warning}\n")
-            self.status_var.set(
-                f"Verdi Position 层次查询完成，匹配 {result.total_matches} 条"
-            )
+            self.status_var.set("Verdi DUT 层次查询完成")
             return
         if outcome.action == "validate" and process.returncode == 0:
-            self._render_validation(outcome.validation_rows)
-            self.status_var.set(f"Excel 验证通过，共 {len(outcome.validation_rows)} 行")
+            self._render_validation(outcome.validation_rows, outcome.skipped_rows)
+            self.status_var.set(f"Excel 验证完成，参与检查 {len(outcome.validation_rows)} 行，整行跳过 {len(outcome.skipped_rows)} 行")
             self.notebook.select(self.results_tab)
             return
         if outcome.action == "check" and process.returncode in (0, 1) and outcome.report:
             self._render_report(outcome.report)
-            self.status_var.set("检查通过" if process.returncode == 0 else "检查完成，发现差异")
+            self.status_var.set("没有需检查的行，未运行 RTL 检查" if not outcome.report.rows else
+                                "检查完成，发现差异" if process.returncode else "部分行无法定位例化，详见匹配明细"
+                                if outcome.report.summary.get("partial_rows") else "检查通过")
             self._last_json_path = self.json_report_var.get().strip()
             self._last_csv_path = self.csv_report_var.get().strip()
             self.notebook.select(self.results_tab)
@@ -2706,7 +2946,7 @@ class RsCheckApp:
         detail = process.stderr.strip() or process.stdout.strip() or f"退出码 {process.returncode}"
         if hierarchy_action:
             self.position_hierarchy_status_var.set("查询失败")
-            self.status_var.set("Verdi Position 层次查询失败")
+            self.status_var.set("Verdi DUT 层次查询失败")
             messagebox.showerror(
                 "层次查询失败",
                 detail[-4000:],
@@ -2862,27 +3102,34 @@ class RsCheckApp:
         self.summary_errors_var.set("错误 0")
         self.summary_warnings_var.set("警告 0")
 
-    def _render_validation(self, rows: tuple[Mapping[str, Any], ...]) -> None:
+    def _render_validation(self, rows: tuple[Mapping[str, Any], ...], skipped: tuple[Mapping[str, Any], ...] = ()) -> None:
         self._clear_results()
-        self.summary_state_var.set("VALID")
-        self.summary_rows_var.set(f"行数 {len(rows)}")
+        self.summary_state_var.set("VALID" if rows else "SKIPPED")
+        self.summary_rows_var.set(f"行数 {len(rows)}" + (f" · 跳过 {len(skipped)}" if skipped else ""))
         self.summary_pass_var.set(f"通过 {len(rows)}")
         self.summary_fail_var.set("失败 0")
         self.summary_errors_var.set("错误 0")
-        self.summary_warnings_var.set("警告 0")
+        total_warnings = 0
         for index, spec in enumerate(rows):
             iid = f"validation-{index}"
             position_text = _position_display(spec)
             crg_source_text = _crg_source_display(spec)
             self._fit_result_position_column(position_text)
             self._fit_result_crg_source_column(crg_source_text)
-            self._result_records[iid] = {"spec": spec, "findings": [], "matched_instances": []}
+            findings = [{"severity": "warning", "code": "EXCEL_FIELD_BLANK",
+                         "message": blank_field_message(spec.get("sheet", ""), spec["row"], field),
+                         "actual": {"field": field, "reason": "blank"}}
+                        for field, reason in spec.get("ignored_fields", {}).items() if reason == "blank"]
+            self._result_records[iid] = {"spec": spec, "findings": findings, "matched_instances": []}
+            total_warnings += len(findings)
+            if findings:
+                self._issue_rows.add(iid)
             self.result_tree.insert(
                 "",
                 "end",
                 iid=iid,
                 values=(
-                    "VALID",
+                    "WARNING" if findings else "VALID",
                     spec.get("row", ""),
                     spec.get("Intf_type", ""),
                     position_text,
@@ -2892,18 +3139,25 @@ class RsCheckApp:
                     spec.get("RS_CFG_EN", ""),
                     "-",
                     f"-/{spec.get('step', '')}",
-                    "0E/0W",
+                    f"0E/{len(findings)}W",
                 ),
-                tags=("pass",),
+                tags=("warning" if findings else "pass",),
             )
+        self.summary_warnings_var.set(f"警告 {total_warnings}")
         self._filter_results()
+        if not rows:
+            self._show_result_empty("没有需检查的规格行；详见运行日志。")
 
     def _render_report(self, report: LoadedReport) -> None:
         self._clear_results()
         summary = report.summary
         passed = bool(summary["passed"])
-        self.summary_state_var.set("PASS" if passed else "FAIL")
-        self.summary_rows_var.set(f"行数 {summary['rows']}")
+        skipped = summary.get("skipped_rows", 0)
+        partial = summary.get("partial_rows", 0)
+        self.summary_state_var.set("FAIL" if not passed else "SKIPPED" if not report.rows else
+                                   "PARTIAL" if partial else "PASS")
+        self.summary_rows_var.set(f"行数 {summary['rows']}" + (f" · 跳过 {skipped}" if skipped else "")
+                                  + (f" · 部分检查 {partial}" if partial else ""))
         self.summary_pass_var.set(f"通过 {summary['passed_rows']}")
         self.summary_fail_var.set(f"失败 {summary['failed_rows']}")
         self.summary_errors_var.set(f"错误 {summary['errors']}")
@@ -2930,6 +3184,8 @@ class RsCheckApp:
         for index, row in enumerate(report.rows):
             self._insert_result_record(f"row-{index}", row)
         self._filter_results()
+        if not report.rows:
+            self._show_result_empty("没有需检查的行。跳过的行号和原因见运行日志或导出的报告。")
 
     def _insert_result_record(self, iid: str, record: Mapping[str, Any]) -> None:
         spec = record.get("spec", {})
@@ -2947,6 +3203,8 @@ class RsCheckApp:
         )
         passed = bool(record.get("passed", not errors))
         status = "WARNING" if passed and warnings else ("PASS" if passed else "FAIL")
+        if status == "PASS" and (record.get("instance_match") or {}).get("mode") == "none":
+            status = "PARTIAL"
         if status != "PASS":
             self._issue_rows.add(iid)
         tag = "warning" if passed and warnings else ("pass" if passed else "fail")
@@ -3048,6 +3306,15 @@ class RsCheckApp:
             self.review_text.insert("end", body + "\n", "body")
         self.review_text.configure(state="disabled")
         self.review_text.yview_moveto(0)
+        # Findings on the same row don't change its match provenance or reset its scroll position.
+        if not hasattr(self, "_match_record") or record is not self._match_record:
+            self._match_record = record
+            self.match_text.configure(state="normal")
+            self.match_text.delete("1.0", "end")
+            self.match_text.insert("1.0", format_match_details(record))
+            self.match_text.configure(state="disabled")
+            self.match_text.yview_moveto(0)
+            self.copy_match_button.state(["!disabled"] if record and record.get("instance_match") else ["disabled"])
         self._set_evidence(json.dumps(payload, ensure_ascii=False, indent=2) if payload else "")
 
     def _set_evidence(self, value: str) -> None:

@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "positions": {
     "top.u_tile": {
       "found": true,
@@ -9,7 +9,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C0",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 135,
+          "line": 148,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -24,8 +24,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -98,6 +98,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -106,7 +198,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C1",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 145,
+          "line": 158,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -121,8 +213,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -195,6 +287,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -203,7 +387,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C2",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 155,
+          "line": 168,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -218,8 +402,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -292,6 +476,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -300,7 +576,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C3",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 165,
+          "line": 178,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -315,8 +591,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -389,6 +665,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -397,7 +765,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C4",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 175,
+          "line": 188,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -412,8 +780,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -486,6 +854,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -494,7 +954,7 @@
           "full_name": "top.u_tile.AAAA_BBB_C5",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 185,
+          "line": 198,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -509,8 +969,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -583,6 +1043,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -591,7 +1143,7 @@
           "full_name": "top.u_tile.CLK_ONLY_RS",
           "module": "rs_clk_only",
           "file": "examples/rtl/rs_example.sv",
-          "line": 215,
+          "line": 228,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_rs",
@@ -674,7 +1226,63 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
             "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst_n",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "unresolved",
+            "modules": [],
+            "endpoints": [],
+            "diagnostics": [
+              "NPI Netlist could not resolve trace start port: top.u_tile.CLK_ONLY_RS.rst_n"
+            ]
           }
         },
         {
@@ -682,7 +1290,7 @@
           "full_name": "top.u_tile.CTRL_RS_D0",
           "module": "rs_pipe",
           "file": "examples/rtl/rs_example.sv",
-          "line": 195,
+          "line": 208,
           "ports": {
             "clk": {
               "connection": "top.u_tile.clk_aux",
@@ -697,8 +1305,8 @@
               "type": "npiReg"
             },
             "rst": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_ctrl",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -730,6 +1338,66 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_aux_crg"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "rst",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_ctrl_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_ctrl_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "module": "crg_aux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_ctrl_reset",
+                  "top.u_tile.u_aux_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_aux",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_ctrl_reset",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_ctrl_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_ctrl",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_ctrl_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -738,7 +1406,7 @@
           "full_name": "top.u_tile.CUSTOM_RS",
           "module": "rs_custom",
           "file": "examples/rtl/rs_example.sv",
-          "line": 205,
+          "line": 218,
           "ports": {
             "clock_i": {
               "connection": "top.u_tile.clk_rs",
@@ -753,8 +1421,8 @@
               "type": "npiReg"
             },
             "reset_ni": {
-              "connection": "top.u_tile.rst_n",
-              "type": "npiNet"
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
             }
           },
           "parameters": {
@@ -825,6 +1493,98 @@
                 ]
               }
             ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_aux_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_aux",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_aux_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_clk_mux",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_muxed",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_core",
+                "depth": 3,
+                "path": [
+                  "top.u_tile.u_occ",
+                  "top.u_tile.u_clk_mux",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_occ",
+                "port": "clk_out",
+                "connection": "top.u_tile.clk_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_occ"
+                ]
+              }
+            ],
+            "diagnostics": []
+          },
+          "reset_trace": {
+            "reset_port": "reset_ni",
+            "max_depth": 16,
+            "excluded_inputs": [
+              "clk"
+            ],
+            "status": "complete",
+            "modules": [
+              {
+                "instance": "top.u_tile.u_reset",
+                "module": "reset_stage",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_crg",
+                "module": "crg_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              }
+            ],
+            "endpoints": [
+              {
+                "instance": "top.u_tile.u_crg",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_core",
+                "depth": 2,
+                "path": [
+                  "top.u_tile.u_reset",
+                  "top.u_tile.u_crg"
+                ]
+              },
+              {
+                "instance": "top.u_tile.u_reset",
+                "port": "reset_out",
+                "connection": "top.u_tile.rst_rs",
+                "depth": 1,
+                "path": [
+                  "top.u_tile.u_reset"
+                ]
+              }
+            ],
             "diagnostics": []
           }
         },
@@ -833,7 +1593,7 @@
           "full_name": "top.u_tile.u_aux_crg",
           "module": "crg_aux",
           "file": "examples/rtl/rs_example.sv",
-          "line": 110,
+          "line": 121,
           "ports": {
             "clk_out": {
               "connection": "top.u_tile.clk_aux",
@@ -842,18 +1602,27 @@
             "ref_clk": {
               "connection": "top.u_tile.ref_clk",
               "type": "npiNet"
+            },
+            "ref_rst_n": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            },
+            "reset_out": {
+              "connection": "top.u_tile.rst_aux",
+              "type": "npiReg"
             }
           },
           "parameters": {},
           "clk_sources": [],
-          "clock_trace": null
+          "clock_trace": null,
+          "reset_trace": null
         },
         {
           "name": "u_clk_mux",
           "full_name": "top.u_tile.u_clk_mux",
           "module": "clk_mux",
           "file": "examples/rtl/rs_example.sv",
-          "line": 117,
+          "line": 130,
           "ports": {
             "clk_out": {
               "connection": "top.u_tile.clk_muxed",
@@ -874,14 +1643,15 @@
           },
           "parameters": {},
           "clk_sources": [],
-          "clock_trace": null
+          "clock_trace": null,
+          "reset_trace": null
         },
         {
           "name": "u_crg",
           "full_name": "top.u_tile.u_crg",
           "module": "crg_core",
           "file": "examples/rtl/rs_example.sv",
-          "line": 105,
+          "line": 116,
           "ports": {
             "clk_out": {
               "connection": "top.u_tile.clk_core",
@@ -890,18 +1660,48 @@
             "ref_clk": {
               "connection": "top.u_tile.ref_clk",
               "type": "npiNet"
+            },
+            "ref_rst_n": {
+              "connection": "top.u_tile.rst_n",
+              "type": "npiNet"
+            },
+            "reset_out": {
+              "connection": "top.u_tile.rst_core",
+              "type": "npiReg"
             }
           },
           "parameters": {},
           "clk_sources": [],
-          "clock_trace": null
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "u_ctrl_reset",
+          "full_name": "top.u_tile.u_ctrl_reset",
+          "module": "reset_stage",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 126,
+          "ports": {
+            "reset_out": {
+              "connection": "top.u_tile.rst_ctrl",
+              "type": "npiReg"
+            },
+            "rst_n": {
+              "connection": "top.u_tile.rst_aux",
+              "type": "npiReg"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
         },
         {
           "name": "u_occ",
           "full_name": "top.u_tile.u_occ",
           "module": "clk_occ",
           "file": "examples/rtl/rs_example.sv",
-          "line": 124,
+          "line": 137,
           "ports": {
             "clk": {
               "connection": "top.u_tile.ref_clk",
@@ -926,7 +1726,29 @@
           },
           "parameters": {},
           "clk_sources": [],
-          "clock_trace": null
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "u_reset",
+          "full_name": "top.u_tile.u_reset",
+          "module": "reset_stage",
+          "file": "examples/rtl/rs_example.sv",
+          "line": 125,
+          "ports": {
+            "reset_out": {
+              "connection": "top.u_tile.rst_rs",
+              "type": "npiReg"
+            },
+            "rst_n": {
+              "connection": "top.u_tile.rst_core",
+              "type": "npiReg"
+            }
+          },
+          "parameters": {},
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
         }
       ]
     }

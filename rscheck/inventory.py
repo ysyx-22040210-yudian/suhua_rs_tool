@@ -23,9 +23,9 @@ def load_inventory(path: str | Path) -> Inventory:
     if not isinstance(raw, Mapping):
         raise InventoryError("inventory root must be a JSON object")
     schema_version = raw.get("schema_version")
-    if type(schema_version) is not int or schema_version not in {2, 3}:
+    if type(schema_version) is not int or schema_version not in {2, 3, 4}:
         raise InventoryError(
-            f"unsupported inventory schema_version {schema_version!r}; expected 2 or 3"
+            f"unsupported inventory schema_version {schema_version!r}; expected 2, 3 or 4"
         )
 
     raw_positions = raw.get("positions")
@@ -96,10 +96,10 @@ def load_inventory(path: str | Path) -> Inventory:
 
 
 def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
-    if inventory.schema_version not in {2, 3}:
+    if inventory.schema_version not in {2, 3, 4}:
         raise InventoryError(
             f"unsupported inventory schema_version {inventory.schema_version!r}; "
-            "expected 2 or 3"
+            "expected 2, 3 or 4"
         )
     return {
         "schema_version": inventory.schema_version,
@@ -138,10 +138,14 @@ def _instance_to_dict(instance: ActualInstance, schema_version: int) -> dict[str
             for source in instance.clk_sources
         ],
     }
-    if schema_version == 3:
+    if schema_version >= 3:
         result["clock_trace"] = (
             instance.clock_trace.as_dict()
             if instance.clock_trace is not None
             else None
         )
+    if schema_version >= 4:
+        if result["clock_trace"] is not None:
+            result["clock_trace"].setdefault("endpoints", [])
+        result["reset_trace"] = instance.reset_trace.as_dict() if instance.reset_trace else None
     return result

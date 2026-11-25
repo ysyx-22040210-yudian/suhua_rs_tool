@@ -11,23 +11,28 @@ from .model import (
     ConfigError,
     CrgTraceEvaluation,
     Finding,
+    InstanceItemMatch,
     InstanceStepEvaluation,
     Inventory,
     MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     ParameterEvaluation,
-    ROUTE_CANDIDATE_LIMIT,
-    RouteCandidate,
-    RouteMatch,
+    NAME_CANDIDATE_LIMIT,
+    NAME_TIE_REVIEW_LIMIT,
+    NameCandidate,
+    NearestNameMatch,
+    RS_INST_FUZZY_RULE,
+    RS_INST_GROUP_RULE,
     RowResult,
     RtlConfig,
     SpecRow,
+    SourceSignalCheck,
     resolve_module_rule,
+    skip_reason,
 )
 
 
 _FAKE_GATING_LABEL = "假门控"
-_SKIP_RS_CFG_EN_LABEL = "NA"
 
 
 # Schema v2 inventories produced before CRG validation was disabled can retain
@@ -49,12 +54,12 @@ def _leaf_name(name: str) -> str:
     return value.rsplit(".", 1)[-1]
 
 
-def _signal_matches(expected: str, actual: str, position: str, allow_leaf: bool) -> bool:
+def source_connection_matches(expected: str, actual: str, parent: str, allow_leaf: bool) -> bool:
     expected = "".join(expected.split())
     actual = "".join(actual.split())
     if expected == actual:
         return True
-    if actual == f"{position}.{expected}":
+    if actual == f"{parent}.{expected}":
         return True
     return allow_leaf and _leaf_name(expected) == _leaf_name(actual)
 
@@ -120,7 +125,7 @@ def parameter_value_state(value: str | None) -> str:
 
 
 def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
-    if spec.rs_cfg_en == _SKIP_RS_CFG_EN_LABEL:
+    if skip_reason(spec.rs_cfg_en):
         return []
     if not rule.has_rs_cfg_en:
         return []
@@ -142,7 +147,7 @@ def _check_rs_cfg_en_label(spec: SpecRow, rule: ModuleRule) -> list[Finding]:
 def _check_rs_cfg_en_instance(
     spec: SpecRow, instance: ActualInstance, rule: ModuleRule
 ) -> list[Finding]:
-    if spec.rs_cfg_en == _SKIP_RS_CFG_EN_LABEL:
+    if skip_reason(spec.rs_cfg_en):
         return []
 
     findings: list[Finding] = []
@@ -267,7 +272,7 @@ def _evaluate_step_instance(
 
 
 def _match_group(
-    spec: SpecRow,
+    query: str,
     instances: Iterable[ActualInstance],
     suffix: re.Pattern[str],
 ) -> tuple[
@@ -277,9 +282,9 @@ def _match_group(
     valid: list[tuple[ActualInstance, re.Match[str] | None]] = []
     invalid = []
     for instance in instances:
-        if not instance.name.startswith(spec.rs_inst):
+        if not instance.name.startswith(query):
             continue
-        remainder = instance.name[len(spec.rs_inst) :]
+        remainder = instance.name[len(query) :]
         if not remainder:
             valid.append((instance, None))
             continue
@@ -332,18 +337,18 @@ def _name_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def _match_route(
-    spec: SpecRow, instances: Iterable[ActualInstance]
-) -> tuple[ActualInstance | None, RouteMatch]:
+def _match_nearest_name(
+    query: str, module: str, instances: Iterable[ActualInstance]
+) -> tuple[ActualInstance | None, NearestNameMatch]:
     count = ties = 0
     best: int | None = None
 
     def scored() -> Iterable[tuple[int, ActualInstance]]:
         nonlocal count, ties, best
         for instance in instances:
-            if instance.module != spec.rs_module:
+            if instance.module != module:
                 continue
-            distance = _name_distance(spec.rs_route, instance.name)
+            distance = _name_distance(query, instance.name)
             count += 1
             if best is None or distance < best:
                 best, ties = distance, 1
@@ -352,12 +357,14 @@ def _match_route(
             yield distance, instance
 
     # Count every minimum, even when the tie is wider than the displayed list.
-    top = heapq.nsmallest(ROUTE_CANDIDATE_LIMIT, scored(), key=lambda item: (item[0], item[1].full_name))
-    evidence = RouteMatch(
+    top = heapq.nsmallest(NAME_TIE_REVIEW_LIMIT, scored(), key=lambda item: (item[0], item[1].full_name))
+    ordered = tuple(NameCandidate(i.name, i.full_name, d) for d, i in top[:max(NAME_CANDIDATE_LIMIT, ties)])
+    evidence = NearestNameMatch(
         status="matched" if ties == 1 else "ambiguous" if ties else "no_candidates",
         candidate_count=count,
         tied_best_count=ties,
-        ranked=tuple(RouteCandidate(i.name, i.full_name, d) for d, i in top),
+        ranked=ordered[:NAME_CANDIDATE_LIMIT],
+        extra_tied=ordered[NAME_CANDIDATE_LIMIT:],
     )
     return (top[0][1] if ties == 1 else None), evidence
 
@@ -365,7 +372,6 @@ def _match_route(
 def _check_ports(
     spec: SpecRow,
     instance: ActualInstance,
-    config: RtlConfig,
     rule: ModuleRule,
 ) -> list[Finding]:
     findings: list[Finding] = []
@@ -373,6 +379,8 @@ def _check_ports(
         ("CLK", rule.clk_port, spec.clk),
         ("RST", rule.rst_port, spec.rst),
     ):
+        if skip_reason(expected_connection):
+            continue
         port = instance.ports.get(port_name)
         if port is None:
             findings.append(
@@ -398,36 +406,62 @@ def _check_ports(
                 )
             )
             continue
-        if "Operation" in port.object_type:
-            findings.append(
-                _row_finding(
-                    spec,
-                    "UNSUPPORTED_CONNECTION",
-                    f"{instance.full_name}: {role.lower()} is connected through an unsupported expression",
-                    instance=instance.full_name,
-                    expected=expected_connection,
-                    actual={"connection": port.connection, "type": port.object_type},
-                )
-            )
-            continue
-        if not _signal_matches(
-            expected_connection,
-            port.connection,
-            spec.position,
-            config.allow_leaf_signal_match,
-        ):
-            findings.append(
-                _row_finding(
-                    spec,
-                    f"{role}_CONNECTION_MISMATCH",
-                    f"{instance.full_name}: {role.lower()} connection does not match",
-                    instance=instance.full_name,
-                    expected=expected_connection,
-                    actual=port.connection,
-                )
-            )
-
     return findings
+
+
+def _source_signal(spec: SpecRow, instance: ActualInstance, config: RtlConfig, rule: ModuleRule,
+                   version: int, role: str) -> tuple[SourceSignalCheck, Finding | None]:
+    clock = role == "clk"
+    formal, expected, trace = ((rule.clk_port, spec.clk, instance.clock_trace) if clock else
+                               (rule.rst_port, spec.rst, instance.reset_trace))
+    target = spec.crg_source.strip(".")
+    local = instance.ports.get(formal)
+    endpoints = ()
+    matching = ()
+    diagnostics = trace.diagnostics if trace else ()
+    code = ""
+    status = "unavailable"
+    if local is None or not local.connection:
+        status = "invalid_start"  # _check_ports already reports the structural error.
+    elif version < 4:
+        diagnostics = ("Legacy inventory has no source-output evidence; recollect with the current collector.",)
+    elif trace is None or trace.clock_port != formal:
+        diagnostics = (f"No trace from configured {role} port {formal!r}.", *diagnostics)
+        code = "SOURCE_SIGNAL_UNAVAILABLE"
+    else:
+        limit = config.crg_trace_max_depth
+        endpoints = tuple(e for e in trace.endpoints if e.instance == target and e.depth <= limit)
+        # An output's high connection lives in its parent's scope, not at the RS.
+        parent = target.rpartition(".")[0]
+        matching = tuple(e for e in endpoints if e.port and e.connection and
+                         source_connection_matches(expected, e.connection, parent, config.allow_leaf_signal_match))
+        reached = any(n.instance == target and n.depth <= limit for n in trace.modules)
+        if matching:
+            status = "matched"
+        elif reached:
+            if not endpoints or any(not e.connection for e in endpoints) or trace.status == "unresolved":
+                code = "SOURCE_SIGNAL_UNAVAILABLE"
+            else:
+                status, code = "mismatch", "CONNECTION_MISMATCH"
+        elif trace.status == "unresolved":
+            code = "SOURCE_TRACE_UNAVAILABLE"
+        elif trace.status == "depth_limited" or any(n.depth > limit for n in trace.modules):
+            status, code = "depth_limited", "SOURCE_TRACE_DEPTH_LIMIT"
+        else:
+            status, code = "not_found", "SOURCE_NOT_FOUND"
+        # The primary hierarchy trace already reports failure to reach the CRG.
+        if (clock or skip_reason(spec.clk)) and not reached:
+            code = ""
+    check = SourceSignalCheck(instance.full_name, role, formal, target, expected, status, endpoints, matching,
+                              diagnostics, config.allow_leaf_signal_match)
+    if not code or ((clock or skip_reason(spec.clk)) and code == "SOURCE_SIGNAL_UNAVAILABLE" and (trace is None or trace.clock_port != formal)):
+        return check, None
+    observed = ", ".join(f"{e.port} -> {e.connection or '?'}" for e in endpoints)
+    message = (f"{instance.full_name}.{formal}: {role} source at {target}: expected {expected!r}; "
+               + (f"reached {observed}" if observed else f"{status} within {config.crg_trace_max_depth} level(s)"))
+    return check, _row_finding(spec, f"{role.upper()}_{code}", message, instance=instance.full_name,
+                               severity="error" if status == "mismatch" else "warning",
+                               expected=expected, actual=check.as_dict())
 
 
 def _evaluate_crg_trace(
@@ -438,13 +472,19 @@ def _evaluate_crg_trace(
     inventory_schema_version: int,
 ) -> tuple[CrgTraceEvaluation, Finding | None]:
     expected = spec.crg_source.strip(".")
+    # With an active reset alone, establish reachability using its own path. If
+    # both signal names are opted out, CRG_source still requests reachability.
+    reset_only = bool(skip_reason(spec.clk)) and skip_reason(spec.rst) is None
+    role = "rst" if reset_only else "clk"
+    formal = rule.rst_port if reset_only else rule.clk_port
+    trace = instance.reset_trace if reset_only else instance.clock_trace
     matched: ClockTraceNode | None = None
     trace_status = "unavailable"
     diagnostics: tuple[str, ...] = ()
     modules: tuple[ClockTraceNode, ...] = ()
     status = "unavailable"
 
-    if inventory_schema_version == 2:
+    if inventory_schema_version == 2 and not reset_only:
         for source in instance.clk_sources:
             source_name = source.instance.strip(".")
             if source_name == expected and source.module:
@@ -456,17 +496,16 @@ def _evaluate_crg_trace(
                 )
                 break
         trace_status = "legacy"
-    elif instance.clock_trace is None:
-        diagnostics = ("schema_version 3 instance has no requested clock trace",)
-    elif instance.clock_trace.clock_port != rule.clk_port:
-        trace_status = instance.clock_trace.status
+    elif trace is None:
+        diagnostics = (f"schema_version {inventory_schema_version} instance has no requested {role} trace",)
+    elif trace.clock_port != formal:
+        trace_status = trace.status
         diagnostics = (
-            f"inventory traced formal port {instance.clock_trace.clock_port!r}, "
-            f"but module rule requires {rule.clk_port!r}",
-            *instance.clock_trace.diagnostics,
+            f"inventory traced formal port {trace.clock_port!r}, "
+            f"but module rule requires {formal!r}",
+            *trace.diagnostics,
         )
     else:
-        trace = instance.clock_trace
         trace_status = trace.status
         diagnostics = trace.diagnostics
         modules = tuple(
@@ -505,7 +544,8 @@ def _evaluate_crg_trace(
 
     evaluation = CrgTraceEvaluation(
         instance=instance.full_name,
-        clock_port=rule.clk_port,
+        clock_port=formal,
+        trace_role=role,
         expected=expected,
         max_depth=config.crg_trace_max_depth,
         status=status,
@@ -520,7 +560,7 @@ def _evaluate_crg_trace(
         code = "CRG_SOURCE_NOT_FOUND"
         message = (
             f"{instance.full_name}: CRG_source was not found in the complete "
-            "upstream clock trace"
+            f"upstream {role} trace"
         )
     elif status == "depth_limited":
         code = "CRG_TRACE_DEPTH_LIMIT"
@@ -531,7 +571,7 @@ def _evaluate_crg_trace(
     else:
         code = "CRG_TRACE_UNAVAILABLE"
         message = (
-            f"{instance.full_name}: upstream clock trace evidence is unavailable"
+            f"{instance.full_name}: upstream {role} trace evidence is unavailable"
         )
     return evaluation, _row_finding(
         spec,
@@ -541,7 +581,7 @@ def _evaluate_crg_trace(
         instance=instance.full_name,
         expected=expected,
         actual={
-            "clock_port": rule.clk_port,
+            "clock_port": formal, "trace_role": role,
             "configured_max_depth": config.crg_trace_max_depth,
             "trace_status": trace_status,
             "reachable_modules": [module.as_dict() for module in modules],
@@ -550,82 +590,44 @@ def _evaluate_crg_trace(
     )
 
 
-def _check_row(
+def _select_item(
     spec: SpecRow,
-    inventory: Inventory,
+    query: str,
+    selector: str,
+    instances: tuple[ActualInstance, ...],
     config: RtlConfig,
-    module_rules: Mapping[str, ModuleRule],
     suffix: re.Pattern[str],
-) -> RowResult:
+) -> tuple[tuple[ActualInstance, ...], NearestNameMatch | None, list[Finding]]:
     findings: list[Finding] = []
-    rule = resolve_module_rule(spec.rs_module, module_rules)
-    findings.extend(_check_rs_cfg_en_label(spec, rule))
-
-    position = inventory.positions.get(spec.position)
-    if position is None or not position.found:
-        findings.append(
-            _row_finding(
-                spec,
-                "POSITION_NOT_FOUND",
-                f"RTL hierarchy position was not found: {spec.position}",
-                expected=spec.position,
-                actual=None,
+    matches, invalid_suffix = [], []
+    if selector == "RS_inst":
+        matches, invalid_suffix = _match_group(query, instances, suffix)
+    if not matches:
+        winner, nearest = _match_nearest_name(query, spec.rs_module, instances)
+        if winner is not None:
+            return (winner,), nearest, findings
+        if nearest.status == "ambiguous":
+            code = "RS_INST_AMBIGUOUS" if selector == "RS_inst" else "RS_ROUTE_AMBIGUOUS"
+            message = (
+                f"{nearest.tied_best_count} instances of {spec.rs_module!r} under {spec.position} "
+                f"tie at distance {nearest.ranked[0].distance} for {selector} {query!r}; "
+                "specify the exact local RS_inst or narrow position"
             )
-        )
-        return RowResult(
-            spec=spec,
-            instances=(),
-            findings=tuple(findings),
-            module_rule=rule,
-            route_match=RouteMatch("position_not_found") if not spec.rs_inst else None,
-        )
-
-    route_match = None
-    if spec.rs_inst:
-        matches, invalid_suffix = _match_group(spec, position.instances, suffix)
-    else:
-        winner, route_match = _match_route(spec, position.instances)
-        matches = [(winner, None)] if winner is not None else []
-        invalid_suffix = []
-        if winner is None:
-            if route_match.status == "ambiguous":
-                code = "RS_ROUTE_AMBIGUOUS"
-                message = (
-                    f"{route_match.tied_best_count} instances tie at distance "
-                    f"{route_match.ranked[0].distance} for RS_route {spec.rs_route!r}; "
-                    "refine RS_route, set RS_inst, or narrow position"
-                )
-            else:
-                code = "RS_ROUTE_NO_CANDIDATES"
-                message = (
-                    f"no instance of module {spec.rs_module!r} under {spec.position} "
-                    f"for RS_route {spec.rs_route!r}"
-                )
-            findings.append(_row_finding(
-                spec, code, message, expected=spec.rs_route, actual=route_match.as_dict()
-            ))
+        else:
+            code = "GROUP_NOT_FOUND" if selector == "RS_inst" else "RS_ROUTE_NO_CANDIDATES"
+            message = f"no instance of module {spec.rs_module!r} under {spec.position} for {selector} {query!r}"
+        findings.append(_row_finding(spec, code, message, expected=query, actual=nearest.as_dict()))
+        return (), nearest, findings
     for instance in invalid_suffix:
         findings.append(
             _row_finding(
                 spec,
                 "INSTANCE_SUFFIX_INVALID",
-                f"{instance.name}: suffix after prefix {spec.rs_inst!r} does not match configured pattern",
+                f"{instance.name}: suffix after prefix {query!r} does not match configured pattern",
                 severity="warning",
                 instance=instance.full_name,
                 expected=config.suffix_regex,
-                actual=instance.name[len(spec.rs_inst) :],
-            )
-        )
-
-    matched_instances = tuple(instance for instance, _ in matches)
-    if spec.rs_inst and not matched_instances:
-        findings.append(
-            _row_finding(
-                spec,
-                "GROUP_NOT_FOUND",
-                f"no instance matched RS_inst {spec.rs_inst!r} and the configured suffix rules",
-                expected={"RS_inst": spec.rs_inst, "step": spec.step},
-                actual=0,
+                actual=instance.name[len(query) :],
             )
         )
 
@@ -636,7 +638,7 @@ def _check_row(
             _row_finding(
                 spec,
                 "SUFFIX_TAG_MISMATCH",
-                "instances in one group use different suffix tags",
+                f"instances for RS_inst {query!r} use different suffix tags",
                 severity="warning",
                 expected="one common tag",
                 actual=sorted(tags),
@@ -653,14 +655,72 @@ def _check_row(
                 _row_finding(
                     spec,
                     "STAGE_INDEX_MISMATCH",
-                    "numeric stage indices are not the expected contiguous range",
+                    f"numeric stage indices for RS_inst {query!r} are not the expected contiguous range",
                     expected=expected_indices,
                     actual=sorted(set(indices)),
                 )
             )
 
+    return tuple(instance for instance, _ in matches), None, findings
+
+
+def _check_row(
+    spec: SpecRow,
+    inventory: Inventory,
+    config: RtlConfig,
+    module_rules: Mapping[str, ModuleRule],
+    suffix: re.Pattern[str],
+) -> RowResult:
+    rule = resolve_module_rule(spec.rs_module, module_rules)
+    findings = [*spec.blank_findings, *_check_rs_cfg_en_label(spec, rule)]
+    items = spec.rs_inst_items
+    is_list = len(items) > 1
+    position = inventory.positions.get(spec.position)
+    if position is None or not position.found:
+        findings.append(_row_finding(spec, "POSITION_NOT_FOUND",
+                                     f"RTL hierarchy position was not found: {spec.position}",
+                                     expected=spec.position))
+        return RowResult(
+            spec=spec, instances=(), findings=tuple(findings), module_rule=rule, suffix_regex=config.suffix_regex,
+            nearest_match=NearestNameMatch("position_not_found") if not items and spec.has_route else None,
+            item_matches=tuple(InstanceItemMatch(q, "not_run") for q in items) if is_list else (),
+        )
+
+    # Check suffix/index rules within each selector's group, but check a shared
+    # physical instance (and its dynamic step, ports and CRG trace) only once.
+    union: dict[str, ActualInstance] = {}
+    item_matches: list[InstanceItemMatch] = []
+    resolved: dict[str, InstanceItemMatch] = {}
+    nearest_match = None
+    if not items and not spec.has_route and not any(i.module == spec.rs_module for i in position.instances):
+        findings.append(_row_finding(spec, "RS_MODULE_NOT_FOUND",
+            f"{spec.position}: no instance of module {spec.rs_module!r} was found", expected=spec.rs_module))
+    target_active = "CRG_source" not in spec.ignored_fields
+    for query in items or ((spec.rs_route,) if spec.has_route else ()):
+        if query in resolved:
+            prior = resolved[query]
+            item_matches.append(InstanceItemMatch(query, prior.rule, prior.paths, 0, prior.nearest))
+            continue
+        members, nearest, diagnostics = _select_item(
+            spec, query, "RS_inst" if items else "RS_route", position.instances, config, suffix
+        )
+        findings.extend(diagnostics)
+        before = len(union)
+        for instance in members:
+            union.setdefault(instance.full_name, instance)
+        if is_list:
+            evidence = InstanceItemMatch(
+                query, RS_INST_FUZZY_RULE if nearest else RS_INST_GROUP_RULE,
+                tuple(i.full_name for i in members), len(union) - before, nearest,
+            )
+            resolved[query] = evidence
+            item_matches.append(evidence)
+        else:
+            nearest_match = nearest
+    matched_instances = tuple(union.values())
     step_evaluations: list[InstanceStepEvaluation] = []
     crg_evaluations: list[CrgTraceEvaluation] = []
+    source_signals: list[SourceSignalCheck] = []
     for instance in matched_instances:
         module_matches = instance.module == spec.rs_module
         if not module_matches:
@@ -686,7 +746,16 @@ def _check_row(
             evaluation, step_findings = _evaluate_step_instance(spec, instance, rule)
             step_evaluations.append(evaluation)
             findings.extend(step_findings)
-            findings.extend(_check_ports(spec, instance, config, rule))
+            findings.extend(_check_ports(spec, instance, rule))
+            for role in ("clk", "rst"):
+                if not target_active or skip_reason(getattr(spec, role)):
+                    continue
+                signal, finding = _source_signal(spec, instance, config, rule, inventory.schema_version, role)
+                source_signals.append(signal)
+                if finding:
+                    findings.append(finding)
+        if not target_active:
+            continue
         crg_evaluation, crg_finding = _evaluate_crg_trace(
             spec,
             instance,
@@ -698,7 +767,7 @@ def _check_row(
         if crg_finding is not None:
             findings.append(crg_finding)
 
-    if matched_instances:
+    if matched_instances and all(item.status == "matched" for item in item_matches):
         contributions = [item.contribution for item in step_evaluations]
         if any(value is None for value in contributions):
             findings.append(
@@ -749,7 +818,10 @@ def _check_row(
         module_rule=rule,
         step_evaluations=tuple(step_evaluations),
         crg_evaluations=tuple(crg_evaluations),
-        route_match=route_match,
+        source_signals=tuple(source_signals),
+        nearest_match=nearest_match,
+        item_matches=tuple(item_matches),
+        suffix_regex=config.suffix_regex,
     )
 
 
@@ -785,6 +857,9 @@ def check_specs(
         Finding(severity="warning", code="NPI_LOAD_PARTIAL", message=notice)
         for notice in inventory.notices
     )
+    if inventory.schema_version < 4 and any(r.source_signals for r in rows):
+        global_findings.append(Finding(severity="warning", code="SOURCE_INVENTORY_LEGACY",
+            message="Legacy inventory: clk/rst source signals were NOT verified. Recollect with the current NPI collector (inventory v4)."))
 
     owners_by_position: dict[str, dict[str, list[SpecRow]]] = {}
     for row in rows:

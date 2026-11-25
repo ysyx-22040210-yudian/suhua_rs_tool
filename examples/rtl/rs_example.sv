@@ -1,15 +1,25 @@
 module crg_core (
     input  logic ref_clk,
-    output logic clk_out
+    input  logic ref_rst_n,
+    output logic clk_out,
+    output logic reset_out
 );
     assign clk_out = ref_clk;
+    assign reset_out = ref_rst_n;
 endmodule
 
 module crg_aux (
     input  logic ref_clk,
-    output logic clk_out
+    input  logic ref_rst_n,
+    output logic clk_out,
+    output logic reset_out
 );
     assign clk_out = ref_clk;
+    assign reset_out = ref_rst_n;
+endmodule
+
+module reset_stage(input logic rst_n, output logic reset_out);
+    assign reset_out = rst_n;
 endmodule
 
 module clk_mux (
@@ -94,6 +104,7 @@ module tile (
     logic clk_core;
     logic clk_aux;
     logic clk_muxed;
+    logic rst_core, rst_aux, rst_rs, rst_ctrl;
     logic stage_0;
     logic stage_1;
     logic stage_2;
@@ -104,13 +115,15 @@ module tile (
 
     crg_core u_crg (
         .ref_clk (ref_clk),
-        .clk_out (clk_core)
+        .clk_out (clk_core), .ref_rst_n(rst_n), .reset_out(rst_core)
     );
 
     crg_aux u_aux_crg (
         .ref_clk (ref_clk),
-        .clk_out (clk_aux)
+        .clk_out (clk_aux), .ref_rst_n(rst_n), .reset_out(rst_aux)
     );
+    reset_stage u_reset (.rst_n(rst_core), .reset_out(rst_rs));
+    reset_stage u_ctrl_reset (.rst_n(rst_aux), .reset_out(rst_ctrl));
 
     // The positive CRG trace is deliberately multi-level and branched:
     // RS -> u_occ -> u_clk_mux -> {u_crg, u_aux_crg}.
@@ -134,7 +147,7 @@ module tile (
         .rs_mode   (1'b1)
     ) AAAA_BBB_C0 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (data_in),
         .q   (stage_0)
     );
@@ -144,7 +157,7 @@ module tile (
         .rs_mode   (1'b1)
     ) AAAA_BBB_C1 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (stage_0),
         .q   (stage_1)
     );
@@ -154,7 +167,7 @@ module tile (
         .rs_mode   (1'b0)
     ) AAAA_BBB_C2 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (stage_1),
         .q   (stage_2)
     );
@@ -164,7 +177,7 @@ module tile (
         .rs_mode   (1'b1)
     ) AAAA_BBB_C3 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (stage_2),
         .q   (stage_3)
     );
@@ -174,7 +187,7 @@ module tile (
         .rs_mode   (1'b1)
     ) AAAA_BBB_C4 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (stage_3),
         .q   (stage_4)
     );
@@ -184,7 +197,7 @@ module tile (
         .rs_mode   (1'b1)
     ) AAAA_BBB_C5 (
         .clk (clk_rs),
-        .rst (rst_n),
+        .rst (rst_rs),
         .d   (stage_4),
         .q   (data_out)
     );
@@ -194,7 +207,7 @@ module tile (
         .rs_mode   (1'b1)
     ) CTRL_RS_D0 (
         .clk (clk_aux),
-        .rst (rst_n),
+        .rst (rst_ctrl),
         .d   (data_in),
         .q   (ctrl_out)
     );
@@ -204,7 +217,7 @@ module tile (
         .RS_CRG_EN (1'b0)
     ) CUSTOM_RS (
         .clock_i  (clk_rs),
-        .reset_ni (rst_n),
+        .reset_ni (rst_rs),
         .d        (data_in),
         .q        (custom_stage)
     );

@@ -1,5 +1,28 @@
 # RTL 打拍例化检查工具测试指南
 
+### 0.13.0：空字段、NA 与整行跳过
+
+从仓库根目录、在已能运行 Tk 的图形终端执行以下命令。第二个测试会打开真实窗口，依次点击「验证 Excel」「运行 RTL 检查」并读取 GUI 和导出报告。默认使用离线样例；设置下方三个环境变量后执行同一命令，可改用真实 Verdi KDB。
+
+```bash
+python3 -B -m unittest -v tests.test_field_policy
+python3 -B -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_blank_and_na_field_policy_in_mapped_window
+```
+
+在线输入：`RSCHECK_ROUTE_COLLECTOR` 为已编译的 collector 可执行文件，`RSCHECK_ROUTE_KDB` 为项目示例 RTL 的 `*.elab++` 目录；如需显式设置动态库目录，可选 `RSCHECK_ROUTE_NPI_LIB`。专项 GUI 用例验证：
+
+| 输入 | 应看到的结果 |
+|---|---|
+| 一行 `RS_module=NA`；另一行 `clk` 空、`rst=rst_core`、`step=0` | 只检查后者，按原行号显示 1 个 clk 空值警告；复位源匹配，有效拍数为 0 |
+| 同一组改填 `clk=clk_rs`、`rst=NA` | 只报 `CLK_CONNECTION_MISMATCH`，不报 rst 缺失或空值警告 |
+| 仅保留 `RS_module=NA` 的行 | GUI 显示 `SKIPPED`、通过 0；不启动 NPI，不覆盖已有 inventory |
+
+本版实测：Linux VM 的 396 项回归全部通过，无跳过；使用真实 `*.elab++` 运行上述专项可见 GUI 用例，连续 5 轮通过。另用 `scripts/test_vm_verdi_gui.sh` 重编 collector 并生成 clean/partial 两套库，全流程通过；本次离线 GUI 负载为 1,000 行，稳定性为 5 轮。Windows 本地回归共 396 项，其中 49 项按环境条件跳过，其余通过。
+
+**时钟、复位源端验证。** 在仓库根目录运行 `python3 -m unittest -v tests.test_source_signals tests.test_rs_route_gui.RouteGuiTests.test_source_signals_at_crg_in_mapped_window`。窗口默认读取随库附带的 v4 inventory；设置 `RSCHECK_ROUTE_KDB` 和 `RSCHECK_ROUTE_COLLECTOR`（可选 `RSCHECK_ROUTE_NPI_LIB`）即可使用真实 `.elab++`。在同一行先填 `clk_core/rst_core` 应 PASS，再填 RS 侧 `clk_rs/rst_rs` 应看到两个独立错误；GUI 中分别核对时钟 3 层和复位 2 层的输出及实际连线。
+
+0.12.0 的 VM 实测：386 项回归全部通过，无跳过；独立的源端 GUI 正反例连续通过 3 轮。完整端到端脚本重新构建 collector，验证了 clean/partial KDB、同名兄弟层次隔离、自定义复位口、无复位口以及离线 GUI 负载。本次离线负载为 1,000 行，稳定性检查为 5 轮（不是脚本默认的 10,000 行 / 100 轮）。
+
 本文档给出从本地单元测试、`rscheck` 自带 Tkinter GUI 可见 smoke 和压力测试，到 CentOS/Verdi 在线 NPI 检查的完整验证流程。除非某一节明确说明可以独立执行，Linux 在线测试各节应在同一个 shell 中按顺序执行，以复用 `PROJECT_ROOT`、`TEST_ROOT`、`ELAB_DB` 等变量。
 
 > **生产契约：在线检查的设计输入只能是 `--elab-db <Verdi elaborated KDB 目录>`。**
@@ -7,6 +30,79 @@
 > `-- -f ...`、`-- -sv ...`、`-- -lib ...` 及其他任意 NPI/Verdi 参数透传均不受支持，并且必须返回退出码 `2`。`vericom` 生成的 `work.lib++` 是编译库，不是 elaborated KDB，也不能作为 `--elab-db` 输入。生产 RTL 应由已有编译流程生成 elab 库，本工具不负责在检查过程中重新编译 RTL。
 
 ## 1. 测试矩阵
+
+**人工复核 `RS_inst` / `RS_route`。** 在仓库根目录执行。第一条操作实际 Tk 窗口，核对「匹配明细」和复制按钮；默认使用示例 inventory，在设置 `RSCHECK_ROUTE_COLLECTOR`、`RSCHECK_ROUTE_KDB` 的 VM 上则使用真实 `.elab++`。第二条测试前缀组、重叠去重、无候选、层次不存在、并列超过上限、旧报告和各输出的一致性；第三条生成可直接阅读的离线示例。
+
+```bash
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_manual_match_details_in_mapped_window
+python3 -m unittest -v tests.test_match_review
+python3 -m rscheck check --excel examples/specs_route.csv --config config/rscheck.example.json --inventory examples/inventory.json --match-report output/match-details.txt --csv-report output/match-details.csv
+```
+
+示例 `CTRL_RS_DO` 应从 `top.u_tile` 下 7 个 `rs_pipe` 候选中唯一选中 `top.u_tile.CTRL_RS_D0`（距离 1，贡献 1 拍）。GUI 用例还验证 6 个并列者全部列为未选、同一物理实例不重复计拍，以及验证 Excel 时不伪造选中结果。
+
+VM 实测：真实 Tk 和 Verdi `.elab++` 的匹配明细专项连续 3 轮通过；CLI 导出的匹配说明与 GUI 结果一致；VM 全量回归 378 项通过，无跳过。
+
+**分号、反斜杠加实际换行。** 下列用例打开工具的 Tk 窗口，输入与[续行示例](USAGE.md#在一个-rs_inst-单元格填写多个名字)相同的单元格。预期「验证 Excel」恰好提取两项，RTL 检查选中 `top.u_tile.AAAA_BBB_C3`、`top.u_tile.AAAA_BBB_C4`，有效拍数为 2，不会对反斜杠尝试模糊匹配。已设置下文的 `RSCHECK_ROUTE_COLLECTOR` 和 `RSCHECK_ROUTE_KDB` 时使用真实 `.elab++`，否则使用示例 inventory。
+
+```bash
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_semicolon_backslash_newline_in_mapped_window
+```
+
+**逐项模糊匹配。** 以下专项会打开工具自己的 GUI，在同一单元格里分别测试「一项直接命中、一项模糊」「两项都模糊」「第一项并列、第二项仍模糊命中」。在已设置 `RSCHECK_ROUTE_COLLECTOR` 和 `RSCHECK_ROUTE_KDB` 的 VM 终端运行即使用真实 Verdi `.elab++`，不设置时使用示例 inventory。
+
+```bash
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_multi_inst_fuzzy_matching_in_mapped_window
+```
+
+预期：两项都模糊时，`AAAA_BBB_X1`、`AAAA_BBB_X2` 分别选中 `top.u_tile.AAAA_BBB_C1`、`top.u_tile.AAAA_BBB_C2`，GUI 显示「2 项模糊命中」，有效拍数为 1。第一项改成并列的 `AAAA_BBB_X`，整行 FAIL、拍数未确定；第二项仍选中 `C2`，不采用该行另填的 `RS_route`。
+
+**同一格内换行。** [换行样表](../examples/specs_multiline_inst.xlsx)的三条规格分别用格内换行、中文分号加空行、`CHAR(10)` 公式分隔。以下命令会打开工具自己的 Tk 窗口并操作「验证 Excel」和「运行 RTL 检查」。预期仍是三条规格，每格各提取两项，有效拍数分别为 **1、2、1**；第三格两项命中同一实例，只计一次。默认使用离线 inventory；设置下文的 `RSCHECK_ROUTE_COLLECTOR` 和 `RSCHECK_ROUTE_KDB` 后，同一命令会使用真实 `.elab++`。
+
+```bash
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_multiline_rs_inst_in_mapped_window
+```
+
+**一行填写多个例化名。** 在仓库根目录运行以下命令。第一条直接解析样表并输出原字符串与 `RS_inst_items`；第二条核对分项诊断和去重结果；第三条会在有 Tk 显示的设备上打开实际 GUI，先验证样表，再运行检查，并验证「一项成功、另一项并列」的反例。
+
+```bash
+python3 -m rscheck validate --excel examples/specs_multi_inst.xlsx --config config/rscheck.example.json --json
+python3 -m rscheck check --excel examples/specs_multi_inst.xlsx --config config/rscheck.example.json --inventory examples/inventory.json --json-report output/multi-inst.json
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_multi_inst_cell_in_mapped_window
+```
+
+预期三行物理实例数依次为 **2、2、1**，有效拍数为 **1、2、1**，全部 PASS。第一行用空格分开精确名 C0 和模糊名 X2；第二行用逗号和冒号连续分隔；第三行用顿号分开的两项指向同一实例。窗口用例还会把 Tab、逗号、顿号、冒号混在同一个公式缓存字符串里，验证仅得到两项，并在「匹配明细」核对精确与模糊命中的路径。仅含分隔符时，验证改用整串 `RS_route`（含冒号和空格）。
+
+第三条命令默认离线；设置 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后使用真实 elaborated KDB。`python3 -m unittest -v tests.test_rs_inst_list` 还覆盖转义标识符、行尾反斜杠、引号内含分隔符的 CSV/TSV、公式缓存、重叠去重和旧报告读取。
+
+本次 VM 验证：使用真实 Tk 窗口和 Verdi `.elab++`，混合分隔符与反斜杠续行两项窗口测试连续通过 3 轮；在线 CLI 检查上述样表为 3 行 PASS、0 错误、0 警告。VM 全量回归 379 项通过，无跳过。
+
+**非空 `RS_inst` 的模糊回退。** 在仓库根目录执行。第一条验证完整名/前缀组优先、模糊选中的单个实例仍按 RTL 参数计拍、同层同模块限定、并列拒选及 JSON/CSV 诊断。第二条实际启动 GUI，分别跑唯一命中和最近并列两个场景：
+
+```bash
+python3 -m unittest -v tests.test_rs_inst_fallback
+python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_rs_inst_fuzzy_fallback_in_mapped_window
+```
+
+默认用自带的离线 inventory；在有显示的 VM 上配置下文的 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 后则使用真实 elaborated KDB。预期：`AAAA_BBB` 前缀组仍为 5 拍；`RS_inst=CTRL_RS_DO` 唯一选中 `top.u_tile.CTRL_RS_D0`（距离 1）；改成 `AAAA_BBB_X` 时有六个并列，结果 FAIL，`selected=null`，即使填有 `RS_route` 也不参与。
+
+本次在 VM 上用真实 Tk 窗口和示例 `.elab++` 验证：全量 Python 回归 352 项通过、无跳过；另连续 5 轮运行上述 GUI 专项，每轮均核对唯一命中和六路并列两个结果。
+
+**单独复现公式规格表。** 在仓库根目录运行（不需要安装 Office）：
+
+```bash
+python -m rscheck validate --excel examples/specs_formulas.xlsx --config config/rscheck.example.json --json
+python -m rscheck check --excel examples/specs_formulas.xlsx --config config/rscheck.example.json --inventory examples/inventory.json --match-details
+python -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_validate_then_check_formula_workbook_in_mapped_window
+```
+
+前两条读取 15 个已保存的公式结果。两行实测分别为 `5` 拍、`1` 拍，检查结果为 PASS、0 错误、2 个空值警告：第 2 行的 `RS_route` 为空；第 3 行的 `RS_inst` 公式算出空字符串，因此用该行的 `RS_route` 选实例。公式缓存提示写到 stderr，不影响第一条命令的 JSON。
+
+第三条在有 Tk 显示的设备上会打开真实窗口，依次执行“验证 Excel”和“运行 RTL 检查”。在「匹配明细」可以对照 `RS_Check!C2` 的公式结果 `AAAA_BBB` 及选中的前缀组，也能看到 `RS_Check!C3` 的空结果和实际使用的 route。默认使用离线 inventory；设置 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后，同一条 GUI 用例改用真实 Verdi elaborated KDB。
+
+手动负例：复制样表，在副本的 `RS_Check!E2` 输入 `=1/0`，重新计算、保存后再验证。应得到工作簿错误，包含 `RS_Check!E2 (step)` 和 `#DIV/0!`，而不是 RTL 的拍数不符。无缓存的脚本生成文件、空字符串与真实数值 0 的区别，以及自定义列号由 `python -m unittest -v tests.test_excel_reader` 覆盖。
+
+若要验证公式不依赖默认列，运行 `python -m unittest -v tests.test_rs_inst_list`：其中一个用例把 `RS_inst` 映射到 AA 列，检查 `.xlsm` 的公式来源显示为 `AA2`，并对结果中的多个名字分别匹配；另一个用例验证共享公式各自采用所在行的缓存，区分文本 `NA` 和空字符串。上文的换行样表和 GUI 用例还验证，若公式给出的两个名字命中同一条 RTL 路径，只计一个实例。
 
 **单独复现 RS_route。** 在仓库根目录运行以下命令。第一条验证唯一最近、精确同名、同层/同模块过滤、并列、无候选、旧配置兼容和 JSON/CSV 证据。第二条会打开实际 Tk 窗口，通过“运行 RTL 检查”按钮分别运行成功与并列失败的样例，并读取用户在结果表和证据区看到的内容。无显示环境时离线窗口用例会跳过；在线门禁要求真实窗口，无法打开时测试失败。
 
@@ -37,7 +133,7 @@ RS_route 专项复测记录：CentOS 7、Python 3.11、Tk 8.6、Verdi O-2018.09-
 | R8 | Linux + X11/Xwayland + Tk | Excel/internal `RS_CFG_EN=NA` 逐行豁免 GUI 专项 | `0` | 默认 20 轮；RTL `RS_CRG_EN=1` 仍不产生门控 finding，其他 module/step/clk/rst 检查继续且整行 PASS |
 | R9 | Linux + X11/Xwayland + Tk | CRG_source 简称映射 GUI/JSON/CSV 专项 | `0` | 默认 20 轮；alias+full 保留，三层 witness 精确命中，`crg-source-check=pass trace-depth=3` |
 | R10 | Linux + Verdi/NPI + Tk | CRG trace 深度上限 GUI 在线压测 | `0` | 默认 20 轮；最大深度 2 时六个多层实例产生 6 个 `CRG_TRACE_DEPTH_LIMIT` warning，direct depth 1 分支仍 PASS，行和 CLI 仍通过 |
-| R11 | Linux + Verdi/NPI + Tk | Position 原始路径正则发现与可见候选选择 | `0` | clean KDB 覆盖精确双匹配、结果上限截断和零匹配；partial KDB 保留 `NPI_LOAD_PARTIAL`；GUI 默认 20 轮选中 `top.u_tile` 且不自动改简称、数据库或 dirty 状态 |
+| R11 | Linux + Verdi/NPI + Tk | 两套映射的 DUT 树与完整路径正则 | `0` | 默认各 20 轮：Position 选 `top.u_tile`，CRG_source 选 `top.u_tile.u_crg`；先展开原树，再正则筛选；两套简称、数据库和 dirty 状态均不变。另测零匹配、截断和 partial KDB。 |
 | C1 | Linux + Verdi/NPI | C++ NPI collector 构建 | `0` | 生成可执行文件，`libNPI.so`/`libnpiL1.so` 均可解析；Language Model 与 L1 fallback 合并出全部 formal ports 和 Netlist 漏失的 trace input 分支 |
 | K1 | Linux + Verdi | `vericom` 编译示例 RTL | `0` | 生成 `work.lib++` |
 | K2 | Linux + Verdi | `elabcom` 生成测试 KDB | `0` | 生成 `kdb.elab++` 目录 |
@@ -124,7 +220,7 @@ python -B -m unittest -v tests.test_gui_studio
 
 用例在真实控件上核对：最小窗口下六个页面的导航和固定动作栏；切换数据源或折叠高级设置后参数不丢失，运行时可取消；只看问题时能查看并列候选、全局警告，再次运行不会残留旧证据；仅验证 Excel 不会显示成已验证 RTL；含 `:`、`：`、`::` 的 `RS_route` 在结果表、摘要和 JSON 中保持原样。圆角主题另测实际边缘像素、圆角资源复用、数字框箭头点击与键盘步进、焦点顺序、空格激活及禁用按钮不执行。若日志显示 `skipped`（无 Tk / 显示会话），不算通过可见窗口验收。
 
-窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查十项列号输入、在线/离线数据源、报告路径和“导入/加载/导出”等操作按钮无重叠，并逐一检查六个页签：“检查配置”“模块规则库”“Position 映射库”“CRG Source映射库”“检查结果”“运行日志”。在两套映射页分别确认 `tile_core -> top.u_tile` 和 CRG_source 简称到完整 RTL 路径，并用临时配置完成新建、修改、保存、重载和删除；Position 完整路径编辑区还应显示“从 Verdi 选择”，它只在在线 NPI 模式下根据当前 collector/KDB 查询完整 hierarchy。输入 Python 正则后候选表应显示完整路径、模块定义和 scope 类型；双击或点击“使用所选路径”只回填完整路径，不改变简称，也不自动修改或保存映射。规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode` 和 `clk_port=clk/rst_port=rst`。新建规则时把两个端口输入留空，应保存为 `clk/rst_n`。最后修改 GUI Excel 设置和三个内存数据库，导出完整配置副本并重新导入，确认六个根对象及所有端口规则完整恢复。截图必须基于当前版本重新验收，且不提交仓库。
+窗口出现后手工缩放到允许的最小尺寸 `980x680`，检查十项列号输入、数据源、报告路径和配置按钮无重叠，并逐一检查“检查配置”“模块规则库”“Position 映射库”“CRG Source映射库”“检查结果”“运行日志”。在两套映射页分别确认 `tile_core -> top.u_tile` 和 CRG_source 简称到完整 RTL 路径，并用临时配置完成新建、修改、保存、重载和删除。两页的“选择 DUT 层次…”都应能在在线模式下展开树及正则筛选；只回填当前路径，不改变简称，不自动保存。规则页同样验收 `rs_pipe` 的 `has_rs_cfg_en=true`、`step_parameters=rs_mode` 和 `clk_port=clk/rst_port=rst`。新建规则时把两个端口输入留空，应保存为 `clk/rst_n`。最后修改 GUI Excel 设置和三个内存数据库，导出完整配置副本并重新导入，确认六个根对象及所有端口规则完整恢复。截图必须基于当前版本重新验收，且不提交仓库。
 
 从仓库根目录可直接复制运行可见 GUI smoke。脚本使用临时配置验证 position、CRG Source 映射和模块规则的新建/保存/重载/删除，并把当前 Excel/列号、完整 `rtl`、包含未单独保存修改的三个数据库导出为副本后重新导入；它不会修改仓库配置，成功后把“Position 映射库”页保留 10 秒：
 
@@ -306,7 +402,7 @@ if ($Negative.summary.passed -ne $false -or $Negative.summary.failed_rows -ne 1)
 | step parameter 缺失 | `STEP_PARAMETER_MISSING` + `STEP_CALCULATION_UNRESOLVED` |
 | step parameter 为 `null`、X/Z、`?` 或非法值 | `STEP_PARAMETER_VALUE_UNRESOLVED` + `STEP_CALCULATION_UNRESOLVED` |
 | 全部实例贡献 0，Excel `step=0` | PASS |
-| 没有物理匹配实例，Excel `step=0` | `GROUP_NOT_FOUND`，不能 PASS |
+| 非空 `RS_inst` 无匹配组，该层次也没有同模块候选，Excel `step=0` | `GROUP_NOT_FOUND`，不能 PASS |
 | `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 为 0，Excel/internal `RS_CFG_EN` 为 `假门控` | PASS |
 | `has_rs_cfg_en=true`，RTL `RS_CRG_EN` 缺失/非零/未知 | 对应兼容 code `MISSING`/`VALUE_MISMATCH`/`VALUE_UNRESOLVED` |
 | `has_rs_cfg_en=true`，实例只有同名 RTL `RS_CFG_EN=0`、没有 `RS_CRG_EN` | `RS_CFG_EN_PARAMETER_MISSING`；不得回退匹配旧 parameter 名 |
@@ -432,7 +528,7 @@ cd "$PROJECT_ROOT"
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=validate case=positive iterations=20 window=mapped ... header-map=column-index strict-header=false position-map=tile_core->top.u_tile config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules
 ```
 
-2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.11.0` 设备门禁，必须在目标设备重跑并确认六根 config-io marker，不能沿用旧结果。
+2026-07-24 的 20 轮结果仅是动态 step 之前的历史基线；`0.7.1` fresh 验收也早于完整配置导入/导出。若把本节 20 轮 validate-only 作为当前 `0.12.0` 设备门禁，必须在目标设备重跑并确认六根 config-io marker，不能沿用旧结果。
 
 离线正例会真正创建可见 Tk 窗口、触发“运行 RTL 检查”并更新结果 Treeview。smoke 内部要求自己的 Tk 窗口处于 mapped/viewable 状态，并输出 Tk client 的 `window_id`；下面连续运行 100 轮，全部完成后保留结果页 10 秒供人工查看。外部证据把这个 ID 交给 `xwininfo -tree -stats`，要求 client 为 `IsViewable`，并在同一 X11 树中找到标题为 `RTL RS Check GUI Smoke` 的 Tk wrapper。该方式不依赖 EWMH `_NET_CLIENT_LIST` 或旧 Tk 缺失的 `_NET_WM_PID`：
 
@@ -489,7 +585,7 @@ grep -F 'position-map=tile_core->top.u_tile npi-positions=full-path-only' "$POS_
 )
 ```
 
-每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是历史性能基线；当前 `0.11.0` 必须重新运行并出现六根 config-io 和 report-v4/inventory-v3 marker。
+每轮都会解析示例 Excel 的 `tile_core`，要求 GUI/report 中完整路径为 `top.u_tile`、`position_alias=tile_core`，并要求 inventory positions 只有 `top.u_tile`。`0.7.1` 的 100 轮和 10,000 行结果是历史性能基线；当前 `0.12.0` 必须重新运行并出现六根 config-io 和 report-v4/inventory-v4 marker。
 
 `has_rs_cfg_en=false` 的 GUI 专项故意在 Excel/internal `RS_CFG_EN` 中写入任意非标准文本，并让离线 inventory 中的实例不含 `RS_CRG_EN`。下面默认连续运行 20 轮并保留“检查结果”页；每轮都必须 PASS，GUI/JSON report 必须保留解析后的 Excel 文本，同时不得产生 `RS_CFG_EN_LABEL_MISMATCH` 或其他 finding：
 
@@ -513,7 +609,7 @@ grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,
 )
 ```
 
-一键 VM 脚本把相同专项写入 `offline_gui_rs_cfg_dontcare.log`，默认轮次由 `GUI_RS_CFG_DONTCARE_ITERATIONS=20` 控制；该变量必须是十进制正整数。专项仍执行完整配置导入/导出、report v4/inventory v3 和结果页可见性门禁，而不是只调用 checker。
+一键 VM 脚本把相同专项写入 `offline_gui_rs_cfg_dontcare.log`，默认轮次由 `GUI_RS_CFG_DONTCARE_ITERATIONS=20` 控制；该变量必须是十进制正整数。专项仍执行完整配置导入/导出、report v4/inventory v4 和结果页可见性门禁，而不是只调用 checker。
 
 精确大写 `NA` 的逐行豁免使用另一个可见离线 GUI 专项。解析器先去除首尾空白，因此 ` NA ` 会规范化为 `NA`；`na`、`N/A` 和 `Na` 均不等价。该夹具故意保留 `RTL RS_CRG_EN=1`，用来证明只跳过本行全部 `RS_CFG_EN` 标签和 `RS_CRG_EN` 参数存在性/值检查；`RS_module`、实例分组、动态 `step`、clk 和 rst 仍必须执行并通过：
 
@@ -533,7 +629,7 @@ RS_CFG_NA_GUI_LOG="$(mktemp /tmp/rscheck_gui_rs_cfg_na.XXXXXX.log)"
 grep -F 'mode=offline case=rs-cfg-na iterations=20 window=mapped' "$RS_CFG_NA_GUI_LOG"
 grep -F 'rs-cfg-en=NA check=skipped rtl-rs-crg-en=1 findings=none' "$RS_CFG_NA_GUI_LOG"
 grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules' "$RS_CFG_NA_GUI_LOG"
-grep -F 'schemas=report-v4/inventory-v3' "$RS_CFG_NA_GUI_LOG"
+grep -F 'schemas=report-v4/inventory-v4' "$RS_CFG_NA_GUI_LOG"
 )
 ```
 
@@ -557,7 +653,7 @@ CRG_SOURCE_MAPPING_GUI_LOG="$(mktemp /tmp/rscheck_gui_crg_source_mapping.XXXXXX.
 grep -F 'state=PASS rows=行数 1 errors=错误 0 warnings=警告 0 mode=offline case=crg-source-mapping iterations=20' "$CRG_SOURCE_MAPPING_GUI_LOG"
 grep -F 'crg-source-map=core_clock_source->top.u_soc.u_crg_core gui-json-csv=alias+full crg-source-check=pass trace-depth=3 findings=none' "$CRG_SOURCE_MAPPING_GUI_LOG"
 grep -F 'config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules' "$CRG_SOURCE_MAPPING_GUI_LOG"
-grep -F 'schemas=report-v4/inventory-v3' "$CRG_SOURCE_MAPPING_GUI_LOG"
+grep -F 'schemas=report-v4/inventory-v4' "$CRG_SOURCE_MAPPING_GUI_LOG"
 )
 ```
 
@@ -611,7 +707,7 @@ grep -F 'GUI_LOAD wall=' "$LOAD_GUI_LOG"
 )
 ```
 
-2026-07-24 九列版本的性能数字只是历史数据，不是当前 `0.11.0` 或其他设备的硬门槛。需要本机基线时应重跑并确认 report-v4/inventory-v3 与六根 config-io marker。
+2026-07-24 九列版本的性能数字只是历史数据，不是当前 `0.12.0` 或其他设备的硬门槛。需要本机基线时应重跑并确认 report-v4/inventory-v4 与六根 config-io marker。
 
 取消启动竞态的自动回归可单独重复 100 轮。它覆盖“用户在后台 CLI 尚未完成启动时点击取消”的窗口，确保取消请求不会丢失：
 
@@ -758,9 +854,9 @@ $ELAB_ROOT/kdb.elab++       # elabcom elaborated KDB，可传给 --elab-db
 
 `--elab-db` 不强制目录名必须以 `.elab++` 结尾，因为 `elabcom -elab <path>` 允许自定义名称；但该路径必须存在且必须是目录。collector 调用 `npi_load_design -elab <path>`；返回 0 时还会按手册示例枚举 top。存在可查询 top 才继续，并由后续 position、实例、formal port、parameter 和 CRG trace 取证；无 top 才退出 11。CRG trace 不完整只产生专用 warning，CRG_source 路径不加入 collector positions。
 
-### 7.1 Position 原始路径正则发现与可见 GUI 选择
+### 7.1 Position / CRG_source 的 DUT 层次树和正则筛选
 
-该查询用于给 Position 映射库选择右侧“原始全路径”，不改变 Excel 简写解析规则。它只接受当前 collector 和 elaborated KDB，不读取 Excel/config，也不接受 filelist、RTL 或 `work.lib++`。`--regex` 是针对完整 hierarchy path 的 Python 正则，使用 `re.search`：普通文本天然是包含式模糊匹配，`(?i)` 可忽略大小写。默认最多返回 500 条，允许范围为 `1..5000`；`truncated=true` 时必须收窄正则后再选择，不能把当前候选视为完整集合。
+两个映射库的“选择 DUT 层次…”均先显示可展开的离散顶层，不需要查询词；再按需要对完整路径输入 Python 正则。它只使用当前 collector 和 elaborated KDB，不需要 Excel，也不接受 filelist、RTL 或 `work.lib++`。以下 CLI 测试覆盖正则的包含、截断和零匹配；`--limit` 只限制筛选结果，不限制 GUI 未过滤树。另可运行 `python -m unittest -v tests.test_hierarchy_tree`，验证同一会话只采集一次、多顶层、generate/转义名、翻页到第 620 个子节点，以及无效/空结果不写回路径。
 
 完成第 5～7 节后，可直接复制下面命令验证 clean KDB 的精确匹配、显示上限和零匹配：
 
@@ -929,7 +1025,7 @@ with open(sys.argv[3], "r", encoding="utf-8-sig", newline="") as stream:
 
 if report.get("schema_version") != 4:
     raise SystemExit("report must use schema_version 4")
-if inventory.get("schema_version") != 3:
+if inventory.get("schema_version") != 4:
     raise SystemExit("inventory must use schema_version 3")
 
 positions = inventory.get("positions")
@@ -1086,11 +1182,11 @@ if ctrl_names != ["CTRL_RS_D0"]:
 ctrl_step = ctrl_row["step_check"]
 if ctrl_step["physical_instances"] != 1 or ctrl_step["effective_step"] != 1:
     raise SystemExit("empty-suffix instance lost normal step evaluation: {!r}".format(ctrl_step))
-print("positive multi-level CRG trace inventory-v3/report-v4 evidence OK:", actual)
+print("positive multi-level CRG trace inventory-v4/report-v4 evidence OK:", actual)
 PY
 ```
 
-预期输出 `positive multi-level CRG trace inventory-v3/report-v4 evidence OK`，Python 返回 `0`。这证明首组从 RS 经过 `u_occ` depth 1、`u_clk_mux` depth 2，分支到 `u_crg`/`u_aux_crg` depth 3，目标分支任一命中即可通过；同时证明 `clk_occ.clk/rst_n` 没有被展开为追踪分支。第二组 `u_aux_crg` 为 direct depth 1。两种 Excel 简写仍保留 alias+full，inventory positions 只包含 position。
+预期输出 `positive multi-level CRG trace inventory-v4/report-v4 evidence OK`，Python 返回 `0`。这证明首组从 RS 经过 `u_occ` depth 1、`u_clk_mux` depth 2，分支到 `u_crg`/`u_aux_crg` depth 3，目标分支任一命中即可通过；同时证明 `clk_occ.clk/rst_n` 没有被展开为追踪分支。第二组 `u_aux_crg` 为 direct depth 1。两种 Excel 简写仍保留 alias+full，inventory positions 只包含 position。
 
 完整 VM 脚本还会基于同一 KDB 临时生成一行 `rs_custom/CUSTOM_RS` 规格和模块规则 `clk_port=clock_i`、`rst_port=reset_ni`，并故意把 `CRG_source` 写成错误值。clk/rst 和其他硬检查仍必须 PASS，CRG 子检查产生一个 `CRG_SOURCE_NOT_FOUND` warning；CLI 仍返回 `0`：
 
@@ -1208,7 +1304,7 @@ grep -F 'contract=elab-only' "$ONLINE_GUI_LOG"
 )
 ```
 
-成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`contract=elab-only` 和 `schemas=report-v4/inventory-v3`。运行日志中的命令必须包含 `--collector`、`--elab-db` 和 `--crg-trace-max-depth 16`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS、0 warning。smoke 内部必须断言 inventory v3 的多层 `clock_trace` 和 report v4 的 matched depth/path；首组贡献为 `[1,1,0,1,1,1]`。
+成功标准是 `wait` 返回 `0`；`xwininfo` 显示 `IsViewable` 和有效 Width/Height；最后一行 `GUI_SMOKE_PASS` 带 `window=mapped`、`contract=elab-only` 和 `schemas=report-v4/inventory-v4`。运行日志中的命令必须包含 `--collector`、`--elab-db` 和 `--crg-trace-max-depth 16`，不得包含 inventory、filelist、top 或 passthrough。每轮都必须加载同一个 fresh elaborated KDB；最终结果为 2 行 PASS、0 warning。smoke 内部必须断言 inventory v3 的多层 `clock_trace` 和 report v4 的 matched depth/path；首组贡献为 `[1,1,0,1,1,1]`。
 
 在线深度上限 GUI 专项使用同一 KDB，把最大模块跳数设为 `2` 并连续运行 20 轮：
 
@@ -1231,7 +1327,7 @@ cd "$PROJECT_ROOT"
 ```text
 mode=online case=crg-depth-limit iterations=20
 crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6
-schemas=report-v4/inventory-v3
+schemas=report-v4/inventory-v4
 ```
 
 一键 VM 脚本用正整数 `GUI_CRG_TRACE_DEPTH_ITERATIONS` 控制轮数，默认 `20`，并把专项保存为 `online_gui_crg_trace_depth_limit.log`。
@@ -1534,7 +1630,7 @@ work_lib_as_elab.log
 - 若 `position_alias` 为空，说明 Excel 值未命中映射而被按完整路径直通；检查简写大小写和配置文件是否为当前 GUI/CLI 实际加载的文件。
 - 确认解析后的 `top.u_tile` 与展开后的完整 NPI 层次一致。
 - 确认没有拿到其他工程或旧版本 RTL 的 KDB。
-- 不确定完整路径时，在在线模式点击“从 Verdi 选择”并先用局部实例名做包含式查询；零匹配不是 collector 失败，应核对 KDB/top、大小写和正则转义。结果显示“已截断”时收窄正则，不能从不完整集合盲选。
+- 不确定完整路径时，在在线模式点击“选择 DUT 层次…”逐层浏览，也可用局部实例名过滤。零匹配不是 collector 失败，应核对 KDB/top、大小写和正则转义。结果截断时可收窄正则，或清除筛选后从父层浏览。
 - 候选窗口报 `work.lib++ is not an elaborated KDB` 时，应改选 `elabcom -elab` 生成的 KDB；该查询不接受 filelist 或 RTL 源码。
 
 ### 14.9 `CLK_PORT_MISSING` / `RST_PORT_MISSING` 或 CRG 值不同
@@ -1555,7 +1651,7 @@ work_lib_as_elab.log
 - `RS_CFG_EN_LABEL_MISMATCH`：仅适用于非 `NA` 且 `has_rs_cfg_en=true` 的行，表示 Excel/internal `RS_CFG_EN` 不是精确文本 `假门控`；`false` 时任意非 `NA` 字面内容均不产生该 finding。
 - `RS_CFG_EN_VALUE_MISMATCH`：非 `NA` 行的实例 `RS_CRG_EN` 字符串不表示数值 `0`；检查实例 override 和本次 elaborated KDB，不能只改 Excel 标签。
 - `RS_CFG_EN_VALUE_UNRESOLVED`：非 `NA` 行的 inventory 中 `parameters.RS_CRG_EN` 为 `null`；检查 collector/NPI 参数遍历和 KDB，不能把 `null` 当作参数不存在。
-- schema v1 或实例缺少整个 `parameters` 对象属于输入契约错误，应重新使用当前 collector 生成 schema v3 inventory。旧 v2 仍可加载，但 CRG trace 能力有限。
+- schema v1 或实例缺少整个 `parameters` 对象属于输入契约错误，应重新使用当前 collector 生成 schema v4 inventory。旧 v2 仍可加载，但 CRG trace 能力有限。
 - 同组多个实例时检查 finding 的实例路径；每个实例使用自己的 effective 值，任一失败都会使整行 FAIL。
 
 ### 14.11 模块规则或动态 step 检查失败
@@ -1650,7 +1746,7 @@ POSITION_HIERARCHY_GUI_PASS: ... selected=top.u_tile displayed=2 iterations=20 m
 custom module clk/rst formal-port rule evidence OK: clock_i/reset_ni
 clk-present/rst-missing CLI evidence OK: ports=clk,d,q
 finding isolation OK: RST_PORT_MISSING only; CLK_PORT_MISSING absent
-GUI_SMOKE_PASS: ... mode=online case=positive ... schemas=report-v4/inventory-v3 ...
+GUI_SMOKE_PASS: ... mode=online case=positive ... schemas=report-v4/inventory-v4 ...
 GUI_SMOKE_PASS: state=PASS ... warnings=警告 1 mode=online case=custom-port ... crg-source-check=warning finding-code=CRG_SOURCE_NOT_FOUND ...
 GUI_SMOKE_PASS: state=PASS ... warnings=警告 6 mode=online case=crg-depth-limit iterations=20 ... crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6 ...
 GUI_SMOKE_PASS: state=FAIL rows=行数 1 errors=错误 1 warnings=警告 0 mode=online case=clk-present-rst-missing iterations=20 ... clk-port-evidence=present rst-port-evidence=missing finding-codes=RST_PORT_MISSING ...
@@ -1682,7 +1778,7 @@ offline_gui_10000_rows.log
 config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules
 ```
 
-十二份日志还必须包含 `module-rule-ports=preserved`、`crg-source-db=crud-complete`、`dirty-copy=export-preserved/import-cleared` 和 `schemas=report-v4/inventory-v3`。`offline_gui_crg_source_mapping.log` 必须包含 `crg-source-check=pass trace-depth=3 findings=none`；`online_gui_crg_trace_depth_limit.log` 必须包含 `case=crg-depth-limit` 和 `crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6`。后者仍必须是 2 passed rows、0 error，证明 CRG 截断仅为 warning。
+十二份日志还必须包含 `module-rule-ports=preserved`、`crg-source-db=crud-complete`、`dirty-copy=export-preserved/import-cleared` 和 `schemas=report-v4/inventory-v4`。`offline_gui_crg_source_mapping.log` 必须包含 `crg-source-check=pass trace-depth=3 findings=none`；`online_gui_crg_trace_depth_limit.log` 必须包含 `case=crg-depth-limit` 和 `crg-trace-max-depth=2 finding-code=CRG_TRACE_DEPTH_LIMIT count=6`。后者仍必须是 2 passed rows、0 error，证明 CRG 截断仅为 warning。
 
 Position hierarchy 使用独立日志 `online_gui_position_hierarchy.log`，不套用 Excel/check/report 的六根配置 marker；它必须包含 `POSITION_HIERARCHY_GUI_WINDOW` 和 `POSITION_HIERARCHY_GUI_PASS`。CLI 结构化结果保存在 `partial_hierarchy_search.json`、`clean_hierarchy_exact.json`、`clean_hierarchy_limit.json`、`clean_hierarchy_no_match.json`，各自 stderr 也单独保留。正式脚本末尾会打印 `HIERARCHY_SEARCH_RESULTS`、`HIERARCHY_SEARCH_STDERR` 和 `POSITION_HIERARCHY_GUI_LOG` 的完整 artifact 路径。
 
@@ -1718,7 +1814,7 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。普通在线正例默认 3 轮；Position hierarchy 候选选择、CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射六个专项默认各 20 轮，分别由对应 `GUI_*_ITERATIONS` 变量控制。七个轮次变量都必须是十进制正整数。
 
-当前代码版本为 `0.11.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v3、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录是当前 `0.11.0` 的签核依据。
+当前代码版本为 `0.12.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v4、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录是当前 `0.12.0` 的签核依据。
 
 现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用 CRG 来源追踪时的十一日志历史基线，不能作为 inventory v3/report v4 和 depth-limit 专项的当前证据。下列记录只作为历史对照。
 

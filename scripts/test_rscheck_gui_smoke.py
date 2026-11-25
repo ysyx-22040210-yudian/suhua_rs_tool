@@ -50,6 +50,7 @@ _BUSINESS_HEADERS = (
     "复位连接",
     "时钟源模块",
     "假门控标记",
+    "例化参考名",
 )
 _RS_CFG_DONTCARE_TEXT = "任意非标准文本"
 _RS_CFG_NA_TEXT = "NA"
@@ -105,6 +106,8 @@ def _clock_trace_fields(
     clock_port: str,
     modules: Sequence[tuple[str, str]],
     *,
+    source_clk: str,
+    reset_port: str = "rst",
     max_depth: int = 16,
     status: str = "complete",
     diagnostics: Sequence[str] = (),
@@ -121,6 +124,9 @@ def _clock_trace_fields(
                 "path": list(path),
             }
         )
+    source = modules[-1][0]
+    parent = source.rpartition(".")[0]
+    reset_node = {"instance": source, "module": modules[-1][1], "depth": 1, "path": [source]}
     return {
         "clk_sources": [
             {"instance": instance, "module": module}
@@ -132,8 +138,13 @@ def _clock_trace_fields(
             "excluded_inputs": ["clk", "rst_n"],
             "status": status,
             "modules": traced_modules,
+            "endpoints": [{"instance": source, "depth": len(path), "path": list(path),
+                           "port": "clock_out", "connection": f"{parent}.{source_clk}"}],
             "diagnostics": list(diagnostics),
         },
+        "reset_trace": {"reset_port": reset_port, "excluded_inputs": ["clk"], "status": "complete",
+                        "max_depth": max_depth, "modules": [reset_node], "diagnostics": [],
+                        "endpoints": [{**reset_node, "port": "reset_out", "connection": f"{parent}.rst_n"}]},
     }
 
 
@@ -289,6 +300,7 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                     "rst_n",
                     f"{position}.u_crg",
                     "假门控",
+                    "NA",
                 )
             )
             positions[position] = {
@@ -316,14 +328,14 @@ def _write_generated_inputs(output: Path, row_count: int) -> tuple[Path, Path]:
                             },
                         },
                         **_clock_trace_fields(
-                            "clk", [(f"{position}.u_crg", "crg_core")]
+                            "clk", [(f"{position}.u_crg", "crg_core")], source_clk="clk_rs"
                         ),
                     }
                 ],
             }
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
-            {"schema_version": 3, "positions": positions, "warnings": []},
+            {"schema_version": 4, "positions": positions, "warnings": []},
             stream,
             ensure_ascii=True,
         )
@@ -350,6 +362,7 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                 "rst_n",
                 f"{position}.u_crg",
                 "假门控",
+                "NA",
             )
         )
     instances = []
@@ -378,14 +391,14 @@ def _write_default_rule_inputs(output: Path) -> tuple[Path, Path]:
                     },
                 },
                 **_clock_trace_fields(
-                    "clk", [(f"{position}.u_crg", "crg_default")]
+                    "clk", [(f"{position}.u_crg", "crg_default")], source_clk="clk_default", reset_port="rst_n"
                 ),
             }
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "positions": {
                     position: {
                         "found": True,
@@ -419,12 +432,13 @@ def _write_rs_cfg_dontcare_inputs(output: Path) -> tuple[Path, Path]:
                 "rst_n",
                 f"{position}.u_crg",
                 _RS_CFG_DONTCARE_TEXT,
+                "NA",
             )
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "positions": {
                     position: {
                         "found": True,
@@ -452,6 +466,7 @@ def _write_rs_cfg_dontcare_inputs(output: Path) -> tuple[Path, Path]:
                                 **_clock_trace_fields(
                                     "clk",
                                     [(f"{position}.u_crg", "crg_dontcare")],
+                                    source_clk="clk_dontcare",
                                 ),
                             }
                         ],
@@ -484,12 +499,13 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
                 "rst_n",
                 f"{position}.u_crg",
                 _RS_CFG_NA_TEXT,
+                "NA",
             )
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "positions": {
                     position: {
                         "found": True,
@@ -516,7 +532,7 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
                                     },
                                 },
                                 **_clock_trace_fields(
-                                    "clk", [(f"{position}.u_crg", "crg_na")]
+                                    "clk", [(f"{position}.u_crg", "crg_na")], source_clk="clk_na"
                                 ),
                             }
                         ],
@@ -549,12 +565,13 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
                 "rst_n",
                 _CRG_SOURCE_ALIAS,
                 "假门控",
+                "NA",
             )
         )
     with inventory_path.open("w", encoding="utf-8") as stream:
         json.dump(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "positions": {
                     position: {
                         "found": True,
@@ -590,6 +607,7 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
                                         ),
                                         (_CRG_SOURCE_FULL_PATH, "crg_core"),
                                     ],
+                                    source_clk="clk_crg_map",
                                 ),
                             }
                         ],
@@ -615,10 +633,11 @@ def _write_custom_port_spec(output: Path) -> Path:
                 "CUSTOM_RS",
                 "tile_core",
                 1,
-                "clk_rs",
-                "rst_n",
+                "clk_core",
+                "rst_core",
                 "intentionally_wrong_source",
                 "假门控",
+                "NA",
             )
         )
     return specs_path
@@ -636,10 +655,11 @@ def _write_clk_without_rst_spec(output: Path) -> Path:
                 "CLK_ONLY_RS",
                 "tile_core",
                 1,
-                "clk_rs",
-                "rst_n",
+                "clk_core",
+                "rst_core",
                 "crg_core",
                 "假门控",
+                "NA",
             )
         )
     return specs_path
@@ -1527,7 +1547,7 @@ def main() -> int:
                     not args.validate_only
                     and str(first_values[5])
                     != (
-                        "WARNING"
+                        "FAIL" if args.clk_without_rst else "WARNING"
                         if args.custom_port or args.crg_depth_limit
                         else "PASS"
                     )
@@ -1594,10 +1614,10 @@ def main() -> int:
                 )
                 root.destroy()
                 return
-            if raw_inventory.get("schema_version") != 3:
+            if raw_inventory.get("schema_version") != 4:
                 failed = True
                 print(
-                    "GUI_SMOKE_FAIL: inventory schema is not v3: "
+                    "GUI_SMOKE_FAIL: inventory schema is not v4: "
                     f"{raw_inventory.get('schema_version')!r}",
                     file=sys.stderr,
                 )
@@ -2209,10 +2229,8 @@ def main() -> int:
                     or len(instances) != 1
                     or set(instances[0].get("ports", {}))
                     != {"clock_i", "reset_ni", "d", "q"}
-                    or len(custom_findings) != 1
-                    or custom_findings[0].get("severity") != "warning"
-                    or custom_findings[0].get("code")
-                    != "CRG_SOURCE_NOT_FOUND"
+                    or {f.get("code") for f in custom_findings} != {"CRG_SOURCE_NOT_FOUND", "RST_SOURCE_NOT_FOUND"}
+                    or any(f.get("severity") != "warning" for f in custom_findings)
                     or not isinstance(record.get("crg_source_check"), dict)
                     or record["crg_source_check"].get("status") != "warning"
                 ):
@@ -2458,8 +2476,10 @@ def main() -> int:
         expected_warning_text = (
             "警告 6"
             if args.crg_depth_limit
+            else "警告 2"
+            if args.custom_port
             else "警告 1"
-            if args.expect_partial_load or args.custom_port
+            if args.expect_partial_load
             else "警告 0"
         )
         if app.summary_warnings_var.get() != expected_warning_text:
@@ -2536,7 +2556,7 @@ def main() -> int:
             f"{' notice=NPI_LOAD_PARTIAL' if args.expect_partial_load else ''}"
             f"{' config-io=roundtrip-complete roots=excel,columns,rtl,position_mappings,crg_source_mappings,module_rules module-rule-ports=preserved crg-source-db=crud-complete dirty-copy=export-preserved/import-cleared' if config_io_verified else ''}"
             " rules-layout=980x680-fit"
-            f"{' schemas=report-v4/inventory-v3' if not args.validate_only else ''}",
+            f"{' schemas=report-v4/inventory-v4' if not args.validate_only else ''}",
             flush=True,
         )
         visible_tabs = {

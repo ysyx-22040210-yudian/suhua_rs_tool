@@ -38,12 +38,12 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertNotIn(
-            "contract=elab-only schemas=report-v4/inventory-v3",
+            "contract=elab-only schemas=report-v4/inventory-v4",
             source,
         )
         self.assertGreaterEqual(source.count("grep -Fq 'contract=elab-only'"), 2)
         self.assertGreaterEqual(
-            source.count("grep -Fq 'schemas=report-v4/inventory-v3'"),
+            source.count("grep -Fq 'schemas=report-v4/inventory-v4'"),
             4,
         )
         self.assertNotIn("report-v3/inventory-v2", source)
@@ -148,8 +148,8 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         gui_smoke = GUI_SMOKE_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn(
-            "printf 'rs_pipe\\tclk\\nrs_custom\\tclock_i\\n"
-            "rs_clk_only\\tclk\\n'",
+            "printf 'rs_pipe\\tclk\\trst\\nrs_custom\\tclock_i\\treset_ni\\n"
+            "rs_clk_only\\tclk\\trst_n\\n'",
             source,
         )
         self.assertIn("partial_load_trace_rules.tsv", source)
@@ -173,7 +173,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
             source,
         )
         self.assertIn('report.get("schema_version") != 4', source)
-        self.assertIn('inventory.get("schema_version") != 3', source)
+        self.assertIn('inventory.get("schema_version") != 4', source)
 
         self.assertIn(
             'GUI_CRG_TRACE_DEPTH_ITERATIONS="${GUI_CRG_TRACE_DEPTH_ITERATIONS:-20}"',
@@ -198,7 +198,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn(custom_marker, source)
         self.assertIn(custom_marker, gui_smoke)
         self.assertIn(
-            "warnings=警告 1 mode=online case=custom-port",
+            "warnings=警告 2 mode=online case=custom-port",
             source,
         )
         self.assertIn(
@@ -222,7 +222,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertEqual(len(log_entries), 12)
         self.assertIn('"$CRG_TRACE_DEPTH_LOG"', unified_log_gate)
         self.assertIn(
-            "grep -Fq 'schemas=report-v4/inventory-v3' \"$gui_log\"",
+            "grep -Fq 'schemas=report-v4/inventory-v4' \"$gui_log\"",
             unified_log_gate,
         )
         gui_logs_line = next(
