@@ -15,11 +15,13 @@ def _instance_match(row: RowResult) -> dict[str, Any]:
     spec = row.spec
     scope = {"position": spec.position, "RS_module": spec.rs_module}
     items = spec.rs_inst_items
-    if not items and not spec.has_route:
+    if not items:
         return {"mode": "none", "query": "", "rule": "not_run", "status": "no_selector",
                 **scope, "matched_count": 0}
-    if not items and row.nearest_match is not None:
-        return {"mode": "RS_route", "query": spec.rs_route, **scope, **row.nearest_match.as_dict()}
+    if row.route_field_used:
+        return {"mode": row.route_field_used, "query": spec.rs_route2 if row.route_field_used == "RS_route2" else spec.rs_route,
+                "primary_attempts": [item.as_dict() for item in row.primary_attempts],
+                **scope, **row.nearest_match.as_dict()}
     if row.suffix_regex is not None:
         scope["suffix_regex"] = row.suffix_regex
     if row.item_matches:
@@ -208,6 +210,7 @@ def _finding_row(
         "crg_source_alias": row.spec.crg_source_alias if row is not None else "",
         "RS_inst": finding.rs_inst,
         "RS_route": row.spec.rs_route if row else "",
+        "RS_route2": row.spec.rs_route2 if row else "",
         **(match_fields or {}),
         "RS_CFG_EN": finding.rs_cfg_en,
         "instance": finding.instance,
@@ -254,6 +257,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "expected",
         "actual",
         "RS_route",
+        "RS_route2",
         "instance_match",
         "match_details",
     ]
@@ -282,6 +286,7 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                             "RS_module": row.spec.rs_module,
                             "RS_inst": row.spec.rs_inst,
                             "RS_route": row.spec.rs_route,
+                            "RS_route2": row.spec.rs_route2,
                             **match_fields,
                             "RS_CFG_EN": row.spec.rs_cfg_en,
                             **_step_csv_fields(row),
@@ -329,7 +334,7 @@ def format_console_report(report: CheckReport, *, match_details: bool = False) -
             if not row.passed
             else "WARNING"
             if any(item.severity == "warning" for item in row.findings)
-            else "PARTIAL" if not row.spec.rs_inst_items and not row.spec.has_route
+            else "PARTIAL" if not row.spec.rs_inst_items
             else "PASS"
         )
         lines.append(
@@ -350,9 +355,10 @@ def format_console_report(report: CheckReport, *, match_details: bool = False) -
             ranking = ", ".join(f"{item.full_name} ({item.distance})" for item in match.ranked)
             selected = match.ranked[0].full_name if match.status == "matched" else "<none>"
             items = row.spec.rs_inst_items
-            selector = "RS_inst fuzzy fallback" if items else "RS_route"
+            selector = row.route_field_used or "RS_inst fuzzy fallback"
+            query = row.spec.rs_route2 if selector == "RS_route2" else row.spec.rs_route if selector == "RS_route" else items[0]
             lines.append(
-                f"  {selector}: {match.status}; query={(items[0] if items else row.spec.rs_route)!r} "
+                f"  {selector}: {match.status}; query={query!r} "
                 f"module={row.spec.rs_module} "
                 f"candidates={match.candidate_count} selected={selected} "
                 f"tied_best={match.tied_best_count}; top candidates "
@@ -366,7 +372,7 @@ def format_console_report(report: CheckReport, *, match_details: bool = False) -
                     detail += f"; best_distance={item.nearest.ranked[0].distance}"
             lines.append(f"  RS_inst[{index}] {item.query!r}: {item.rule}; {detail}; "
                          f"selected={', '.join(item.paths) or '<none>'}; newly_counted={item.added_count}")
-        if row.spec.rs_inst_items and row.spec.rs_route:
+        if row.spec.rs_inst_items and row.spec.rs_route and not row.route_field_used:
             lines.append(f"  RS_inst takes precedence; RS_route {row.spec.rs_route!r} was not used")
         for finding in row.findings:
             lines.append(f"  [{finding.severity.upper()}] {finding.code}: {finding.message}")

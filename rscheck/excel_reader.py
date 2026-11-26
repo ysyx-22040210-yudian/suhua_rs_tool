@@ -13,11 +13,13 @@ from xml.etree import ElementTree as ET
 
 from .model import (
     REQUIRED_ROW_FIELDS,
+    ROUTE_FIELDS,
     ExcelConfig,
     SkippedRow,
     SpecRow,
     WorkbookError,
     skip_reason,
+    with_route_groups,
 )
 
 
@@ -111,6 +113,7 @@ class _InputRow:
     number: int
     cells: Mapping[int, str] | SkippedRow
     rs_inst_formula_cell: str | None = None
+    route_errors: Mapping[str, str] | None = None
 
 
 def _rows_to_specs(
@@ -186,6 +189,10 @@ def _rows_to_specs(
             rs_inst_formula_cell=row.rs_inst_formula_cell,
             rs_route=values.get("RS_route", ""),
             rs_route_mapped="RS_route" in config.columns,
+            rs_route2=values.get("RS_route2", ""),
+            rs_route2_mapped="RS_route2" in config.columns,
+            route_cell_error=(row.route_errors or {}).get("RS_route", ""),
+            route2_cell_error=(row.route_errors or {}).get("RS_route2", ""),
             position=position,
             step=step,
             clk=values["clk"],
@@ -201,15 +208,19 @@ def _rows_to_specs(
         if not spec.crg_source and values["CRG_source"]:
             errors.append(f"row {row_number}: CRG_source cannot be empty")
             continue
-        if (spec.rs_inst_items or spec.has_route) and spec.key in seen:
-            first_row, first_position_input = seen[spec.key]
+        # Equal instance text with distinct route hints may represent different
+        # intended instances. Detect an actual shared owner after RTL matching.
+        key = spec.key + (spec.rs_module,)
+        if spec.rs_inst_items and not spec.has_route and not spec.route_cell_error and key in seen:
+            first_row, first_position_input = seen[key]
             errors.append(
                 f"row {row_number}: duplicate group ({spec.position}, {spec.selector_label}) "
                 f"after position resolution from {position_input!r}; first defined "
                 f"from {first_position_input!r} at row {first_row}"
             )
             continue
-        seen[spec.key] = (row_number, position_input)
+        if not spec.has_route and not spec.route_cell_error:
+            seen[key] = (row_number, position_input)
         specs.append(spec)
 
     if config.validate_headers and not header_seen:
@@ -218,7 +229,7 @@ def _rows_to_specs(
         raise WorkbookError("invalid workbook data:\n  " + "\n  ".join(errors))
     if not saw_data_row:
         raise WorkbookError("no specification rows were found")
-    return specs
+    return with_route_groups(specs)
 
 
 def _shared_strings(archive: zipfile.ZipFile) -> list[str]:
@@ -432,12 +443,19 @@ def _xlsx_rows(
                         continue
                     if gate_errors:
                         raise next(iter(gate_errors.values()))
+                route_errors = {}
                 for column in mapped:
                     if column not in cells:
-                        read(column)
+                        try:
+                            read(column)
+                        except WorkbookError as exc:
+                            field = field_for_column[column]
+                            if not is_data or field not in ROUTE_FIELDS:
+                                raise
+                            route_errors[field] = str(exc)
                 formula_count += len(formulas)
                 examples.extend(formulas[:3 - len(examples)])
-                yield _InputRow(row_number, cells, rs_inst_formula_cell)
+                yield _InputRow(row_number, cells, rs_inst_formula_cell, route_errors)
                 element.clear()
         except ET.ParseError as exc:
             raise WorkbookError(f"invalid XLSX worksheet XML: {exc}") from exc

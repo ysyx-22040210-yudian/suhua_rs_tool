@@ -29,6 +29,8 @@ from .model import (
     SourceSignalCheck,
     resolve_module_rule,
     skip_reason,
+    with_route_groups,
+    blank_field_message,
 )
 
 
@@ -607,14 +609,14 @@ def _select_item(
         if winner is not None:
             return (winner,), nearest, findings
         if nearest.status == "ambiguous":
-            code = "RS_INST_AMBIGUOUS" if selector == "RS_inst" else "RS_ROUTE_AMBIGUOUS"
+            code = "RS_INST_AMBIGUOUS" if selector == "RS_inst" else f"{selector.upper()}_AMBIGUOUS"
             message = (
                 f"{nearest.tied_best_count} instances of {spec.rs_module!r} under {spec.position} "
                 f"tie at distance {nearest.ranked[0].distance} for {selector} {query!r}; "
                 "specify the exact local RS_inst or narrow position"
             )
         else:
-            code = "GROUP_NOT_FOUND" if selector == "RS_inst" else "RS_ROUTE_NO_CANDIDATES"
+            code = "GROUP_NOT_FOUND" if selector == "RS_inst" else f"{selector.upper()}_NO_CANDIDATES"
             message = f"no instance of module {spec.rs_module!r} under {spec.position} for {selector} {query!r}"
         findings.append(_row_finding(spec, code, message, expected=query, actual=nearest.as_dict()))
         return (), nearest, findings
@@ -682,7 +684,6 @@ def _check_row(
                                      expected=spec.position))
         return RowResult(
             spec=spec, instances=(), findings=tuple(findings), module_rule=rule, suffix_regex=config.suffix_regex,
-            nearest_match=NearestNameMatch("position_not_found") if not items and spec.has_route else None,
             item_matches=tuple(InstanceItemMatch(q, "not_run") for q in items) if is_list else (),
         )
 
@@ -692,31 +693,58 @@ def _check_row(
     item_matches: list[InstanceItemMatch] = []
     resolved: dict[str, InstanceItemMatch] = {}
     nearest_match = None
-    if not items and not spec.has_route and not any(i.module == spec.rs_module for i in position.instances):
+    if not items and not any(i.module == spec.rs_module for i in position.instances):
         findings.append(_row_finding(spec, "RS_MODULE_NOT_FOUND",
             f"{spec.position}: no instance of module {spec.rs_module!r} was found", expected=spec.rs_module))
     target_active = "CRG_source" not in spec.ignored_fields
-    for query in items or ((spec.rs_route,) if spec.has_route else ()):
+    primary_findings: list[Finding] = []
+    primary_attempts: list[InstanceItemMatch] = []
+    route_used = ""
+    for query in items:
         if query in resolved:
             prior = resolved[query]
             item_matches.append(InstanceItemMatch(query, prior.rule, prior.paths, 0, prior.nearest))
             continue
         members, nearest, diagnostics = _select_item(
-            spec, query, "RS_inst" if items else "RS_route", position.instances, config, suffix
+            spec, query, "RS_inst", position.instances, config, suffix
         )
-        findings.extend(diagnostics)
+        primary_findings.extend(diagnostics)
         before = len(union)
         for instance in members:
             union.setdefault(instance.full_name, instance)
+        evidence = InstanceItemMatch(query, RS_INST_FUZZY_RULE if nearest else RS_INST_GROUP_RULE,
+                                     tuple(i.full_name for i in members), len(union) - before, nearest)
+        resolved[query] = evidence
         if is_list:
-            evidence = InstanceItemMatch(
-                query, RS_INST_FUZZY_RULE if nearest else RS_INST_GROUP_RULE,
-                tuple(i.full_name for i in members), len(union) - before, nearest,
-            )
-            resolved[query] = evidence
             item_matches.append(evidence)
         else:
             nearest_match = nearest
+    # A route is a last-resort selector for ONE instance, never a repair for
+    # individual members of a partially matched list. Errors downstream of a
+    # successful selection (parameters, clocks, step) do not change the choice.
+    if items and not union:
+        field = spec.route_field
+        query = spec.rs_route2 if spec.secondary_group else spec.rs_route
+        cell_error = spec.route2_cell_error if spec.secondary_group else spec.route_cell_error
+        if cell_error:
+            findings.append(_row_finding(spec, "ROUTE_CELL_ERROR", cell_error, actual={"field": field}))
+        elif spec.secondary_group and skip_reason(query):
+            if spec.rs_route2_mapped and skip_reason(query) == "blank":
+                findings.append(_row_finding(spec, "EXCEL_FIELD_BLANK",
+                    blank_field_message(spec.sheet, spec.row_number, field), severity="warning",
+                    actual={"field": field, "reason": "blank"}))
+            findings.append(_row_finding(spec, "RS_ROUTE2_REQUIRED",
+                f"{spec.route_group_size} rows share RS_module, position and RS_route={spec.rs_route!r}; "
+                "RS_inst did not resolve and no usable RS_route2 is available"))
+        elif not skip_reason(query):
+            members, nearest_match, diagnostics = _select_item(
+                spec, query, field, position.instances, config, suffix)
+            route_used = field
+            primary_attempts = item_matches if is_list else [resolved[items[0]]]
+            item_matches = []
+            primary_findings = diagnostics
+            union.update((i.full_name, i) for i in members)
+    findings.extend(primary_findings)
     matched_instances = tuple(union.values())
     step_evaluations: list[InstanceStepEvaluation] = []
     crg_evaluations: list[CrgTraceEvaluation] = []
@@ -820,6 +848,8 @@ def _check_row(
         crg_evaluations=tuple(crg_evaluations),
         source_signals=tuple(source_signals),
         nearest_match=nearest_match,
+        route_field_used=route_used,
+        primary_attempts=tuple(primary_attempts),
         item_matches=tuple(item_matches),
         suffix_regex=config.suffix_regex,
     )
@@ -831,7 +861,7 @@ def check_specs(
     config: RtlConfig,
     module_rules: Mapping[str, ModuleRule],
 ) -> CheckReport:
-    spec_list = list(specs)
+    spec_list = with_route_groups(specs)
     if (
         type(config.crg_trace_max_depth) is not int
         or not 1 <= config.crg_trace_max_depth <= MAX_CRG_TRACE_DEPTH

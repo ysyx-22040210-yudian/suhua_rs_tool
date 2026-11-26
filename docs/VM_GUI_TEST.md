@@ -1,6 +1,6 @@
 # rscheck 自带 GUI 与 Verdi GUI 的跨设备测试
 
-若只验 `RS_inst` 分项与模糊回退、`RS_route` 和 Excel 公式表的桌面交互，在能打开 Tk 的设备上进入仓库根目录运行 `python3 -m unittest -v tests.test_rs_route_gui`，默认读取仓库自带的离线 inventory。正式脚本 `bash scripts/test_vm_verdi_gui.sh` 会另外用本次编译的示例 KDB 运行同组测试：验收混合分隔符逐项匹配、`RS_route` 中冒号不拆、唯一命中、0 拍、并列不选，以及公式表验证、在线检查和没有公式缓存时的定位提示。日志在当次产物目录的 `rs_route_gui.log`。该在线测试使用 `RSCHECK_ROUTE_COLLECTOR`、`RSCHECK_ROUTE_KDB` 和可选的 `RSCHECK_ROUTE_NPI_LIB`，不接受 filelist。
+若只验 `RS_inst` 分项与模糊回退、`RS_route` / `RS_route2` 和 Excel 公式表的桌面交互，在能打开 Tk 的设备上进入仓库根目录运行 `python3 -m unittest -v tests.test_rs_route_gui`，默认读取仓库自带的离线 inventory。正式脚本 `bash scripts/test_vm_verdi_gui.sh` 会另外用本次编译的示例 KDB 运行同组测试：验收混合分隔符逐项匹配、`RS_route` 中冒号不拆、唯一命中、0 拍、并列不选、同组中英文第二参考名区分两行、部分命中报错不补选，以及公式表验证、在线检查和没有公式缓存时的定位提示。日志在当次产物目录的 `rs_route_gui.log`。该在线测试使用 `RSCHECK_ROUTE_COLLECTOR`、`RSCHECK_ROUTE_KDB` 和可选的 `RSCHECK_ROUTE_NPI_LIB`，不接受 filelist。
 
 本文档说明如何在不同 Linux 设备和桌面环境中启动、检查并压测两个独立 GUI：
 
@@ -187,6 +187,8 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 “模块规则库”页应支持搜索、新建、修改、删除和保存。`rs_pipe` 应显示显式覆盖 `has_rs_cfg_en=true`、`step_parameters=rs_mode`、`clk_port=clk`、`rst_port=rst`，并把兼容规则键说明为“有 `RS_CRG_EN` parameter”。新建或修改规则时把 clk/rst 端口输入留空，应分别规范化为 `clk`、`rst_n`。规则未保存时不能运行；保存应写回当前配置 JSON并重新加载。显式规则名与 Excel `RS_module` 大小写敏感、精确匹配并优先于默认值；没有专属项时正常使用 `has_rs_cfg_en=true`、`step_parameters=[]`、`clk_port=clk`、`rst_port=rst_n`，即要求 RTL `RS_CRG_EN=0`、Excel/internal `RS_CFG_EN=假门控`，且每个匹配实例贡献 1。旧 JSON 的显式规则缺少端口键时先继承 `rtl.clk_port/rst_port`，GUI 保存或导出后必须显式写入继承值。
 
 “Position 映射库”页应支持搜索、新建、修改、删除和保存。示例配置必须显示 `tile_core -> top.u_tile`；保存应原子写回当前配置 JSON 并重新加载。Position 和 CRG_source 的完整路径编辑区均提供“选择 DUT 层次…”：读取在线配置中的 collector 和 elaborated KDB，不输入正则也应能从顶层展开。筛选时按完整路径匹配，保留父层，显示模块定义和 scope 类型。“使用所选路径”只回填发起操作的编辑框；两套简称、内存映射和 dirty 状态不变。仍需依次点击“应用修改”和“保存映射库”。
+
+缓存验收：在 Position 页成功读取一次，关闭后从 CRG_source 页打开相同 KDB，应显示「命中内存缓存」；重启 GUI 再打开应为「命中本地缓存」，两者都不启动 NPI。点击「清除层次缓存并重载」，应重新调用一次 collector 并显示「已从 KDB 加载」。切换到另一份新 KDB，确认树中没有沿用前一个设计的节点。正式 VM 脚本的两份 picker 日志会给出实际采集计数与热开耗时。
 
 “CRG Source映射库”页应提供相同的搜索、CRUD、原子保存、dirty 阻断和外部修改冲突处理。示例配置应显示 `crg_core -> top.u_tile.u_crg`、`crg_aux -> top.u_tile.u_aux_crg`；命中后 GUI/JSON/CSV 同时保留简称与完整路径，并以右侧完整 hierarchy 作为 CRG trace 目标。简称和完整 CRG 路径都不得加入 NPI positions。
 

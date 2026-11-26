@@ -1710,6 +1710,7 @@ class GuiLifecycleTests(unittest.TestCase):
         app._closing = True
         app._running = True
         app.controller = SimpleNamespace(is_running=False)
+        app._release_hierarchy_session = Mock()
 
         def set_running(value: bool) -> None:
             app._running = value
@@ -1717,11 +1718,13 @@ class GuiLifecycleTests(unittest.TestCase):
         app._set_running = set_running
         app._poll_events()
         self.assertFalse(app.root.destroyed)
+        app._release_hierarchy_session.assert_not_called()
 
         app.events.put(WorkerOutcome(action="check"))
         app._poll_events()
         self.assertFalse(app.running)
         self.assertTrue(app.root.destroyed)
+        app._release_hierarchy_session.assert_called_once_with()
 
 
 if __name__ == "__main__":

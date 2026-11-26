@@ -1,5 +1,19 @@
 # RTL 打拍例化检查工具测试指南
 
+### 0.14.0：重复参考名与 `RS_inst` 部分命中
+
+从仓库根目录运行。第二条会真正打开 Tk 窗口，先运行两条正例，再把其中一行改为部分命中；默认使用示例 inventory。如果终端已配置下节的 `RSCHECK_ROUTE_COLLECTOR` / `RSCHECK_ROUTE_KDB`，同一条命令通过可执行 collector 读取真实 `*.elab++`。
+
+```bash
+python3 -B -m unittest -v tests.test_rs_route2
+python3 -B -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_route2_scoped_duplicate_then_partial_list_in_mapped_window
+python3 -m rscheck check --excel examples/specs_route2.csv --config config/rscheck.example.json --inventory examples/inventory.json --match-details
+```
+
+预期：同模块、同层次、同 `RS_route` 的两行，都用各自的中英文 `RS_route2`，分别选中 `top.u_tile.AAAA_BBB_C2`（0 拍）和 `top.u_tile.CTRL_RS_D0`（1 拍）。将第一行改为 `AAAA_BBB_C1；AAAA_BBB_X` 后，只保留第一个实例作证；第二项出现六个并列最近候选，该行 FAIL、总拍数未确定，两列 route 均不补选。专项还覆盖同名不同模块或层次、`RS_inst` 为空／`NA`、未启用的公式错误以及自定义第二参考列。
+
+0.14.0 复测：Linux VM 全量 408 项通过，无跳过。使用已编译的 v4 collector 和示例 Verdi `*.elab++`，单独连续运行上述可见 Tk 正反例 5 轮，每轮都验证 Excel 预览、两行成功匹配、部分命中失败及拍数未确定。本次复用了已有示例 KDB，未重编设计。Windows 回归同为 408 项，359 项通过，另有 49 项按平台条件跳过。
+
 ### 0.13.0：空字段、NA 与整行跳过
 
 从仓库根目录、在已能运行 Tk 的图形终端执行以下命令。第二个测试会打开真实窗口，依次点击「验证 Excel」「运行 RTL 检查」并读取 GUI 和导出报告。默认使用离线样例；设置下方三个环境变量后执行同一命令，可改用真实 Verdi KDB。
@@ -71,7 +85,7 @@ python3 -m rscheck check --excel examples/specs_multi_inst.xlsx --config config/
 python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_multi_inst_cell_in_mapped_window
 ```
 
-预期三行物理实例数依次为 **2、2、1**，有效拍数为 **1、2、1**，全部 PASS。第一行用空格分开精确名 C0 和模糊名 X2；第二行用逗号和冒号连续分隔；第三行用顿号分开的两项指向同一实例。窗口用例还会把 Tab、逗号、顿号、冒号混在同一个公式缓存字符串里，验证仅得到两项，并在「匹配明细」核对精确与模糊命中的路径。仅含分隔符时，验证改用整串 `RS_route`（含冒号和空格）。
+预期三行物理实例数依次为 **2、2、1**，有效拍数为 **1、2、1**，全部 PASS。第一行用空格分开精确名 C0 和模糊名 X2；第二行用逗号和冒号连续分隔；第三行用顿号分开的两项指向同一实例。窗口用例还会把 Tab、逗号、顿号、冒号混在同一个公式缓存字符串里，验证仅得到两项，并在「匹配明细」核对精确与模糊命中的路径。仅含分隔符时，验证不使用两列 route，不选择实例，也不把未知拍数当 0。
 
 第三条命令默认离线；设置 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后使用真实 elaborated KDB。`python3 -m unittest -v tests.test_rs_inst_list` 还覆盖转义标识符、行尾反斜杠、引号内含分隔符的 CSV/TSV、公式缓存、重叠去重和旧报告读取。
 
@@ -84,7 +98,7 @@ python3 -m unittest -v tests.test_rs_inst_fallback
 python3 -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_rs_inst_fuzzy_fallback_in_mapped_window
 ```
 
-默认用自带的离线 inventory；在有显示的 VM 上配置下文的 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 后则使用真实 elaborated KDB。预期：`AAAA_BBB` 前缀组仍为 5 拍；`RS_inst=CTRL_RS_DO` 唯一选中 `top.u_tile.CTRL_RS_D0`（距离 1）；改成 `AAAA_BBB_X` 时有六个并列，结果 FAIL，`selected=null`，即使填有 `RS_route` 也不参与。
+默认用自带的离线 inventory；在有显示的 VM 上配置下文的 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 后则使用真实 elaborated KDB。预期：`AAAA_BBB` 前缀组仍为 5 拍；`RS_inst=CTRL_RS_DO` 唯一选中 `top.u_tile.CTRL_RS_D0`（距离 1）；改成 `AAAA_BBB_X` 时有六个并列，若没有可用参考名则 FAIL，`selected=null`；填有唯一有效的 `RS_route` 时，验证以它回退选中。
 
 本次在 VM 上用真实 Tk 窗口和示例 `.elab++` 验证：全量 Python 回归 352 项通过、无跳过；另连续 5 轮运行上述 GUI 专项，每轮均核对唯一命中和六路并列两个结果。
 
@@ -96,9 +110,9 @@ python -m rscheck check --excel examples/specs_formulas.xlsx --config config/rsc
 python -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_validate_then_check_formula_workbook_in_mapped_window
 ```
 
-前两条读取 15 个已保存的公式结果。两行实测分别为 `5` 拍、`1` 拍，检查结果为 PASS、0 错误、2 个空值警告：第 2 行的 `RS_route` 为空；第 3 行的 `RS_inst` 公式算出空字符串，因此用该行的 `RS_route` 选实例。公式缓存提示写到 stderr，不影响第一条命令的 JSON。
+前两条读取 15 个已保存的公式结果。第 2 行得 5 拍；第 3 行 `RS_inst` 公式算出空字符串，两列 route 都不参与，拍数未确定。整表为 PARTIAL、0 错误、2 个空值警告（第 2 行 `RS_route`、第 3 行 `RS_inst`）。公式缓存提示写到 stderr，不影响 `validate --json` 的输出。
 
-第三条在有 Tk 显示的设备上会打开真实窗口，依次执行“验证 Excel”和“运行 RTL 检查”。在「匹配明细」可以对照 `RS_Check!C2` 的公式结果 `AAAA_BBB` 及选中的前缀组，也能看到 `RS_Check!C3` 的空结果和实际使用的 route。默认使用离线 inventory；设置 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后，同一条 GUI 用例改用真实 Verdi elaborated KDB。
+第三条在有 Tk 显示的设备上会打开真实窗口，依次执行“验证 Excel”和“运行 RTL 检查”。在「匹配明细」可以对照 `RS_Check!C2` 的公式结果 `AAAA_BBB` 及选中的前缀组，也能看到 `RS_Check!C3` 的空结果，以及未使用 route 的说明。默认使用离线 inventory；设置 `RSCHECK_ROUTE_KDB`、`RSCHECK_ROUTE_COLLECTOR` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后，同一条 GUI 用例改用真实 Verdi elaborated KDB。
 
 手动负例：复制样表，在副本的 `RS_Check!E2` 输入 `=1/0`，重新计算、保存后再验证。应得到工作簿错误，包含 `RS_Check!E2 (step)` 和 `#DIV/0!`，而不是 RTL 的拍数不符。无缓存的脚本生成文件、空字符串与真实数值 0 的区别，以及自定义列号由 `python -m unittest -v tests.test_excel_reader` 覆盖。
 
@@ -161,6 +175,18 @@ RS_route 专项复测记录：CentOS 7、Python 3.11、Tk 8.6、Verdi O-2018.09-
 - 可见 GUI 测试需要 Tkinter；Linux 还需要可访问的 X11/Xwayland DISPLAY、`xdpyinfo`、`xprop` 和 `xwininfo`。
 - 建议设置 `PYTHONDONTWRITEBYTECODE=1`，避免测试产生 `__pycache__`。
 
+**单独验收 Python 3.8：** 从仓库根目录，在可以显示 Tk 窗口的终端运行：
+
+```bash
+python3.8 --version
+python3.8 -B -m unittest -v tests.test_gui_studio.StudioTests.test_named_font_lookup_uses_its_own_tk_interpreter_on_python38
+python3.8 -B -m unittest discover -v
+```
+
+第一项窗口测试会启动本工具并验证命名字体使用对应窗口的 Tk 解释器，不依赖新版本的 `nametofont(root=...)`。没有 Tk 或显示时如出现 `skipped`，不能当作 GUI 兼容性验证通过。设置本项目示例 KDB 的 `RSCHECK_ROUTE_COLLECTOR`、`RSCHECK_ROUTE_KDB` 和可选的 `RSCHECK_ROUTE_NPI_LIB` 后，同一套测试还会运行真实在线 RTL 检查。仅启动工具见[Python 3.8 启动命令](USAGE.md#用-python-38-直接运行)。
+
+**本次 Python 3.8.20 实测：** CentOS 7.9 VM 使用与本机 Tcl/Tk 8.6.12 链接的 CPython，工具窗口可见，415 项回归全部通过，无跳过。用模板工作簿对真实示例 `.elab++` 检查为 2 行 PASS、0 错误、0 警告；两个独立 GUI 进程中，Position 连开 4 次采集 1 次，CRG_source 连开 4 次命中已有缓存，采集 0 次。Windows 3.8.20 同样验证了安装包、离线检查和可见 GUI，415 项中 365 项通过、50 项按平台条件跳过。
+
 ## 3. Windows 本地测试
 
 ### 3.1 全量测试
@@ -187,7 +213,7 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置、必需列和可选 `RS_route` 的解析、两套路径映射、实例分组、模块规则、逐模块 clk/rst、动态 step、RTL `RS_CRG_EN` 与 Excel 标签，并覆盖从规则 clk formal 出发的有界 CRG 上游追踪：多分支、`clk/rst_n` 精确排除、模块跳数、环路/对象预算、深度边界、完整 hierarchy 精确匹配、三个 warning code、inventory v2 legacy/v3、report v4、GUI `CRG Trace` 与 CSV trace 证据。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置、必需列和两个可选参考名 的解析、两套路径映射、实例分组、模块规则、逐模块 clk/rst、动态 step、RTL `RS_CRG_EN` 与 Excel 标签，并覆盖从规则 clk formal 出发的有界 CRG 上游追踪：多分支、`clk/rst_n` 精确排除、模块跳数、环路/对象预算、深度边界、完整 hierarchy 精确匹配、三个 warning code、inventory v2 legacy/v3、report v4、GUI `CRG Trace` 与 CSV trace 证据。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
 实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/逐模块 clk/rst 检查并计入物理实例数及规则计算后的有效 `step`；其解析后的 `CRG_source` 和可选 alias 只保留证据，不得进入 tag/index/连续编号、NPI positions 或 PASS/FAIL 判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
@@ -310,7 +336,8 @@ $ValidateArgs = @(
     "--column", "rst=8",
     "--column", "CRG_source=5",
     "--column", "RS_CFG_EN=10",
-    "--column", "RS_route="
+    "--column", "RS_route=",
+    "--column", "RS_route2="
 )
 
 python -m rscheck @ValidateArgs
@@ -425,7 +452,7 @@ Position 映射必须有独立合同测试：`tile_core -> top.u_tile` 命中后
 
 CRG Source 映射也必须有独立合同测试：`core_clock_source -> top.u_soc.u_crg_core` 命中后 `SpecRow.crg_source` 为全路径、`crg_source_alias` 为简写；未登记的完整路径直通且 alias 为空；validate JSON、report v4、CSV 和 GUI 同时保留 alias+full，并用该完整路径精确匹配 trace。CRG 路径不得加入 NPI positions。
 
-`RS_inst` 匹配也必须有独立合同测试：与 `RS_route` 同为空时按行报错，单独留空时应按 `RS_route` 匹配；填写 `CTRL_RS_D0` 能以空 remainder 匹配同名本地实例；完整层次名不应被文档或 GUI 引导为 `RS_inst`；空后缀实例的 `rs_mode=0` 时贡献为 `0`，非零时贡献为 `1`；空后缀与 indexed 成员混合时，只对 indexed 成员检查 tag/index/连续性。
+`RS_inst` 匹配也必须有独立合同测试：留空或为 `NA` 时只检查层次和模块，不按任一 route 选实例；完整本地名 `CTRL_RS_D0` 的空 remainder 合法，完整层次路径不应被引导为 `RS_inst`；`rs_mode=0` 贡献 0 拍，非零贡献 1 拍。空后缀与 indexed 成员混合时，只对 indexed 成员检查 tag/index/连续性。
 
 ## 4. 通用 POSIX 本地测试
 
@@ -856,7 +883,11 @@ $ELAB_ROOT/kdb.elab++       # elabcom elaborated KDB，可传给 --elab-db
 
 ### 7.1 Position / CRG_source 的 DUT 层次树和正则筛选
 
-两个映射库的“选择 DUT 层次…”均先显示可展开的离散顶层，不需要查询词；再按需要对完整路径输入 Python 正则。它只使用当前 collector 和 elaborated KDB，不需要 Excel，也不接受 filelist、RTL 或 `work.lib++`。以下 CLI 测试覆盖正则的包含、截断和零匹配；`--limit` 只限制筛选结果，不限制 GUI 未过滤树。另可运行 `python -m unittest -v tests.test_hierarchy_tree`，验证同一会话只采集一次、多顶层、generate/转义名、翻页到第 620 个子节点，以及无效/空结果不写回路径。
+两个映射库的“选择 DUT 层次…”均先显示可展开的离散顶层，不需要查询词；再按需要对完整路径输入 Python 正则。它只使用当前 collector 和 elaborated KDB，不需要 Excel，也不接受 filelist、RTL 或 `work.lib++`。以下 CLI 测试覆盖正则的包含、截断和零匹配；`--limit` 只限制筛选结果，不限制 GUI 未过滤树。另可运行 `python -m unittest -v tests.test_hierarchy_tree tests.test_hierarchy_cache`，验证跨窗口内存复用、重启后磁盘命中、同路径重建、换库、清除/取消后重试、两窗口并用、多顶层、generate/转义名、翻页到第 620 个子节点，以及无效/空结果不写回路径。
+
+在线 GUI 门禁使用独立的 `RSCHECK_HIERARCHY_CACHE_DIR`。Position 窗口应首次 `first=collector`、总 `browse_calls=1`；CRG_source 由另一个 GUI 进程打开相同 KDB，应是 `first=disk`、`browse_calls=0`。两次运行都会输出内存复用次数 `memory_hits` 和从点击到树可选的最长重复打开时间 `max_reopen_ms`，不把首次采集时间计入重开计时。
+
+VM 实测（项目示例 `.elab++`、真实 Tk 桌面）：Position 连开 12 次仅采集 1 次；另一 GUI 进程从 CRG_source 连开 12 次，采集 0 次。两组各 11 次内存命中的最长可选时间均约 105 ms（脚本以 100 ms 间隔观察窗口，不是所有设计的性能保证）。另加 `--expect-first disk --exercise-clear` 点击清缓存按钮，实测只触发 1 次新采集，随后再次打开命中内存。Linux 全量 413 项通过，无跳过。
 
 完成第 5～7 节后，可直接复制下面命令验证 clean KDB 的精确匹配、显示上限和零匹配：
 
@@ -1585,7 +1616,7 @@ work_lib_as_elab.log
 
 - 该错误只会在配置 `validate_headers=true`、命令行传入 `--header-check` 或 GUI 勾选“严格校验表头（可选）”时出现；默认解析不比较表头文字。
 - 检查 `--sheet`、`header_row` 和 `data_start_row`。
-- 检查所有已映射列号是否为 1-based 正整数且互不重复；`--column RS_route=` 可禁用该可选列。
+- 检查所有已映射列号是否为 1-based 正整数且互不重复；`--column RS_route=`、`--column RS_route2=` 可分别禁用两个可选列。
 - 若有意使用严格诊断，确认映射后的表头精确为 `Intf_type`、`RS_module`、`RS_inst`、`position`、`step`、`clk`、`rst`、`CRG_source`、`RS_CFG_EN`。
 - 若实际表头本来就是自定义业务名称，关闭该可选诊断；内部属性仍由列号映射，不由表头文字决定。
 

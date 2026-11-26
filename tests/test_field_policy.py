@@ -90,7 +90,7 @@ class FieldPolicyTests(unittest.TestCase):
                     self.assertTrue(row["passed"])
                     self.assertEqual([(i["code"], i["actual"]["field"]) for i in row["findings"]],
                                      [("EXCEL_FIELD_BLANK", f)]*warnings)
-                    self.assertEqual(row["step_check"]["effective_step"], 1)
+                    self.assertEqual(row["step_check"]["effective_step"], None if f == "RS_inst" else 1)
         row, = self.result({"clk":"", "RS_CFG_EN":"", "rst":"NA", "RS_route":""}).rows
         self.assertEqual(row["step_check"]["physical_instances"], 6)
         self.assertEqual([i["actual"]["field"] for i in row["findings"]], ["clk", "RS_CFG_EN", "RS_route"])

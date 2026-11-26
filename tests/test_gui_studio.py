@@ -38,6 +38,23 @@ class StudioTests(unittest.TestCase):
             self.root.after_cancel(timer)
         self.root.destroy()
 
+    def test_named_font_lookup_uses_its_own_tk_interpreter_on_python38(self):
+        # Create a name only in the second interpreter. Looking it up via the
+        # default root, or via the post-3.8 nametofont(root=...) API, must fail.
+        from tkinter import font
+        from rscheck.gui_style import named_font
+
+        second = tk.Tk()
+        self.addCleanup(second.destroy)
+        second.withdraw()
+        name = "RsCheckOnlyInSecondRoot"
+        self.assertNotIn(name, font.names(self.root))
+        original = font.Font(root=second, name=name, family="Helvetica", size=19)
+        existing = named_font(second, name)
+        self.assertEqual(existing.cget("size"), 19)
+        existing.configure(size=17)
+        self.assertEqual(original.cget("size"), 17)
+
     def assert_in_window(self, widget):
         self.assertTrue(widget.winfo_ismapped())
         x = widget.winfo_rootx() - self.root.winfo_rootx()

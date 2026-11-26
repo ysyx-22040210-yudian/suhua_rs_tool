@@ -95,8 +95,8 @@ class ExplicitNameFallbackTests(unittest.TestCase):
         self.assertTrue(zero.passed)
         self.assertEqual((zero.instances[0].name, zero.effective_step), ("AAAA_BBB_C2", 0))
 
-    def test_tie_does_not_use_route_or_steal_from_another_position(self):
-        tie = replace(self.typo, rs_inst="AAAA_BBB_X", rs_route="CTRL_RS_D0")
+    def test_tie_without_route_does_not_steal_from_another_position(self):
+        tie = replace(self.typo, rs_inst="AAAA_BBB_X", rs_route="NA")
         rev = replace(self.inv, positions={self.pos: PositionInventory(
             True, tuple(reversed(self.inv.positions[self.pos].instances)))})
         for inv in (self.inv, rev):

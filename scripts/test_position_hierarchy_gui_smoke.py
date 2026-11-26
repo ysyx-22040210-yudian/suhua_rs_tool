@@ -29,6 +29,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--npi-lib-dir")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--iterations", type=int, default=1)
+    parser.add_argument("--expect-first", choices=("collector", "disk"),
+                        help="assert first-open source (use a private cache directory for repeatable tests)")
+    parser.add_argument("--exercise-clear", action="store_true", help="also verify a manual clear in the actual picker")
     parser.add_argument("--visible-seconds", type=float, default=1.0)
     return parser
 
@@ -54,6 +57,14 @@ def main() -> int:
 
     root = tk.Tk()
     app = RsCheckApp(root)
+    browse_calls = 0
+    real_run = app.controller.run
+    def count_browse(command, **kwargs):
+        nonlocal browse_calls
+        if "--browse" in command:
+            browse_calls += 1
+        return real_run(command, **kwargs)
+    app.controller.run = count_browse
     root.geometry("1180x780")
     root.title(f"RTL RS {args.target} DUT Hierarchy GUI Smoke")
     callback_errors: list[str] = []
@@ -101,6 +112,9 @@ def main() -> int:
     failed = False
     failure_message = ""
     phase = "start"
+    open_started = 0.0
+    open_times = []
+    open_sources = []
 
     def fail(message: str) -> None:
         nonlocal failed, failure_message, phase
@@ -114,7 +128,7 @@ def main() -> int:
             app._cancel_operation()
 
     def poll() -> None:
-        nonlocal completed, displayed, dialog_mapped, phase
+        nonlocal completed, displayed, dialog_mapped, phase, open_started
         if callback_errors:
             fail("Tk callback exception:\n" + callback_errors[0])
         if modal_errors:
@@ -128,11 +142,12 @@ def main() -> int:
             root.destroy()
             return
         if phase == "start":
+            open_started = time.monotonic()
             (app.position_hierarchy_pick_button if is_position else app.crg_source_hierarchy_pick_button).invoke()
             phase = "wait-dialog"
             root.after(100, poll)
             return
-        if phase == "wait-dialog":
+        if phase in ("wait-dialog", "wait-refresh"):
             dialog = app._position_hierarchy_dialog
             if dialog is None:
                 fail("hierarchy candidate dialog was not created")
@@ -142,6 +157,20 @@ def main() -> int:
                 root.after(100, poll)
                 return
             dialog_mapped = True
+            open_times.append((time.monotonic() - open_started) * 1000)
+            status = app.position_hierarchy_status_var.get()
+            origin = {"已从 KDB 加载": "collector", "命中内存缓存": "memory", "命中本地缓存": "disk"}.get(status.split(" · ")[0])
+            expected = "collector" if phase == "wait-refresh" else "memory" if completed else args.expect_first
+            if not origin or (expected and origin != expected):
+                fail(f"unexpected hierarchy source: {status}; expected {expected}")
+                root.after(100, poll)
+                return
+            open_sources.append(origin)
+            if args.exercise_clear and not completed and phase == "wait-dialog":
+                app.hierarchy_cache_clear_button.invoke()
+                phase = "wait-refresh"
+                root.after(100, poll)
+                return
             model = app._hierarchy_model
             tree = app._position_hierarchy_tree
             if not model or args.expected_path not in model.by_path:
@@ -219,13 +248,20 @@ def main() -> int:
                 phase = "start"
                 root.after(100, poll)
                 return
+            if browse_calls != open_sources.count("collector"):
+                fail(f"unexpected extra hierarchy collections: {browse_calls}, sources={open_sources}")
+                root.after(100, poll)
+                return
             print(
                 ("POSITION_HIERARCHY_GUI_PASS: " if is_position else "CRG_SOURCE_HIERARCHY_GUI_PASS: ")
                 +
                 f"regex={args.regex!r} selected={args.expected_path} "
                 f"displayed={displayed} iterations={completed} "
                 f"mapping-dirty={str(app._position_mappings_dirty).lower()} "
-                f"window=mapped dialog=mapped window_id={window_id}"
+                f"window=mapped dialog=mapped window_id={window_id} "
+                f"browse_calls={browse_calls} first={open_sources[0]} memory_hits={open_sources.count('memory')} "
+                f"max_reopen_ms={max(open_times[2 if args.exercise_clear else 1:], default=0):.0f} "
+                f"manual_reload={int(args.exercise_clear)}"
             )
             phase = "done"
             root.after(max(0, int(args.visible_seconds * 1000)), root.destroy)

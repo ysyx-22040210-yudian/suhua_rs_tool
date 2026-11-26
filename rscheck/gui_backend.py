@@ -19,6 +19,8 @@ from .model import (
     CRG_TRACE_EXCLUDED_INPUTS,
     CRG_TRACE_STATUSES,
     FIELD_NAMES,
+    ROUTE_FIELDS,
+    SELECTOR_POLICY,
     OPTIONAL_ROW_FIELDS,
     REQUIRED_ROW_FIELDS,
     REQUIRED_COLUMN_FIELDS,
@@ -246,7 +248,7 @@ def _common_arguments(request: GuiRunRequest) -> list[str]:
     reverse: dict[str, list[str]] = {}
     for field_name in FIELD_NAMES:
         column = _positive_integer(
-            request.columns.get(field_name, ""), f"column {field_name}", optional=field_name == "RS_route"
+            request.columns.get(field_name, ""), f"column {field_name}", optional=field_name in ROUTE_FIELDS
         )
         columns[field_name] = column
         if column:
@@ -411,8 +413,11 @@ def format_command(command: Sequence[str]) -> str:
 
 
 def _validate_selector_fields(spec: Mapping[str, Any], label: str, *, saved_report: bool = False) -> None:
-    if not isinstance(spec.get("RS_inst"), str) or not isinstance(spec.get("RS_route", ""), str):
-        raise GuiReportError(f"{label}.RS_inst and RS_route must be strings")
+    if not isinstance(spec.get("RS_inst"), str) or any(not isinstance(spec.get(f, ""), str) for f in ROUTE_FIELDS):
+        raise GuiReportError(f"{label}.RS_inst and route fields must be strings")
+    if "selector_policy" in spec and (spec["selector_policy"] != SELECTOR_POLICY
+            or type(spec.get("route_group_size")) is not int or spec["route_group_size"] < 0):
+        raise GuiReportError(f"{label} has invalid route policy or group size")
     if "RS_inst_formula_cell" in spec:
         address = spec["RS_inst_formula_cell"]
         ref = re.fullmatch(r"[A-Z]+([1-9][0-9]*)", address) if isinstance(address, str) else None
@@ -427,8 +432,10 @@ def _validate_selector_fields(spec: Mapping[str, Any], label: str, *, saved_repo
             raw = (spec.get("crg_source_alias") or spec.get(name)) if name == "CRG_source" else spec.get(name, "")
             if not isinstance(raw, str):
                 raise GuiReportError(f"{label}.{name} must be a string")
-            if name == "RS_route" and not raw and name not in ignored:
+            if name in ROUTE_FIELDS and not raw and name not in ignored:
                 continue  # Unmapped optional column.
+            if name in ROUTE_FIELDS and name not in ignored and spec.get("selector_policy") == SELECTOR_POLICY:
+                continue  # Route fields may be bypassed.
             reason = skip_reason(raw)
             if (name in ignored) != bool(reason) or reason != ignored.get(name):
                 raise GuiReportError(f"{label}.ignored_fields disagrees with {name}")
@@ -561,8 +568,25 @@ def _validate_instance_match(
     # Reports written before list support treated the original cell as one literal.
     tokens = spec.get("RS_inst_items")
     ignored = spec.get("ignored_fields", {})
-    route_active = bool(spec.get("RS_route")) and "RS_route" not in ignored
-    if "ignored_fields" in spec and not tokens and not route_active:
+    current = spec.get("selector_policy") == SELECTOR_POLICY
+    route_active = (skip_reason(spec.get("RS_route", "")) is None if current
+                    else bool(spec.get("RS_route")) and "RS_route" not in ignored)
+    if current and tokens and match.get("mode") in ROUTE_FIELDS:
+        mode = "RS_route2" if spec["route_group_size"] > 1 else "RS_route"
+        if (not route_active or not spec["route_group_size"] or match.get("mode") != mode or skip_reason(spec.get(mode, ""))
+                or match.get("query") != spec.get(mode) or match.get("position") != spec["position"]
+                or match.get("RS_module") != spec["RS_module"]):
+            raise GuiReportError(f"{label}: route fallback disagrees with the specification")
+        attempts = _mapping_array(match.get("primary_attempts"), f"{label}.primary_attempts")
+        if [a.get("query") for a in attempts] != tokens or any(
+                a.get("rule") != RS_INST_FUZZY_RULE or a.get("status") not in ("no_candidates", "ambiguous")
+                or a.get("matched_paths") != [] or a.get("added_count") != 0 for a in attempts):
+            raise GuiReportError(f"{label}: route requires all RS_inst attempts to be unsuccessful")
+        for a in attempts:
+            _validate_nearest(a, (), spec, label)
+        _validate_nearest(match, instances, spec, label)
+        return
+    if "ignored_fields" in spec and not tokens and (current or not route_active):
         if (match.get("mode") != "none" or match.get("status") != "no_selector" or match.get("rule") != "not_run"
                 or match.get("query") != "" or instances or match.get("matched_count") != 0
                 or match.get("position") != spec["position"] or match.get("RS_module") != spec["RS_module"]):

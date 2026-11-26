@@ -72,7 +72,7 @@ class MatchReviewTests(unittest.TestCase):
     def test_route_tie_limit_is_stable_and_legacy_missing_candidates_are_not_invented(self):
         one = self.inv.positions[self.ctrl.position].instances[0]
         members = tuple(replace(one, name=f"UN_{i:02}", full_name=f"top.u_tile.UN_{i:02}") for i in range(60))
-        route = replace(self.ctrl, rs_inst="", rs_route="UN_XX")
+        route = replace(self.ctrl, rs_inst="UN_YY", rs_route="UN_XX")
         def make(items):
             return self.record(route, replace(self.inv, positions={route.position: PositionInventory(True, items)}))
         record = make(members)
@@ -86,11 +86,11 @@ class MatchReviewTests(unittest.TestCase):
         self.assertIn("60 个并列（显示 5/60）", format_match_details(record))
 
     def test_not_run_no_candidates_legacy_and_validation_are_distinct(self):
-        for source in (replace(self.group, position="missing"), replace(self.ctrl, rs_inst="", position="missing")):
+        for source in (replace(self.group, position="missing"), replace(self.ctrl, rs_inst="missing", position="missing")):
             text = format_match_details(self.record(source))
             self.assertIn("未执行：找不到指定层次", text)
             self.assertNotIn("候选排名", text)
-        text = format_match_details(self.record(replace(self.ctrl, rs_inst="", rs_module="absent")))
+        text = format_match_details(self.record(replace(self.ctrl, rs_inst="missing", rs_module="absent")))
         self.assertIn("没有同模块候选", text)
         record = self.record(self.group)
         del record["instance_match"]

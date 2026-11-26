@@ -78,7 +78,6 @@ VERDI_WINDOW_REGEX="${VERDI_WINDOW_REGEX:-verdi|novas|debussy}"
 VERDI_READY_REGEX="${VERDI_READY_REGEX:-<Verdi:nTraceMain[^>]*>[[:space:]]+top([[:space:]]|$)}"
 NPI_TIMEOUT="${NPI_TIMEOUT:-180}"
 OUTPUT_BASE="$RSCHECK_FIXED_OUTPUT_BASE"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
 CXX="${CXX:-g++}"
 GUI_ONLINE_ITERATIONS="${GUI_ONLINE_ITERATIONS:-3}"
 GUI_POSITION_HIERARCHY_ITERATIONS="${GUI_POSITION_HIERARCHY_ITERATIONS:-20}"
@@ -550,7 +549,9 @@ if [ -n "$GCC_ENABLE" ]; then
   source "$GCC_ENABLE"
 fi
 
-command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "Python executable not found: $PYTHON_BIN"
+# shellcheck source=lib/python_runtime.sh
+source "$SCRIPT_DIR/lib/python_runtime.sh"
+rscheck_resolve_python
 command -v "$CXX" >/dev/null 2>&1 || fail "C++ compiler not found: $CXX"
 
 if [ -z "$VERDI_BIN" ]; then
@@ -1062,7 +1063,8 @@ print("clean hierarchy no-match evidence OK: matches=0 truncated=false")
 PY
 
 POSITION_HIERARCHY_GUI_LOG="$TEST_ROOT/online_gui_position_hierarchy.log"
-"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+RSCHECK_HIERARCHY_CACHE_DIR="$TEST_ROOT/dut_cache" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+  --expect-first collector \
   --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" \
   --elab-db "$ELAB_DB" \
@@ -1081,7 +1083,8 @@ grep -Fq \
 assert_no_collector_errors "$POSITION_HIERARCHY_GUI_LOG"
 
 CRG_HIERARCHY_GUI_LOG="$TEST_ROOT/online_gui_crg_hierarchy.log"
-"$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+RSCHECK_HIERARCHY_CACHE_DIR="$TEST_ROOT/dut_cache" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/test_position_hierarchy_gui_smoke.py" \
+  --expect-first disk \
   --target CRG_source --project-root "$PROJECT_ROOT" \
   --collector "$COLLECTOR" --elab-db "$ELAB_DB" --npi-lib-dir "$NPI_LIB_DIR" \
   --regex '^top\.u_tile(_peer)?\.u_crg$' --expected-path top.u_tile.u_crg \
@@ -1108,6 +1111,7 @@ internal_fields = [
     "CRG_source",
     "RS_CFG_EN",
     "RS_route",
+    "RS_route2",
 ]
 expected_headers = [
     "接口分类",
@@ -1120,6 +1124,7 @@ expected_headers = [
     "时钟复位源",
     "假门控标记",
     "例化参考名",
+    "第二例化参考名",
 ]
 with open(sys.argv[1], "r", encoding="utf-8-sig", newline="") as stream:
     actual_headers = next(csv.reader(stream))

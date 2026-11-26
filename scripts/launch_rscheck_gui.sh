@@ -6,7 +6,6 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
 PYTHON_ENABLE_IS_SET="${PYTHON_ENABLE+x}"
 PYTHON_ENABLE="${PYTHON_ENABLE-}"
 PROBE_ONLY=0
@@ -48,7 +47,9 @@ if [ -n "$PYTHON_ENABLE" ]; then
   source "$PYTHON_ENABLE"
 fi
 
-command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "Python executable not found: $PYTHON_BIN"
+# shellcheck source=lib/python_runtime.sh
+source "$SCRIPT_DIR/lib/python_runtime.sh"
+rscheck_resolve_python
 [ -f "$PROJECT_ROOT/pyproject.toml" ] || fail "not an rtl-rs-check repository: $PROJECT_ROOT"
 if ! "$PYTHON_BIN" -c 'import tkinter' >/dev/null 2>&1; then
   fail "tkinter is unavailable; install python3-tk (Debian/Ubuntu) or the matching python3-tkinter package (RHEL/CentOS)"

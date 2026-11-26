@@ -364,8 +364,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["check", *args, "--inventory", str(ROOT / "examples/inventory.json"),
                                        "--json-report", str(report)]), 0)
             data = json.loads(report.read_text(encoding="utf-8"))
-        self.assertEqual(data["summary"]["passed_rows"], 2)
-        self.assertEqual(data["rows"][1]["instance_match"]["selected"]["full_name"], "top.u_tile.CTRL_RS_D0")
+        self.assertEqual((data["summary"]["passed_rows"], data["summary"]["partial_rows"]), (1, 1))
+        self.assertEqual(data["rows"][1]["instance_match"]["mode"], "none")
 
     def test_missing_formula_cache_stops_check_before_collector(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

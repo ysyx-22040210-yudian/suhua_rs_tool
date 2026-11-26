@@ -27,6 +27,11 @@ _GLYPHS = {
 }
 
 
+def named_font(root, name):
+    """Look up an existing font in this Tk interpreter, including on Python 3.8."""
+    return font.Font(root=root, name=name, exists=True)
+
+
 class StudioTheme:
     def __init__(self, root):
         self.root = root
@@ -36,8 +41,10 @@ class StudioTheme:
         self.rounded = RoundedElements(root, s)
         available = {name.casefold(): name for name in font.families(root)}
         def choose(names, default):
-            return next((available[n.casefold()] for n in names if n.casefold() in available),
-                        font.nametofont(default, root=root).actual("family"))
+            for name in names:
+                if name.casefold() in available:
+                    return available[name.casefold()]
+            return named_font(root, default).actual("family")
         self.face = choose(("Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC",
                             "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Microsoft YaHei"), "TkDefaultFont")
         self.mono = choose(("Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono"), "TkFixedFont")
@@ -45,7 +52,7 @@ class StudioTheme:
                              "SimSun", "STSong", "Georgia"), "TkHeadingFont")
         self.wordmark = choose(("Georgia", "Noto Serif", "DejaVu Serif", "Times New Roman"), "TkHeadingFont")
         for name in ("TkDefaultFont", "TkTextFont"):
-            font.nametofont(name, root=root).configure(family=self.face, size=10)
+            named_font(root, name).configure(family=self.face, size=10)
         self.f = lambda size, weight="normal": (self.face, size, weight)
         self.code = lambda size: (self.mono, size)
         self.icons = {}
@@ -96,7 +103,7 @@ class StudioTheme:
             s.map(toggle, background=[("active", PAPER)], indicatorcolor=[("selected", "#d7b8a4")])
         self._buttons()
         s.configure("Treeview", background=PAPER, fieldbackground=PAPER, foreground=INK,
-                    borderwidth=0, rowheight=max(28, font.nametofont("TkDefaultFont", root=root).metrics("linespace") + 9))
+                    borderwidth=0, rowheight=max(28, named_font(root, "TkDefaultFont").metrics("linespace") + 9))
         s.configure("Treeview.Heading", background="#f1eee7", foreground="#514b43", font=self.f(9,"bold"),
                     relief="flat", padding=(7, 5), bordercolor=LINE, lightcolor="#f1eee7", darkcolor=LINE)
         s.map("Treeview.Heading", background=[("active", NAV_SELECTED)])

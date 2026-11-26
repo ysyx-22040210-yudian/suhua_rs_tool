@@ -100,7 +100,7 @@ printf '%s\n' "${DISPLAY:-}" >"$FAKE_PYTHON_DISPLAY"
     def test_missing_tkinter_has_actionable_error(self) -> None:
         python = self._command(
             "python-without-tk",
-            "#!/usr/bin/env bash\nexit 1\n",
+            "#!/usr/bin/env bash\n[[ ${2:-} == *sys.version_info* ]]\n",
         )
         result = self._run(
             PYTHON_BIN=str(python),
@@ -109,6 +109,19 @@ printf '%s\n' "${DISPLAY:-}" >"$FAKE_PYTHON_DISPLAY"
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("tkinter is unavailable", result.stderr)
+
+    def test_falls_back_from_old_system_python_but_never_overrides_explicit_choice(self) -> None:
+        old = self._command("python3", "#!/usr/bin/env bash\nexit 1\n")
+        self._command("python3.8",
+                      "#!/usr/bin/env bash\nif [[ ${1:-} == -c ]]; then exit 0; fi\n"
+                      "printf 'PY38_LAUNCHED %s\\n' \"$*\"\n")
+        fallback = self._run(PYTHON_ENABLE="", PYTHON_BIN="", PROJECT_ROOT=str(ROOT))
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertIn("PY38_LAUNCHED -m rscheck gui", fallback.stdout)
+        explicit = self._run(PYTHON_ENABLE="", PYTHON_BIN=str(old), PROJECT_ROOT=str(ROOT))
+        self.assertNotEqual(explicit.returncode, 0)
+        self.assertIn("Python 3.8 or newer", explicit.stderr)
+        self.assertNotIn("PY38_LAUNCHED", explicit.stdout)
 
 
 if __name__ == "__main__":

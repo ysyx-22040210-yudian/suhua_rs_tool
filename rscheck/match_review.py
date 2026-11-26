@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from .model import RS_INST_FUZZY_RULE, RS_INST_LEGACY_SPLIT_RULE, RS_INST_LIST_RULE, RS_INST_SPLIT_RULE
+from .model import ROUTE_FIELDS, SELECTOR_POLICY, RS_INST_FUZZY_RULE, RS_INST_LEGACY_SPLIT_RULE, RS_INST_LIST_RULE, RS_INST_SPLIT_RULE
 
 
 def _quote(value: str) -> str:
@@ -58,17 +58,40 @@ def format_match_details(record: Mapping[str, Any] | None) -> str:
         if "passed" not in record and "RS_inst_items" in spec:
             items = spec["RS_inst_items"]
             lines.append(f"RS_inst 提取 {len(items)} 项：" + ("；".join(map(_quote, items)) or "无"))
+            if spec.get("selector_policy") == SELECTOR_POLICY and spec["route_group_size"] > 1:
+                lines.append(f"三项组合在 {spec['route_group_size']} 行相同；只有全部名字都未命中时，"
+                             f"才使用本行 RS_route2：{_quote(spec.get('RS_route2', ''))}。")
         notice = ("尚未运行 RTL 匹配；这里只显示 Excel 输入。" if "passed" not in record
                   else "旧报告没有记录匹配依据；请重新检查以获取明细。")
         return "\n".join([*lines, notice])
 
     mode = match["mode"]
     if mode == "none":
+        if spec.get("selector_policy") == SELECTOR_POLICY:
+            return "\n".join([*lines, "RS_inst 没有有效项：不使用 RS_route 或 RS_route2；未选择例化，不计拍。"])
         return "\n".join([*lines, "RS_inst 和 RS_route 均无有效值：没有选择例化；未检查拍数、实例参数及端口。"])
-    if mode == "RS_route":
+    if mode in ROUTE_FIELDS and "primary_attempts" in match:
+        for attempt in match["primary_attempts"]:
+            lines.append(f"RS_inst {_quote(attempt['query'])} 未命中：" +
+                         (f"最小距离 {attempt['best_distance']}，{attempt['tied_best_count']} 项并列。"
+                          if attempt['status'] == 'ambiguous' else "没有同模块候选。"))
+        reason = (f"RS_module、解析后的 position、RS_route 三项在 {spec['route_group_size']} 行相同"
+                  if mode == "RS_route2" else "三项组合在表内唯一，不使用 RS_route2")
+        lines.append(f"使用字段：{mode}（所有 RS_inst 项均未选中；{reason}）。整格为一个查询，不拆分。")
+    elif mode == "RS_route":
         lines.append("使用字段：RS_route（RS_inst 无有效项）。整格为一个查询，不拆分。")
     else:
         lines.append("使用字段：RS_inst。" + ("本行填写的 RS_route 不参与选择。" if match.get("route_ignored") else ""))
+        if spec.get("selector_policy") == SELECTOR_POLICY:
+            if any(f.get("code") == "RS_ROUTE2_REQUIRED" for f in record.get("findings", ())):
+                lines.append(f"三项组合在 {spec['route_group_size']} 行相同，缺少可用的 RS_route2；未选中实例。")
+            elif any(f.get("code") == "ROUTE_CELL_ERROR" for f in record.get("findings", ())):
+                lines.extend(f["message"] for f in record["findings"] if f["code"] == "ROUTE_CELL_ERROR")
+            elif any(i.get("status") == "matched" for i in match.get("items", ())) and any(
+                    i.get("status") != "matched" for i in match.get("items", ())):
+                lines.append("部分 RS_inst 命中、部分未命中：本行失败，不使用 RS_route 或 RS_route2 补选。")
+            else:
+                lines.append("RS_route2 未参与实例选择。")
         if match.get("suffix_regex"):
             lines.append(f"组后缀规则：{match['suffix_regex']}")
     instances = {inst["full_name"]: inst for inst in record.get("matched_instances", ())}
@@ -82,7 +105,7 @@ def format_match_details(record: Mapping[str, Any] | None) -> str:
         if missing_position or item.get("status") == "position_not_found":
             lines.append("未执行：找不到指定层次，没有查询候选。")
             continue
-        ranked = mode == "RS_route" or item.get("rule") == RS_INST_FUZZY_RULE
+        ranked = mode in ROUTE_FIELDS or item.get("rule") == RS_INST_FUZZY_RULE
         if ranked:
             if mode == "RS_inst":
                 lines.append("完整名和合法前缀组均未命中，改用本项原文做模糊匹配。")

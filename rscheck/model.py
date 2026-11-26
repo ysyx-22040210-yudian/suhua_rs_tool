@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 
 REQUIRED_COLUMN_FIELDS = (
@@ -18,7 +19,9 @@ REQUIRED_COLUMN_FIELDS = (
     "RS_CFG_EN",
 )
 
-FIELD_NAMES = REQUIRED_COLUMN_FIELDS + ("RS_route",)
+ROUTE_FIELDS = ("RS_route", "RS_route2")
+FIELD_NAMES = REQUIRED_COLUMN_FIELDS + ROUTE_FIELDS
+SELECTOR_POLICY = "inst_then_route_by_excel_group"
 REQUIRED_ROW_FIELDS = ("Intf_type", "RS_module", "position", "step")
 OPTIONAL_ROW_FIELDS = tuple(name for name in FIELD_NAMES if name not in REQUIRED_ROW_FIELDS)
 
@@ -175,12 +178,19 @@ class SpecRow:
     rs_route: str = ""
     rs_route_mapped: bool = False
     rs_inst_formula_cell: str | None = None
+    rs_route2: str = ""
+    rs_route2_mapped: bool = False
+    route_group_size: int = 0
+    # Route errors are conditional: an inactive route formula must not prevent
+    # an exact/fuzzy RS_inst success (or an empty-selector row) from running.
+    route_cell_error: str = ""
+    route2_cell_error: str = ""
 
     @property
     def ignored_fields(self) -> dict[str, str]:
         values = {"RS_inst": self.rs_inst, "clk": self.clk, "rst": self.rst,
                   "CRG_source": self.crg_source_alias or self.crg_source, "RS_CFG_EN": self.rs_cfg_en}
-        if self.rs_route_mapped or self.rs_route:
+        if (self.rs_route_mapped or self.rs_route) and self.rs_inst_items and not self.route_cell_error:
             values["RS_route"] = self.rs_route
         return {field: reason for field, value in values.items() if (reason := skip_reason(value))}
 
@@ -197,6 +207,14 @@ class SpecRow:
         return skip_reason(self.rs_route) is None
 
     @property
+    def secondary_group(self) -> bool:
+        return self.has_route and self.route_group_size > 1
+
+    @property
+    def route_field(self) -> str:
+        return "RS_route2" if self.secondary_group else "RS_route"
+
+    @property
     def rs_inst_items(self) -> tuple[str, ...]:
         return split_rs_inst(self.rs_inst) if skip_reason(self.rs_inst) is None else ()
 
@@ -211,7 +229,7 @@ class SpecRow:
     def selector_label(self) -> str:
         items = self.rs_inst_items
         if not items:
-            return f"RS_route={self.rs_route}" if self.has_route else "未指定例化"
+            return "未指定例化"
         # Keep a single line per specification in console summaries. JSON/CSV retain the cell value.
         if "\n" in self.rs_inst or "\r" in self.rs_inst:
             return "; ".join(items)
@@ -229,6 +247,11 @@ class SpecRow:
             "RS_inst_items": list(self.rs_inst_items),
             "RS_inst_split_rule": RS_INST_SPLIT_RULE,
             "RS_route": self.rs_route,
+            "RS_route2": self.rs_route2,
+            "selector_policy": SELECTOR_POLICY,
+            "route_group_size": self.route_group_size,
+            "route_mapped": self.rs_route_mapped or bool(self.rs_route),
+            "route2_mapped": self.rs_route2_mapped or bool(self.rs_route2),
             "position": self.position,
             "position_alias": self.position_alias,
             "step": self.step,
@@ -239,6 +262,16 @@ class SpecRow:
             "RS_CFG_EN": self.rs_cfg_en,
             "ignored_fields": self.ignored_fields,
         }
+
+
+def with_route_groups(specs: Iterable[SpecRow]) -> list[SpecRow]:
+    """Count active rows in the same sheet; aliases are already resolved."""
+    rows = list(specs)
+    keys = [(s.source, s.sheet, s.rs_module, s.position, s.rs_route)
+            if s.rs_inst_items and s.has_route else None for s in rows]
+    counts = Counter(key for key in keys if key is not None)
+    return [s if s.route_group_size == counts[key] else replace(s, route_group_size=counts[key])
+            for s, key in zip(rows, keys)]
 
 
 @dataclass(frozen=True)
@@ -708,6 +741,8 @@ class RowResult:
     nearest_match: NearestNameMatch | None = None
     item_matches: tuple[InstanceItemMatch, ...] = ()
     suffix_regex: str | None = None
+    route_field_used: str = ""
+    primary_attempts: tuple[InstanceItemMatch, ...] = ()
 
     @property
     def source_signal_status(self) -> str:
@@ -718,8 +753,10 @@ class RowResult:
 
     @property
     def route_match(self) -> NearestNameMatch | None:
-        """Legacy accessor: an RS_inst fallback does not consume RS_route."""
-        return self.nearest_match if not self.spec.rs_inst_items else None
+        """Nearest-name evidence only when one of the route fields actually ran."""
+        if self.route_field_used:
+            return self.nearest_match
+        return None
 
     @property
     def passed(self) -> bool:
@@ -744,7 +781,7 @@ class CheckReport:
 
     @property
     def partial_count(self) -> int:
-        return sum(r.passed and not (r.spec.rs_inst_items or r.spec.has_route) for r in self.rows)
+        return sum(r.passed and not r.spec.rs_inst_items for r in self.rows)
 
     @property
     def status(self) -> str:

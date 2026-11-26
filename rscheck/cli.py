@@ -20,6 +20,7 @@ from .model import (
     MAX_CRG_TRACE_DEPTH,
     ConfigError,
     FIELD_NAMES,
+    ROUTE_FIELDS,
     Inventory,
     RsCheckError,
     SkippedRow,
@@ -46,7 +47,7 @@ def _common_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="FIELD=INDEX",
-        help="map an internal field to a 1-based column; RS_route= disables the optional mapping",
+        help="map a field to a 1-based column; RS_route= or RS_route2= disables that optional mapping",
     )
     parser.add_argument("--header-row", type=int, help="override header row")
     parser.add_argument("--data-start-row", type=int, help="override first data row")
@@ -253,7 +254,7 @@ def _column_overrides(values: Sequence[str]) -> dict[str, int | None]:
             raise ConfigError(
                 f"unknown --column field {field_name!r}; expected one of {', '.join(FIELD_NAMES)}"
             )
-        if field_name == "RS_route" and not raw_index:
+        if field_name in ROUTE_FIELDS and not raw_index:
             result[field_name] = None
             continue
         try:

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from rscheck.gui import RsCheckApp, tk
 from rscheck.gui_backend import LIVE_SOURCE
+from rscheck.hierarchy_cache import HierarchyCache
 from rscheck.hierarchy_tree import ScopeTree
 from rscheck.npi_runner import HierarchyIndex, HierarchyScope, collect_hierarchy, search_hierarchy
 
@@ -45,7 +46,7 @@ class ScopeTreeTests(unittest.TestCase):
                           "top.gen[4]": ["top.gen[4].u"]})
         self.assertEqual(dut.filtered_children([]), {})
 
-    def test_session_index_reuses_the_same_collection_but_not_another_dialogs_cache(self):
+    def test_cli_private_indices_do_not_mix_kdbs(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             exe = root / "collector"
@@ -78,6 +79,11 @@ class ScopeTreeTests(unittest.TestCase):
             self.skipTest(f"no Tk display: {exc}")
         self.addCleanup(root.destroy)
         app = RsCheckApp(root)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        work = Path(temp.name)
+        app._hierarchy_cache = HierarchyCache(work / "cache")
+        self.addCleanup(app._release_hierarchy_session)
         root.update()
         source = [scope("top")] + [scope(f"top.u_{i:03}") for i in range(620)]
         source += [scope("top.u_619.crg")]
@@ -88,7 +94,9 @@ class ScopeTreeTests(unittest.TestCase):
         mapping = dict(app._crg_source_mappings)
         app.source_mode_var.set(LIVE_SOURCE)
         app.collector_var.set("fixture-collector")
-        app.elab_db_var.set("test.elab++")
+        db = work / "test.elab++"
+        db.mkdir()
+        app.elab_db_var.set(str(db))
         app._update_source_mode()
         app.notebook.select(app.crg_sources_tab)
         from rscheck.gui_backend import ProcessResult
@@ -148,9 +156,31 @@ class ScopeTreeTests(unittest.TestCase):
             tree.selection_set(top)
             app._on_position_hierarchy_candidate_selected()
             app.position_hierarchy_use_button.invoke()
-            self.assertFalse(session.exists())
+            self.assertTrue((session / "index.json").is_file())
             self.assertEqual(app.crg_source_path_var.get(), "top")
             self.assertEqual(app.position_path_var.get(), "keep.position")
             self.assertEqual(app.crg_source_alias_var.get(), "my_crg")
             self.assertEqual(app._crg_source_mappings, mapping)
             self.assertFalse(app._crg_source_mappings_dirty)
+            for button in (app.position_hierarchy_pick_button, app.crg_source_hierarchy_pick_button):
+                button.invoke()
+                wait()
+                self.assertIn("命中内存缓存", app.position_hierarchy_status_var.get())
+                self.assertEqual(app._position_hierarchy_tree.get_children(), (top,))
+                self.assertEqual(app.position_hierarchy_regex_var.get(), "")
+                app.position_hierarchy_close_button.invoke()
+            self.assertEqual(calls.count("browse"), 1)
+            app.position_hierarchy_pick_button.invoke()
+            wait()
+            app.hierarchy_cache_clear_button.invoke()
+            wait()
+            self.assertEqual(calls.count("browse"), 2)
+            self.assertIn("已从 KDB 加载", app.position_hierarchy_status_var.get())
+            app.position_hierarchy_close_button.invoke()
+            app._release_hierarchy_session()
+            self.assertFalse(session.exists())  # persistent file remains for a new GUI
+            app.crg_source_hierarchy_pick_button.invoke()
+            wait()
+            self.assertIn("命中本地缓存", app.position_hierarchy_status_var.get())
+            self.assertEqual(calls.count("browse"), 2)
+            app.position_hierarchy_close_button.invoke()

@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   unittest:
-    runs-on: ubuntu-latest
+    # Keep a runner with a published setup-python CPython 3.8 build.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -25,7 +26,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run offline test suite
+      - name: Run CLI and real Tk tests on the selected Python
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -v
+        # Without a display the Tk tests skip, masking version-specific GUI failures.
+        run: |
+          xvfb-run -a bash -e <<'BASH'
+          python -c 'import sys, tkinter as tk; from rscheck.gui import RsCheckApp; root = tk.Tk(); app = RsCheckApp(root); root.update(); print(sys.version, "Tk", root.tk.call("info", "patchlevel")); assert root.winfo_ismapped(); root.destroy()'
+          python -m unittest discover -v
+          BASH

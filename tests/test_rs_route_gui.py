@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RouteGuiTests(unittest.TestCase):
+    def test_route2_scoped_duplicate_then_partial_list_in_mapped_window(self):
+        self._exercise_window("route2")
+
     def test_blank_and_na_field_policy_in_mapped_window(self):
         self._exercise_window("field_policy")
 
@@ -154,6 +157,36 @@ class RouteGuiTests(unittest.TestCase):
                         self.assertIn("reset_out 接 top.u_tile.rst_core", review)
                     return
 
+                if scenario == "route2":
+                    self.assertEqual(app.column_vars["RS_route2"].get(), "11")
+                    sample = ROOT / "examples/specs_route2.csv"
+                    app.excel_var.set(str(sample))
+                    invoke_and_wait(app.validate_button, "VALID")
+                    app.result_tree.selection_set("validation-0")
+                    app._on_result_selected()
+                    self.assertIn("只有全部名字都未命中", app.match_text.get("1.0", "end"))
+                    invoke_and_wait(app.run_button, "PASS")
+                    for n, name in enumerate(("AAAA_BBB_C2", "CTRL_RS_D0")):
+                        app.result_tree.selection_set(f"row-{n}")
+                        app._on_result_selected()
+                        record = app._result_records[f"row-{n}"]
+                        self.assertEqual(record["instance_match"]["mode"], "RS_route2")
+                        self.assertIn(f"top.u_tile.{name}", app.match_text.get("1.0","end"))
+                        self.assertIn("在 2 行相同", app.match_text.get("1.0","end"))
+                    case = out / "partial.csv"
+                    case.write_text(sample.read_text(encoding="utf-8").replace("AAAA_BBB_X", "AAAA_BBB_C1；AAAA_BBB_X", 1), encoding="utf-8")
+                    app.excel_var.set(str(case))
+                    invoke_and_wait(app.run_button, "FAIL")
+                    app.result_tree.selection_set("row-0")
+                    app._on_result_selected()
+                    self.assertIn("部分 RS_inst 命中", app.match_text.get("1.0","end"))
+                    record = app._result_records["row-0"]
+                    self.assertEqual(record["instance_match"]["mode"], "RS_inst")
+                    self.assertEqual([i["name"] for i in record["matched_instances"]], ["AAAA_BBB_C1"])
+                    self.assertIsNone(record["step_check"]["effective_step"])
+                    self.assertIn("不使用 RS_route 或 RS_route2 补选", app.review_text.get("1.0", "end"))
+                    return
+
                 if scenario == "match_review":
                     app.excel_var.set(str(ROOT / "examples/specs_route.csv"))
                     invoke_and_wait(app.validate_button, "VALID")
@@ -271,15 +304,15 @@ class RouteGuiTests(unittest.TestCase):
                     self.assertIn('RS_inst 公式结果（RS_Check!C2，以保存值匹配）："AAAA_BBB"',
                                   app.match_text.get("1.0", "end-1c"))
                     self.assertEqual((specs[1]["RS_inst"], specs[1]["RS_route"]), ("", "CTRL_RS_DO"))
-                    invoke_and_wait(app.run_button, "PASS")
-                    self.assertEqual(app.summary_pass_var.get(), "通过 2")
-                    self.assertIn("CTRL_RS_D0", str(app.result_tree.set("row-1", "rs_inst")))
+                    invoke_and_wait(app.run_button, "PARTIAL")
+                    self.assertEqual(app.summary_pass_var.get(), "通过 1")
+                    self.assertIn("未指定例化", str(app.result_tree.set("row-1", "rs_inst")))
                     app.result_tree.selection_set("row-1")
                     app._on_result_selected()
                     details = app.match_text.get("1.0", "end-1c")
                     self.assertIn('RS_inst 公式结果（RS_Check!C3，以保存值匹配）：""', details)
-                    self.assertIn("使用字段：RS_route", details)
-                    self.assertIn("top.u_tile.CTRL_RS_D0", details)
+                    self.assertIn("不使用 RS_route 或 RS_route2", details)
+                    self.assertNotIn("top.u_tile.CTRL_RS_D0", details)
                     self.assertEqual(app.log_text.get("1.0", "end").count("info[EXCEL_FORMULA_CACHE]"), 2)
                     bad = out / "uncalculated.xlsx"
                     _xlsx(bad, cell_overrides={"E2": '<c r="E2"><f>SUM(1,1)</f><v/></c>'})
@@ -344,22 +377,21 @@ class RouteGuiTests(unittest.TestCase):
                         self.assertIn('[1] RS_inst："AAAA_BBB_C3"', review)
                         self.assertIn("RS_inst 公式结果（RS_Check!C2，以保存值匹配）", review)
                         self.assertIn("唯一最近：top.u_tile.AAAA_BBB_C4（距离 1）", review)
-                        # Separators alone trigger RS_route; do not split its colon or whitespace.
+                        # Separators alone never activate a route.
                         route = "AAAA_BBB:C 4"
                         _xlsx(bad, cell_overrides={
                             "C2": '<c r="C2" t="inlineStr"><is><t>,，、::&#9;；</t></is></c>',
                             "J2": f'<c r="J2" t="inlineStr"><is><t>{route}</t></is></c>',
                             "E2": '<c r="E2"><v>1</v></c>',
                         })
-                        invoke_and_wait(app.run_button, "PASS")
+                        invoke_and_wait(app.run_button, "PARTIAL")
                         chosen = app._result_records["row-0"]["instance_match"]
-                        self.assertEqual((chosen["mode"], chosen["query"], chosen["selected"]["full_name"]),
-                                         ("RS_route", route, "top.u_tile.AAAA_BBB_C4"))
+                        self.assertEqual((chosen["mode"], chosen["query"]), ("none", ""))
                     return
 
                 if scenario == "inst_fallback":
                     source = ROOT / "examples" / "specs.csv"
-                    for query, state in (("CTRL_RS_DO", "PASS"), ("AAAA_BBB_X", "FAIL")):
+                    for query, expected_mode in (("CTRL_RS_DO", "RS_inst"), ("AAAA_BBB_X", "RS_route")):
                         # Keep the reference name populated and deliberately different.
                         with source.open(encoding="utf-8-sig", newline="") as stream:
                             headers, group, control = list(csv.reader(stream))
@@ -368,23 +400,23 @@ class RouteGuiTests(unittest.TestCase):
                         with case.open("w", encoding="utf-8", newline="") as stream:
                             csv.writer(stream).writerows((headers, group, control))
                         app.excel_var.set(str(case))
-                        invoke_and_wait(app.run_button, state)
+                        invoke_and_wait(app.run_button, "PASS")
                         self.assertEqual(app._result_records["row-0"]["step_check"]["effective_step"], 5)
                         app.result_tree.selection_set("row-1")
                         app._on_result_selected()
                         root.update()
                         match = json.loads(app.evidence_text.get("1.0", "end"))["instance_match"]
                         self.assertEqual((match["mode"], match["query"], match["candidate_count"]),
-                                         ("RS_inst", query, 7))
-                        self.assertTrue(match["route_ignored"])
+                                         (expected_mode, query if expected_mode == "RS_inst" else "CTRL_RS_D0", 7))
                         display = str(app.result_tree.set("row-1", "rs_inst"))
-                        if state == "PASS":
+                        if expected_mode == "RS_inst":
+                            self.assertTrue(match["route_ignored"])
                             self.assertEqual(match["selected"]["full_name"], "top.u_tile.CTRL_RS_D0")
                             self.assertIn("CTRL_RS_DO → CTRL_RS_D0", display)
                         else:
-                            self.assertIsNone(match["selected"])
-                            self.assertEqual(match["tied_best_count"], 6)
-                            self.assertIn("并列", display)
+                            self.assertEqual(match["selected"]["name"], "CTRL_RS_D0")
+                            self.assertEqual(match["primary_attempts"][0]["tied_best_count"], 6)
+                            self.assertIn("RS_route", display)
                     return
 
                 sample = ROOT / "examples" / "specs_route.csv"

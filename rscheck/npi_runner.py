@@ -489,7 +489,7 @@ def search_hierarchy(
         hierarchy = collect_hierarchy(collector, elab_db=elab_db,
                                       timeout_seconds=timeout_seconds, npi_lib_dir=npi_lib_dir)
     else:
-        # Private to one modal picker on one KDB; not a persistent project cache.
+        # The GUI binds this private session snapshot to one verified KDB revision.
         hierarchy = (load_hierarchy_index(cached_index) if cached_index.exists() else
                      collect_hierarchy(collector, elab_db=elab_db, timeout_seconds=timeout_seconds,
                                        npi_lib_dir=npi_lib_dir, index_output=cached_index))

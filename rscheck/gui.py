@@ -54,10 +54,11 @@ from .gui_backend import (
     load_position_hierarchy_search,
     load_validation_result,
 )
-from .model import FIELD_NAMES, RS_INST_FUZZY_RULE, RS_INST_LIST_RULE, ModuleRule, RsCheckError, ToolConfig, blank_field_message
+from .model import FIELD_NAMES, ROUTE_FIELDS, SELECTOR_POLICY, RS_INST_FUZZY_RULE, RS_INST_LIST_RULE, ModuleRule, RsCheckError, ToolConfig, blank_field_message
 from .match_review import format_match_details
+from .hierarchy_cache import CacheLoadStopped, HierarchyCache
 from .hierarchy_tree import ScopeTree
-from .npi_runner import HierarchySearchResult, load_hierarchy_index
+from .npi_runner import HierarchySearchResult
 
 
 @dataclass(frozen=True)
@@ -70,10 +71,12 @@ class WorkerOutcome:
     error: str = ""
     skipped_rows: tuple[Mapping[str, Any], ...] = ()
     hierarchy_tree: ScopeTree | None = None
+    hierarchy_source: str = ""
+    hierarchy_note: str = ""
 
 
 def _uses_ranked_names(match: Mapping[str, Any]) -> bool:
-    return match.get("mode") == "RS_route" or match.get("rule") == RS_INST_FUZZY_RULE
+    return match.get("mode") in ROUTE_FIELDS or match.get("rule") == RS_INST_FUZZY_RULE
 
 
 def _item_description(item: Mapping[str, Any]) -> str:
@@ -113,22 +116,27 @@ def _evidence_payload(
     match = record.get("instance_match")
     if isinstance(match, Mapping):
         if match.get("mode") == "none":
-            explanation = "RS_inst 和 RS_route 均无有效值，未选择例化；拍数、实例参数和端口检查未执行。"
+            explanation = ("RS_inst 没有有效项，不使用两列 route，未选择例化。" if spec.get("selector_policy") == SELECTOR_POLICY
+                           else "RS_inst 和 RS_route 均无有效值，未选择例化；拍数、实例参数和端口检查未执行。")
         elif match.get("rule") == RS_INST_LIST_RULE:
             explanation = (f"RS_inst 拆为 {len(match['items'])} 项；逐项查完整名或前缀组，未命中的项独立做模糊匹配。"
                            f"按完整 RTL 路径去重后选中 "
                            f"{match['matched_count']} 个物理实例。\n" +
                            "\n".join(f"[{idx}] {_item_description(item)}" for idx, item in enumerate(match["items"], 1)))
+            if (spec.get("selector_policy") == SELECTOR_POLICY and match["matched_count"]
+                    and any(item["status"] != "matched" for item in match["items"])):
+                explanation += "\n部分命中：本行 FAIL，总拍数未确定，不使用 RS_route 或 RS_route2 补选。"
         elif _uses_ranked_names(match):
             reason = ("RS_inst 的完整名和组前缀均未命中，使用 RS_inst 本身模糊匹配。"
-                      if match.get("mode") == "RS_inst" else "RS_inst 没有有效项，使用 RS_route。")
+                      if match.get("mode") == "RS_inst" else f"所有 RS_inst 项未命中，使用 {match['mode']}。"
+                      if "primary_attempts" in match else "RS_inst 没有有效项，使用 RS_route。")
             explanation = (
                 f"{reason}在 {match.get('position')} 中找到 {match.get('candidate_count')} 个 "
                 f"{match.get('RS_module')} 实例，仅用本地例化名与 {match.get('query')!r} 比较。"
                 "区分大小写，增、删、改一个字符各计 1，距离越小越接近。"
             )
             if match.get("status") == "position_not_found":
-                explanation = f"未找到层次 {match.get('position')}，未执行 RS_route 匹配。"
+                explanation = f"未找到层次 {match.get('position')}，未执行 {match['mode']} 匹配。"
             elif match.get("status") == "ambiguous":
                 explanation += f"最小距离 {match.get('best_distance')}，有 {match.get('tied_best_count')} 个并列，未选中。"
             elif isinstance(match.get("selected"), Mapping):
@@ -159,6 +167,11 @@ def _evidence_payload(
 
 def _instance_display(spec: Mapping[str, Any], record: Mapping[str, Any]) -> str:
     match = record.get("instance_match")
+    if isinstance(match, Mapping) and match.get("mode") in ROUTE_FIELDS and "primary_attempts" in match:
+        chosen = match.get("selected")
+        result = (f"{chosen['name']}（距离 {chosen['distance']}）" if chosen else
+                  "最近候选并列" if match["status"] == "ambiguous" else "无同模块候选")
+        return f"{match['mode']}: {match['query']} → {result}"
     if isinstance(match, Mapping) and match.get("mode") == "none":
         return "未指定例化（未计拍）"
     items = spec.get("RS_inst_items")
@@ -176,6 +189,8 @@ def _instance_display(spec: Mapping[str, Any], record: Mapping[str, Any]) -> str
             labels.append(f"{missing} 项未选中")
         return " · ".join([*labels, f"{names} → {match['matched_count']} 个实例"])
     explicit_name = items[0] if items else (spec.get("RS_inst") if items is None else "")
+    if spec.get("selector_policy") == SELECTOR_POLICY and not explicit_name:
+        return "未指定例化（未计拍）"
     if explicit_name:
         if not isinstance(match, Mapping) or match.get("rule") != RS_INST_FUZZY_RULE:
             return str(explicit_name)
@@ -247,7 +262,7 @@ def _review_sections(
             if match.get("best_distance") is not None:
                 detail += f"   ·   最小编辑距离 {match['best_distance']}   ·   最近候选 {match['tied_best_count']} 个"
             is_fallback = match.get("mode") == "RS_inst"
-            title = "例化匹配 · RS_inst 模糊回退" if is_fallback else "例化匹配 · RS_route"
+            title = "例化匹配 · RS_inst 模糊回退" if is_fallback else f"例化匹配 · {match['mode']}"
             if is_fallback:
                 detail = "完整名和组前缀均未命中。 " + detail
                 if match.get("route_ignored"):
@@ -439,6 +454,7 @@ class RsCheckApp:
         self._position_hierarchy_paths: dict[str, str] = {}
         self._position_hierarchy_close_pending = False
         self._hierarchy_target = "position"
+        self._hierarchy_cache = HierarchyCache()
         self._hierarchy_temp: tempfile.TemporaryDirectory | None = None
         self._hierarchy_model: ScopeTree | None = None
         self._hierarchy_children: dict[str, list[str]] = {}
@@ -710,7 +726,7 @@ class RsCheckApp:
             row = index % rows_per_block
             block = index // rows_per_block
             label_column = block * 2
-            ttk.Label(columns_group, text="RS_route（可选）" if name == "RS_route" else name).grid(
+            ttk.Label(columns_group, text=f"{name}（可选）" if name in ROUTE_FIELDS else name).grid(
                 row=row,
                 column=label_column,
                 sticky="w",
@@ -1070,7 +1086,8 @@ class RsCheckApp:
         request = self._request()
         try:
             build_position_hierarchy_search_command(request, ".*")
-            session_dir = tempfile.TemporaryDirectory(prefix="rscheck-dut-tree-")
+            if self._hierarchy_temp is None:
+                self._hierarchy_temp = tempfile.TemporaryDirectory(prefix="rscheck-dut-tree-")
         except (GuiInputError, OSError) as exc:
             messagebox.showerror("无法浏览 DUT 层次",
                                  f"请先在「检查配置」选择在线 NPI、collector 和 Verdi *.elab++。\n{exc}",
@@ -1078,7 +1095,6 @@ class RsCheckApp:
             return
 
         self._hierarchy_target = target
-        self._hierarchy_temp = session_dir
         self._hierarchy_model = None
         self.position_hierarchy_regex_var.set("")
         dialog = tk.Toplevel(self.root)
@@ -1119,8 +1135,11 @@ class RsCheckApp:
         self.position_hierarchy_search_button.grid(row=0, column=2)
         self.hierarchy_clear_button = ttk.Button(toolbar, text="清除筛选", command=self._clear_hierarchy_filter)
         self.hierarchy_clear_button.grid(row=0, column=3, padx=(6, 0))
+        self.hierarchy_cache_clear_button = ttk.Button(
+            toolbar, text="清除层次缓存并重载", command=self._refresh_hierarchy_cache)
+        self.hierarchy_cache_clear_button.grid(row=0, column=4, padx=(10, 0))
         ttk.Label(toolbar, textvariable=self.position_hierarchy_status_var, style="Badge.TLabel").grid(
-            row=1, column=0, columnspan=4, sticky="w", pady=(8, 0)
+            row=1, column=0, columnspan=5, sticky="w", pady=(8, 0)
         )
 
         tree_frame = ttk.Frame(dialog, style="Surface.TFrame", padding=10)
@@ -1190,6 +1209,18 @@ class RsCheckApp:
         self.position_hierarchy_regex_var.set("")
         self._start_position_hierarchy_search()
 
+    def _refresh_hierarchy_cache(self) -> None:
+        if not self.running and not self.controller.is_running:
+            self._hierarchy_model = None
+            self.position_hierarchy_regex_var.set("")
+            self._start_position_hierarchy_search(clear_cache=True)
+
+    def _release_hierarchy_session(self) -> None:
+        if self._hierarchy_temp is not None:
+            self._hierarchy_temp.cleanup()
+            self._hierarchy_temp = None
+        self._hierarchy_cache.hot = None
+
     def _destroy_position_hierarchy_search(self) -> None:
         dialog = self._position_hierarchy_dialog
         self._position_hierarchy_dialog = None
@@ -1200,9 +1231,6 @@ class RsCheckApp:
         self._hierarchy_hits.clear()
         self._hierarchy_offsets.clear()
         self._hierarchy_more.clear()
-        if self._hierarchy_temp is not None:
-            self._hierarchy_temp.cleanup()
-            self._hierarchy_temp = None
         self._position_hierarchy_close_pending = False
         if dialog is None:
             return
@@ -1241,6 +1269,7 @@ class RsCheckApp:
                 state="disabled" if running else "normal"
             )
             self.hierarchy_clear_button.configure(state="disabled" if running else "normal")
+            self.hierarchy_cache_clear_button.configure(state="disabled" if running else "normal")
             self.position_hierarchy_cancel_button.configure(
                 state="normal" if running else "disabled"
             )
@@ -2028,7 +2057,7 @@ class RsCheckApp:
         excel["validate_headers"] = bool(self.header_check_var.get())
         raw["columns"] = {
             name: self.column_vars[name].get().strip() for name in FIELD_NAMES
-            if name != "RS_route" or self.column_vars[name].get().strip()
+            if name not in ROUTE_FIELDS or self.column_vars[name].get().strip()
         }
         raw["rtl"]["crg_trace_max_depth"] = (
             self.crg_trace_max_depth_var.get().strip()
@@ -2611,7 +2640,7 @@ class RsCheckApp:
             csv_report_path=self.csv_report_var.get(),
         )
 
-    def _start_position_hierarchy_search(self) -> None:
+    def _start_position_hierarchy_search(self, *, clear_cache: bool = False) -> None:
         if self.running or self.controller.is_running:
             return
         request = self._request()
@@ -2635,14 +2664,15 @@ class RsCheckApp:
         with self._cancel_guard:
             self._cancel_requested.clear()
         self._clear_position_hierarchy_candidates()
-        self.position_hierarchy_status_var.set("正在按全路径筛选…" if query else "正在读取 Verdi DUT 层次…")
+        self.position_hierarchy_status_var.set("正在清除缓存并重新加载…" if clear_cache else
+                                              "正在按全路径筛选…" if query else "正在打开 DUT 层次…")
         self._active_action = "hierarchy-search"
         self._set_running(True)
         self.status_var.set("正在查询 Verdi DUT 层次")
         self._append_log("\n" + "=" * 72 + "\n")
         worker = threading.Thread(
             target=self._run_worker,
-            args=("hierarchy-search", request, query, index_path, self._hierarchy_model is None),
+            args=("hierarchy-search", request, query, index_path, self._hierarchy_model is None, clear_cache),
             name="rscheck-gui-hierarchy-search",
             daemon=True,
         )
@@ -2731,13 +2761,36 @@ class RsCheckApp:
 
     def _run_worker(
         self, action: str, request: GuiRunRequest, hierarchy_query: str = "",
-        index_path: Path | None = None, needs_model: bool = False,
+        index_path: Path | None = None, needs_model: bool = False, clear_cache: bool = False,
     ) -> None:
         try:
             if action == "hierarchy-search":
                 if self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action))
                     return
+                model, source, note = None, "", ""
+                process = None
+                if needs_model:
+                    assert index_path is not None
+
+                    def collect(staging: Path) -> None:
+                        nonlocal process
+                        command = build_position_hierarchy_search_command(request, "", session_index=staging)
+                        process = self.controller.run(command, cwd=self.project_root)
+                        if process.cancelled or process.returncode != 0:
+                            raise CacheLoadStopped()
+
+                    try:
+                        model, source, note = self._hierarchy_cache.load(
+                            request.elab_db_path.strip(), self.project_root, index_path, collect,
+                            self._cancel_requested.is_set, clear=clear_cache)
+                    except CacheLoadStopped:
+                        self.events.put(WorkerOutcome(action=action, process=process))
+                        return
+                    if not hierarchy_query or self._cancel_requested.is_set():
+                        self.events.put(WorkerOutcome(action=action, process=process, hierarchy_tree=model,
+                                                      hierarchy_source=source, hierarchy_note=note))
+                        return
                 command = build_position_hierarchy_search_command(
                     request, hierarchy_query, session_index=index_path
                 )
@@ -2747,14 +2800,13 @@ class RsCheckApp:
                     return
                 if process.returncode == 0:
                     result = load_position_hierarchy_search(process.stdout) if hierarchy_query else None
-                    model = (ScopeTree.from_index(load_hierarchy_index(index_path))
-                             if needs_model and index_path is not None else None)
                     self.events.put(
                         WorkerOutcome(
                             action=action,
                             process=process,
                             hierarchy_search=result,
                             hierarchy_tree=model,
+                            hierarchy_source=source, hierarchy_note=note,
                         )
                     )
                     return
@@ -2798,7 +2850,7 @@ class RsCheckApp:
                     )
                     return
                 self.events.put(WorkerOutcome(action=action, process=process))
-        except (GuiInputError, GuiReportError, OSError, RuntimeError) as exc:
+        except (GuiInputError, GuiReportError, RsCheckError, OSError, RuntimeError) as exc:
             self.events.put(
                 WorkerOutcome(
                     action=action,
@@ -2853,6 +2905,7 @@ class RsCheckApp:
         except queue.Empty:
             pass
         if self._closing and not self.running and not self.controller.is_running:
+            self._release_hierarchy_session()
             self.root.destroy()
             return
         self.root.after(100, self._poll_events)
@@ -2904,7 +2957,7 @@ class RsCheckApp:
                 self.status_var.set("执行失败")
                 messagebox.showerror("执行失败", outcome.error, parent=self.root)
             return
-        if process is None:
+        if process is None and not (hierarchy_action and outcome.hierarchy_tree is not None):
             if hierarchy_action:
                 self.position_hierarchy_status_var.set("查询失败")
                 self.status_var.set("Verdi DUT 层次查询失败")
@@ -2912,11 +2965,16 @@ class RsCheckApp:
                 self._reset_summary("ERROR")
                 self.status_var.set("执行失败")
             return
-        if hierarchy_action and process.returncode == 0 and (outcome.hierarchy_search or outcome.hierarchy_tree):
+        if hierarchy_action and (process is None or process.returncode == 0) and (outcome.hierarchy_search or outcome.hierarchy_tree):
             if outcome.hierarchy_tree is not None:
                 self._hierarchy_model = outcome.hierarchy_tree
             result = outcome.hierarchy_search
             self._render_position_hierarchy_candidates(result)
+            if outcome.hierarchy_source:
+                origin = {"memory": "命中内存缓存", "disk": "命中本地缓存", "collector": "已从 KDB 加载"}[outcome.hierarchy_source]
+                self.position_hierarchy_status_var.set(f"{origin} · {self.position_hierarchy_status_var.get()}")
+            if outcome.hierarchy_note:
+                self._append_log("[层次缓存] " + outcome.hierarchy_note + "\n")
             index = result if result is not None else outcome.hierarchy_tree.index
             self._append_log(
                 "[DUT 层次] " + self.position_hierarchy_status_var.get()
@@ -3064,7 +3122,7 @@ class RsCheckApp:
 
     def _fit_result_position_column(self, value: str) -> None:
         try:
-            required = tkfont.nametofont("TkDefaultFont").measure(value) + 24
+            required = design.named_font(self.root, "TkDefaultFont").measure(value) + 24
         except Exception:
             required = len(value) * 9 + 24
         current = int(self.result_tree.column("position", "width"))
@@ -3077,7 +3135,7 @@ class RsCheckApp:
 
     def _fit_result_crg_source_column(self, value: str) -> None:
         try:
-            required = tkfont.nametofont("TkDefaultFont").measure(value) + 24
+            required = design.named_font(self.root, "TkDefaultFont").measure(value) + 24
         except Exception:
             required = len(value) * 9 + 24
         current = int(self.result_tree.column("crg_source", "width"))
@@ -3372,6 +3430,7 @@ class RsCheckApp:
             and not self._confirm_discard_crg_source_changes()
         ):
             return
+        self._release_hierarchy_session()
         self.root.destroy()
 
 

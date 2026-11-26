@@ -258,6 +258,7 @@ class ExcelReaderTests(unittest.TestCase):
                     "crg_source_alias",
                     "rs_cfg_en",
                     "rs_route",
+                    "rs_route2",
                 )
             )
 
@@ -368,11 +369,12 @@ class ExcelReaderTests(unittest.TestCase):
                 "实例组",
                 "位置简称",
                 "有效拍数",
-                "时钟连接",
-                "复位连接",
-                "时钟源模块",
+                "源端时钟线",
+                "源端复位线",
+                "时钟复位源",
                 "假门控标记",
                 "例化参考名",
+                "第二例化参考名",
             ],
             "xl/tables/table2.xml": [
                 "默认列",

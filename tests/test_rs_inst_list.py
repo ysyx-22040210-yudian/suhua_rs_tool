@@ -101,7 +101,7 @@ class InstanceListTests(unittest.TestCase):
             spec, = self.read(path)
             self.assertEqual((spec.rs_inst, spec.rs_inst_items), (raw, ()))
             match = report_to_dict(self.check(spec))["rows"][0]["instance_match"]
-            self.assertEqual((match["mode"], match["selected"]["name"]), ("RS_route", "CTRL_RS_D0"))
+            self.assertEqual((match["mode"], match["query"]), ("none", ""))
             _xlsx(path, cell_overrides={"C2": cell})
             no_selection, = self.read(path)
             self.assertEqual(report_to_dict(self.check(no_selection))["rows"][0]["instance_match"]["mode"], "none")
@@ -150,7 +150,7 @@ class InstanceListTests(unittest.TestCase):
                 self.assertEqual(tuple(item.query for item in row.item_matches), spec.rs_inst_items)
                 self.assertEqual(tuple(item.added_count for item in row.item_matches), added)
                 for item, winner in zip(row.item_matches, winners):
-                    solo, = self.check(replace(spec, rs_inst=item.query)).rows
+                    solo, = self.check(replace(spec, rs_inst=item.query, rs_route="NA")).rows
                     self.assertEqual(item.paths, tuple(i.full_name for i in solo.instances))
                     self.assertEqual(item.paths, (f"top.u_tile.{winner}",) if winner else ())
                     self.assertEqual(item.nearest, solo.nearest_match)
@@ -259,7 +259,7 @@ class InstanceListTests(unittest.TestCase):
         self.assertIn("1 项未选中", _instance_display(record["spec"], record))
         self.assertIn("并列", _evidence_payload(record)["例化匹配说明"])
         for bad, status in [(replace(spec, position="top.absent"), "position_not_found"),
-                            (replace(spec, rs_module="absent", rs_inst="X;Y"), "no_candidates")]:
+                            (replace(spec, rs_module="absent", rs_inst="X;Y", rs_route="NA"), "no_candidates")]:
             data = report_to_dict(self.check(bad))["rows"][0]
             self.assertFalse(data["passed"])
             self.assertEqual([i["status"] for i in data["instance_match"]["items"]], [status, status])
@@ -278,7 +278,7 @@ class InstanceListTests(unittest.TestCase):
             row = read_cell("\n；_x000D_ ;，、::&#9;\n", "r1::x；r2")
             self.assertEqual(row.rs_inst_items, ())
             match = report_to_dict(self.check(row))["rows"][0]["instance_match"]
-            self.assertEqual((match["mode"], match["query"]), ("RS_route", "r1::x；r2"))
+            self.assertEqual((match["mode"], match["query"]), ("none", ""))
             self.assertIsNone(self.check(read_cell("、 ,，::：&#9;", "")).rows[0].effective_step)
             row = read_cell("： 、CTRL_RS_DO，", "")
             with tempfile.TemporaryDirectory() as out:
@@ -315,7 +315,7 @@ class InstanceListTests(unittest.TestCase):
                         self.assertEqual([m["rule"] for m in record["instance_match"]["items"]],
                                          [RS_INST_GROUP_RULE, RS_INST_FUZZY_RULE])
 
-    def test_shared_formula_uses_its_own_cached_na_or_blank_and_keeps_route(self):
+    def test_shared_formula_uses_its_own_cached_na_or_blank_without_routes(self):
         # Shared-formula followers are allowed to omit the expression; never
         # substitute the master's result, or guess a name from the formula text.
         with tempfile.TemporaryDirectory() as tmp:
@@ -332,7 +332,7 @@ class InstanceListTests(unittest.TestCase):
                     self.assertTrue(row.passed)
                     self.assertEqual(row.spec.rs_inst_formula_cell, "C2")
                     self.assertEqual(row.spec.rs_inst_items, ())
-                    self.assertEqual([i.name for i in row.instances], ["AAAA_BBB_C0"])
+                    self.assertEqual(row.instances, ())
                     self.assertEqual([f.code for f in row.findings], expected_warnings)
             for marker in (None, 3, "C3", "A1:C2", "C0"):
                 with self.subTest(bad_evidence=marker), self.assertRaisesRegex(GuiReportError, "RS_inst_formula_cell"):
@@ -369,6 +369,7 @@ class InstanceListTests(unittest.TestCase):
             row = old["rows"][0]
             del row["spec"]["RS_inst_items"]
             del row["spec"]["RS_inst_split_rule"]
+            del row["spec"]["selector_policy"]
             row["spec"]["RS_inst"] = row["instance_match"]["query"] = "legacy name"
             path.write_text(json.dumps(old), encoding="utf-8")
             self.assertEqual(load_report(path).rows[0]["spec"]["RS_inst"], "legacy name")

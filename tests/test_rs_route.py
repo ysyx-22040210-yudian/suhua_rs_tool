@@ -52,7 +52,7 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(evidence["selected"], {"name": expected_name, "distance": distance,
                              "full_name": "top.u_tile." + expected_name})
             self.assertEqual((evidence["candidate_count"], evidence["tied_best_count"]), (7, 1))
-            self.assertEqual(record["spec"]["RS_inst"], "NA")
+            self.assertEqual(record["spec"]["RS_inst"], self.rows[n].rs_inst)
             self.assertEqual(csv_rows[n]["RS_route"], self.rows[n].rs_route)
             self.assertEqual(json.loads(csv_rows[n]["instance_match"]), evidence)
             self.assertIn(expected_name, _instance_display(record["spec"], record))
@@ -81,13 +81,15 @@ class RouteTests(unittest.TestCase):
                                full_name=pos + "." + self.row.rs_route)
         other_pos = "top.other"
         other = replace(wrong_module, module=self.row.rs_module, full_name=other_pos + "." + wrong_module.name)
+        # Keep multiple same-module instances so the primary typo ties and a
+        # route is actually needed. Foreign-module and foreign-parent names stay excluded.
         inv = replace(self.inv, positions={
-            pos: replace(base, instances=(wrong_module, original)),
+            pos: replace(base, instances=(*base.instances, wrong_module)),
             other_pos: PositionInventory(True, (other,)),
         })
         row = self.check(self.row, inventory=inv).rows[0]
         self.assertEqual(row.instances, (original,))
-        self.assertEqual(row.route_match.candidate_count, 1)
+        self.assertEqual(row.route_match.candidate_count, 7)
         # Literals and case matter. No regex, normalization or minimum score cut-off.
         for query, distance in (("CTRL_RS_D.", 1), ("ctrl_rs_d0", 7), ("CTRL_D0", 3), ("CTRL_RS_D0X", 1)):
             match = self.check(replace(self.row, rs_route=query), inventory=inv).rows[0]
@@ -110,25 +112,28 @@ class RouteTests(unittest.TestCase):
             row = self.check(spec).rows[0]
             self.assertFalse(row.passed)
             self.assertEqual([f.code for f in row.findings], [code])
-            self.assertEqual((row.route_match.status, row.route_match.candidate_count), (status, 0))
+            if status == "position_not_found":
+                self.assertIsNone(row.route_match)
+            else:
+                self.assertEqual((row.route_match.status, row.route_match.candidate_count), (status, 0))
 
     def test_closest_leaf_does_not_expand_as_a_prefix(self):
         pos = self.row.position
         src = next(i for i in self.inv.positions[pos].instances if i.name == "CTRL_RS_D0")
         child = replace(src, name=src.name + "_C1", full_name=src.full_name + "_C1")
-        inv = replace(self.inv, positions={pos: PositionInventory(True, (child, src))})
+        inv = replace(self.inv, positions={pos: PositionInventory(True, (*self.inv.positions[pos].instances, child))})
         self.assertEqual(self.check(self.row, inventory=inv).rows[0].instances, (src,))
 
-    def test_xlsx_blank_selector_uses_mapped_reference(self):
-        # Column K in the distributed sheet is empty; J3 contains the typo.
+    def test_xlsx_blank_selector_does_not_use_mapped_reference(self):
         excel = replace(self.config.excel, data_start_row=3,
-                        columns=dict(self.config.excel.columns, RS_inst=11))
+                        columns=dict(self.config.excel.columns, RS_inst=13))
         parsed = read_spec_rows(ROOT / "examples" / "RS_Check_Excel_Template.xlsx", excel,
                                 self.config.position_mappings, self.config.crg_source_mappings)
         row, = self.check(*parsed).rows
         self.assertTrue(row.passed)
         self.assertEqual((row.spec.rs_inst, row.spec.rs_route), ("", "CTRL_RS_DO"))
-        self.assertEqual(row.route_match.ranked[0].distance, 1)
+        self.assertIsNone(row.route_match)
+        self.assertEqual(row.instances, ())
 
     def test_route_diagnostics_must_agree_with_selected_instance_on_report_reload(self):
         data = report_to_dict(self.check(self.row))
@@ -157,19 +162,19 @@ class RouteTests(unittest.TestCase):
     def test_selected_one_still_checks_ports_step_and_duplicate_ownership(self):
         wrong = self.check(replace(self.row, step=0, clk="wrong"))
         self.assertTrue({"STEP_MISMATCH", "CLK_CONNECTION_MISMATCH"} <= {f.code for f in wrong.rows[0].findings})
-        for spec in (replace(self.row, rs_inst="CTRL_RS_D0"), replace(self.row, rs_route="CTRL_RS_D0")):
+        for spec in (replace(self.row, rs_inst="CTRL_RS_D0", rs_route="NA"), replace(self.row, rs_route="CTRL_RS_D0")):
             result = self.check(self.row, replace(spec, row_number=4))
             overlap, = result.global_findings
             self.assertEqual(overlap.code, "AMBIGUOUS_GROUP_MATCH")
             self.assertIn("row 4", overlap.message)
-            self.assertIn("RS_route=CTRL_RS_DO", overlap.actual)
+            self.assertTrue(any("AAAA_BBB_X" in s for s in overlap.actual))
 
     def test_old_config_ignores_tenth_column_and_disabling_route_is_explicit(self):
         raw = config_to_dict(self.config)
         del raw["columns"]["RS_route"]
         old = config_from_dict(raw)
         without_route = read_spec_rows(SAMPLE, old.excel)
-        self.assertTrue(all(not s.has_route and not s.rs_inst_items for s in without_route))
+        self.assertTrue(all(not s.has_route and s.rs_inst_items for s in without_route))
         self.assertTrue(all("RS_route" not in s.ignored_fields for s in without_route))
         rows = read_spec_rows(ROOT / "examples" / "specs.csv", old.excel)
         self.assertEqual([s.rs_route for s in rows], ["", ""])
@@ -201,5 +206,6 @@ class RouteTests(unittest.TestCase):
                 return read_spec_rows(f, replace(self.config.excel, columns=columns), self.config.position_mappings)
             self.assertEqual([r.rs_route for r in parse()], [r.rs_route for r in self.rows])
             f.write_text("\n".join(lines + [lines[1].replace("tile_core", "top.u_tile")]), encoding="utf-8")
-            with self.assertRaisesRegex(WorkbookError, r"duplicate group .*RS_route=CTRL_RS_DO"):
-                parse()
+            rows = parse()
+            self.assertEqual([r.route_group_size for r in rows], [2, 1, 2])
+            self.assertFalse(self.check(*rows).passed)

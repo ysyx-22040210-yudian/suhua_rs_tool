@@ -1,3 +1,3 @@
-接口分类,模块类型,实例组,位置简称,有效拍数,源端时钟线,源端复位线,时钟复位源,假门控标记,例化参考名
-OUT_IF,rs_pipe,AAAA_BBB,tile_core,5,clk_core,rst_core,crg_core,假门控,NA
-CTRL_IF,rs_pipe,CTRL_RS_D0,tile_core,1,clk_aux,rst_aux,crg_aux,假门控,CTRL_RS_DO
+接口分类,模块类型,实例组,位置简称,有效拍数,源端时钟线,源端复位线,时钟复位源,假门控标记,例化参考名,第二例化参考名
+OUT_IF,rs_pipe,AAAA_BBB,tile_core,5,clk_core,rst_core,crg_core,假门控,NA,
+CTRL_IF,rs_pipe,CTRL_RS_D0,tile_core,1,clk_aux,rst_aux,crg_aux,假门控,CTRL_RS_DO,
