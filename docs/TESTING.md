@@ -1,5 +1,64 @@
 # RTL 打拍例化检查工具测试指南
 
+**整体大规模压测：** 从已能运行 Verdi 和 Tk 的 Linux 终端执行 `PYTHON_BIN=python3 bash scripts/test_vm_project_stress.sh`。见[本轮可复现实测记录](STRESS_REPORT_2026-11-28.md)：真实 KDB、嵌套 position、合并组画布、公式 XLSX、并发与取消，以及 1,000–20,000 行的内存实测。
+
+**嵌套 position 专项（真实 Verdi KDB + 可见 Tk GUI）：** 在已配置 Verdi 和 Tk 的 Linux 终端进入项目根目录，执行：
+
+```bash
+PYTHON_BIN=python3 bash scripts/test_vm_position_bounds.sh
+```
+
+脚本在独立临时目录编译 collector、生成 `boundary.elab++`。用父行在前、子行在后的规格验证三层归属、generate 中的 RS、同名实例隔离、子层未认领的实例和对应的 CRG 驱动证据。最后从 Tk 窗口实际运行 RTL 检查，同时核对跳过的行不会占用子树。完成标记：`RS_POSITION_BOUNDARY_GUI_PASS`。
+
+**DIV / GATE / OCC 反追专项：** 在已经可以启动 Tk、运行 Verdi 的 Linux 图形终端，从仓库根目录执行：
+
+```bash
+PYTHON_BIN=python3 bash scripts/test_vm_driver_map.sh
+```
+
+脚本在独立临时目录编译当前 collector，并把 `examples/rtl/rs_driver_map.sv` elaboration 成新的 `driver.elab++`，不修改现有 DUT。测试实际打开 Tk 规则编辑器并保存/重开，在同一 GUI 前后两次发起在线检查，确认增加 OCC 的指定输入后结果由未找到变为命中；并用 KDB 验证：clk/rst 分别跨过 OCC、GATE、DIV；第 4 跳命中、第 3 跳截断；相同 RS 的多个目标互不串用；未登记的 enable/test 分支不会误报；显式增加 test 输入才命中；缺失端口或输出冒充输入会报告证据不足。看到 `RS_DRIVER_PORT_MAP_GUI_PASS` 表示本专项通过。
+
+
+**多合并区回归：** 在仓库根目录执行 `python3.8 -B -m unittest -v tests.test_step_sum tests.test_interconnect`。测试使用同一工作表中的四个相邻合并区，依次选择每块的非首行，再返回第一组，核对组号、范围以及大图；另覆盖一组合计错误而下一组正确，以及 256 个复用同一模块类型和同一实际接口的独立组，逐组验证端点不串组。VM 的真实 KDB/Tk 专项可按下节命令运行。
+
+### 0.17.0：单一总 interface 与跨接口成员赋值
+
+在已配置 Verdi 和 Tk 的 VM 终端中，从仓库根目录运行 `PYTHON_BIN=python3.8 bash scripts/test_vm_interconnect.sh`。脚本重新编译 collector，展开[测试 RTL](../examples/rtl/rs_interconnect.sv)，然后启动实际 GUI。无需生产 Excel 或 KDB。
+
+专项覆盖：唯一的 typed/generic interface formal、没有任何 modport、通过 wrapper 传递的同一接口、三个 RS 共绑、多组隔离，以及两个不同接口的请求/反向应答/经 8 位中间线连接的异名成员。另有一个整体接口对受限 modport 的样例：上层虽给两个成员赋值，画布只画该视图公开的那一条。测试核对绿色箭头两端的真实例化和成员、JSON 路径、中间线与 GUI「连接明细」。取反、常量、拼接、宽度截断、位选均不算整成员直连，只有一侧证据不能造线。若需要保存展开的大图，可在命令前设置 `RSCHECK_MEMBER_SCREENSHOT="$PWD/member-links.xwd"`（需安装 `xwd`）。
+
+VM 实测（Python 3.8.20）：重新编译 collector、展开全新 KDB，13 项互联专项全部通过；全量 439 项全部通过，无跳过。[实测窗口](rs-whole-interface-members.png)中两端各只有一个正式端口，三条成员连接的箭头按对应的 RTL 赋值区分方向。
+
+### 0.16.1：RS 例化到例化的互联画布
+
+在仓库根目录、可运行 Tk 的终端中执行。第一条用来自测试 DUT 的离线端口证据，第二条会在**全新临时目录**中重新编译 collector、展开测试 DUT、从新 KDB 运行真实 GUI，最后输出 `RS_INTERCONNECT_GUI_PASS`。在线测试要求 Linux 的 Verdi 环境（`VERDI_HOME`、license 和显示环境已就绪）。
+
+```bash
+python3.8 -B -m unittest -v tests.test_interconnect
+PYTHON_BIN=python3.8 bash scripts/test_vm_interconnect.sh
+```
+
+专项验证非锚点行也能打开整组画布，并检查实际 Tk 线段的坐标：每条点对点线的两端都落在 RS 端口上。样例 DUT 见 [rs_interconnect.sv](../examples/rtl/rs_interconnect.sv)：`tx.data_o` 通过 `shared_data` 分别驱动 `rx.data_i`、`wrap.leaf.data_i`、`peer.sink`，恰好三条有向连接；`tx.bus` 经 `fabric` 连到四个其他 RS 的接口端口，恰好四条无向绑定。没有组内对端的 `other` 不能被强行连进去。
+
+反例覆盖三级串联无跨级虚线、并行信号、反馈环、多驱动、多个 master、裸 interface、输入端互不驱动、650 路扇出分页、单端与不同合并组隔离。画布检查不改变原有拍数检查结论。
+
+实测（Python 3.8.20）：在 Verdi VM 重新编译 collector 并展开全新的测试 KDB，11 项专项全部通过；VM 全量 437 项全部通过。Windows 同版 Python 全量 387 项通过、50 项按环境条件跳过。可对照[该次真实 GUI 窗口截图](rs-instance-links.png)验收两类连线。
+
+### 0.15.0：Excel 合并拍数
+
+在仓库根目录执行；最后一条在能显示 Tk 窗口的终端运行。默认用示例 inventory，已设置本页的 `RSCHECK_ROUTE_COLLECTOR` 和 `RSCHECK_ROUTE_KDB` 时，同一 GUI 测试改用真实 Verdi elaborated KDB。
+
+```bash
+python3.8 -B -m unittest -v tests.test_step_sum
+python3.8 -m rscheck validate --excel examples/specs_merged_steps.xlsx --config config/rscheck.example.json --column step_sum=12
+python3.8 -m rscheck check --excel examples/specs_merged_steps.xlsx --config config/rscheck.example.json --column step_sum=12 --inventory examples/inventory.json --json-report output/step-sum.json --csv-report output/step-sum.csv
+python3.8 -B -m unittest -v tests.test_rs_route_gui.RouteGuiTests.test_merged_steps_in_mapped_window
+```
+
+样表预期：4 行参与，1 行跳过。`L2:L3` 的公式结果为 2，`L4:L6` 的手填值也是 2；第二组的 9 拍因该行模块为 `NA` 不计。两组独立通过，离线样例逐行 RTL 有效拍数为 2、0、1、1。GUI 专项还会打开临时反例，断言 Excel 验证和 RTL 检查都显示 `FAIL`，只有一个 `STEP_SUM_MISMATCH`。单元测试另覆盖合计列移到 AA、缺公式缓存、整区跳过、空与 `NA`、跨列/重叠合并，以及总数正确但两个单行拍数填反的情况。
+
+实测（Python 3.8.20）：Linux VM 全量 426 项通过、无跳过；用已有示例 Verdi `*.elab++` 和已编译 collector 单独运行可见 GUI 专项也通过。Windows 全量 426 项中 376 项通过，50 项按平台或环境条件跳过，无失败。本次没有重编 KDB 或修改 collector。
+
 ### 0.14.0：重复参考名与 `RS_inst` 部分命中
 
 从仓库根目录运行。第二条会真正打开 Tk 窗口，先运行两条正例，再把其中一行改为部分命中；默认使用示例 inventory。如果终端已配置下节的 `RSCHECK_ROUTE_COLLECTOR` / `RSCHECK_ROUTE_KDB`，同一条命令通过可执行 collector 读取真实 `*.elab++`。
@@ -135,7 +194,7 @@ RS_route 专项复测记录：CentOS 7、Python 3.11、Tk 8.6、Verdi O-2018.09-
 | L2 | Windows + Microsoft Excel | 真实 XLSX 九字段乱序、额外列及列覆盖 | `0` | `VALID: 1 specification row(s)` |
 | L3 | 通用本地环境 | position/CRG_source 简写 + schema v3 离线正例 inventory + report v4 | `0` | 两种简称均解析为完整路径；CRG trace 精确命中、报告保留 depth/path；6 个物理实例贡献 `[1,1,0,1,1,1]`，两组均 PASS |
 | L4 | 通用本地环境 | 离线反例 inventory | `1` | 1 行 FAIL，至少包含 `STEP_MISMATCH` 和 `RS_CFG_EN_LABEL_MISMATCH` |
-| L5 | 通用本地环境 | 模块规则、动态 step、门控和 CRG 有界追踪合同 | `0` | 规则 clk formal、多分支任一命中、精确排除 `clk/rst_n`、模块跳数、深度截断、unavailable、v2 legacy 兼容及 warning-only 退出码均有独立用例 |
+| L5 | 通用本地环境 | 模块规则、动态 step、门控和 CRG 有界追踪合同 | `0` | 规则 clk formal、多分支任一命中、按输出映射选择输入、模块跳数、深度截断、unavailable、v2 legacy 兼容及 warning-only 退出码均有独立用例 |
 | R0 | Linux + X11/Xwayland + Tk | GUI “验证 Excel”路径 | `0` | 20 轮均为 2 行 VALID、0 error、0 warning |
 | R1 | Linux + X11/Xwayland + Tk | 工具自带 GUI 可见正例/反例和 100 轮稳定性 | `0` | 正例 100 轮均为 2 行 PASS、0 error、0 warning；反例显示 FAIL |
 | R2 | Linux + X11/Xwayland + Tk | 工具自带 GUI 10,000 行负载 | `0` | 单轮 10,000 行、0 error、0 warning |
@@ -213,7 +272,7 @@ Ran ... tests in ...
 OK
 ```
 
-这些测试覆盖配置、必需列和两个可选参考名 的解析、两套路径映射、实例分组、模块规则、逐模块 clk/rst、动态 step、RTL `RS_CRG_EN` 与 Excel 标签，并覆盖从规则 clk formal 出发的有界 CRG 上游追踪：多分支、`clk/rst_n` 精确排除、模块跳数、环路/对象预算、深度边界、完整 hierarchy 精确匹配、三个 warning code、inventory v2 legacy/v3、report v4、GUI `CRG Trace` 与 CSV trace 证据。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
+这些测试覆盖配置、必需列和两个可选参考名 的解析、两套路径映射、实例分组、模块规则、逐模块 clk/rst、动态 step、RTL `RS_CRG_EN` 与 Excel 标签，并覆盖从规则 clk formal 出发的有界 CRG 上游追踪：多分支、显式登记 clk/rst_n、模块跳数、环路/对象预算、深度边界、完整 hierarchy 精确匹配、三个 warning code、inventory v2 legacy/v3、report v4、GUI `CRG Trace` 与 CSV trace 证据。Windows/macOS 可以跳过明确标记为 Linux Bash/X11 或 POSIX-only 的用例；Linux 上适用用例不得意外 skipped。
 
 实例分组回归必须同时覆盖非空 `RS_inst` 前缀和完整本地例化名：空 remainder 应合法，非空 remainder 仍按 `rtl.suffix_regex` 完整匹配。空后缀实例必须继续执行 module/parameter/step/逐模块 clk/rst 检查并计入物理实例数及规则计算后的有效 `step`；其解析后的 `CRG_source` 和可选 alias 只保留证据，不得进入 tag/index/连续编号、NPI positions 或 PASS/FAIL 判断。还应覆盖同一 scope 中 `PFX` 与 `PFX_C0` 会被 `RS_inst=PFX` 同时匹配，以及重叠 Excel 组仍产生 `AMBIGUOUS_GROUP_MATCH`；当前没有 exact-only 模式。
 
@@ -830,7 +889,7 @@ ldd "$COLLECTOR" | grep 'libnpiL1\.so'
 - `$COLLECTOR` 是当前 CentOS 架构的可执行文件。
 - `ldd` 中 `libNPI.so` 和 `libnpiL1.so` 都指向预期目录，且都不是 `not found`。
 
-该 collector 会合并 Language Model `npiPort` 遍历和 NPI L1 `npi_mod_inst_get_port` fallback，采集每个直接子 module instance 的全部 formal ports。递归展开上游模块时，它先记录 Netlist 已分类、已解析和未知端口集合，再用同一模块的 Language Model/L1 端口集合补追 Netlist 漏失或未解析的 input；Netlist 已解析的同名端口不会重复入队。对于方向未知的端口，只有 Netlist 与 Language/L1 都无法分类时才因方向证据不足把 trace 标为 unresolved；无法解析连接、对象预算耗尽等其他 NPI 证据问题仍会独立标为 unresolved。Python runner 还会传 `--trace-rules` 和 `--trace-max-depth`，让 collector 从每种 RS module 的有效 clk formal 做有界 Netlist 上游追踪并写出 inventory v3 `clock_trace`。trace cache 键包含 RS 实例完整 hierarchy、clk formal 和连接对象，不能在不同父 scope 的同名 local clock cone 之间复用。`--clk-port/--rst-port` 仍保留为兼容接口。
+collector 通过 Language Model 和 NPI L1 获取 formal ports。driver 每一步只追实际 driver；跨模块时，只有输出命中配置才从该条规则的输入继续。运行器传入 `--trace-rules`、`--driver-plan`、`--trace-max-depth`；输出为 inventory v4。
 
 若 NPI 库不在标准目录，在 `rscheck check` 命令中增加 `--npi-lib-dir "$NPI_LIB_DIR"`。
 
@@ -1759,7 +1818,7 @@ bash scripts/launch_verdi_gui.sh \
 
 ### 15.3 一键端到端测试
 
-`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、NPI L0/L1 collector 构建、partial/clean elaborated KDB、可见 Verdi、Position hierarchy 的精确/截断/零匹配 CLI 检查、Position 候选选择 GUI 20 轮、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、`clk/rst_n` input 排除和 direct depth 1；partial 与 clean inventory 还必须同时采集 `top.u_tile`、`top.u_tile_peer` 两个结构相同的 hierarchy，并证明同名 clock cone cache 不跨 scope 污染。每个 scope 固定为 13 个实例、33 个 trace node、4 个 unique module，foreign-prefix 数量必须为 0。partial hierarchy 查询还必须保留 `NPI_LOAD_PARTIAL` notice，clean hierarchy 查询必须证明结果上限与零匹配语义。深度专项必须证明 max depth 2 只产生 warning。通用检查 GUI smoke 都完成六根配置和三个数据库往返并生成 inventory v3/report v4；独立 Position hierarchy GUI smoke 则断言候选选择不自动改数据库。NPI 唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。
+`scripts/test_vm_verdi_gui.sh` 自动执行：全量 Python 测试、NPI L0/L1 collector 构建、partial/clean elaborated KDB、可见 Verdi、Position hierarchy 的精确/截断/零匹配 CLI 检查、Position 候选选择 GUI 20 轮、普通在线 GUI、自定义 `clock_i/reset_ni`、有 clk/无 rst、两个 RS_CFG_EN 专项、CRG Source 映射、在线 CRG depth-limit 20 轮、离线 GUI 100 轮和 10,000 行。真实正例必须证明 `RS -> u_occ -> u_clk_mux -> {u_crg,u_aux_crg}` 的三层/分支 trace、未登记 input 不跳转和 direct depth 1；partial 与 clean inventory 还必须同时采集 `top.u_tile`、`top.u_tile_peer` 两个结构相同的 hierarchy，并证明同名 clock cone cache 不跨 scope 污染。每个 scope 固定为 13 个实例、33 个 trace node、4 个 unique module，foreign-prefix 数量必须为 0。partial hierarchy 查询还必须保留 `NPI_LOAD_PARTIAL` notice，clean hierarchy 查询必须证明结果上限与零匹配语义。深度专项必须证明 max depth 2 只产生 warning。通用检查 GUI smoke 都完成六根配置和三个数据库往返并生成 inventory v3/report v4；独立 Position hierarchy GUI smoke 则断言候选选择不自动改数据库。NPI 唯一设计输入始终是 `--elab-db`；CRG_source 不会成为 collector positions。
 
 成功输出至少应包含这些稳定 marker：
 
@@ -1845,7 +1904,7 @@ fresh 驱动只支持 `--commit REV` 和 `--help`。每次运行在 `${VM_RUN_BA
 
 `VERDI_WINDOW_REGEX` 只用于预筛 Verdi 相关窗口，不能决定就绪；`VERDI_READY_REGEX` 必须匹配包含 elaborated top 的窗口标题。普通在线正例默认 3 轮；Position hierarchy 候选选择、CRG depth-limit、有 clk/无 rst、don't-care、精确 `NA` 和 CRG Source 映射六个专项默认各 20 轮，分别由对应 `GUI_*_ITERATIONS` 变量控制。七个轮次变量都必须是十进制正整数。
 
-当前代码版本为 `0.12.0`。[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v4、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录是当前 `0.12.0` 的签核依据。
+旧版历史记录（非当前端口映射算法）：[有界递归 CRG Source 追踪与 VM GUI 压测验证记录（2026-07-27）](TEST_RESULTS_CRG_TRACE_2026-07-27.md) 固定到 GitHub 提交 `b84be55638fd0af9fc9c3874bbc35786fd497a61`，记录了最终成功 fresh checkout 现场：Linux 299 项无 skip、collector 编译无 warning、partial/clean KDB、Language/L1 input 补追、`top.u_tile` / `top.u_tile_peer` 同名 clock cone cache 隔离、mapped Verdi/Tk、depth 3 分支递归、depth 2 连续 20 轮、report v4/inventory v4、十二日志门禁、100 轮稳定性和 10,000 行负载全部通过。该记录仅对应当时的版本。
 
 现有 [CRG_source 映射库与 VM GUI 压测验证记录](TEST_RESULTS_CRG_SOURCE_MAPPING_2026-07-26.md) 固定到 `0.10.0` 提交 `366c54114bc23f2878e0715357f7ab40f2ef7ea5`，是尚未启用 CRG 来源追踪时的十一日志历史基线，不能作为 inventory v3/report v4 和 depth-limit 专项的当前证据。下列记录只作为历史对照。
 

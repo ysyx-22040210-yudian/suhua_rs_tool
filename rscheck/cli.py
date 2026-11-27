@@ -20,12 +20,13 @@ from .model import (
     MAX_CRG_TRACE_DEPTH,
     ConfigError,
     FIELD_NAMES,
-    ROUTE_FIELDS,
+    OPTIONAL_COLUMN_FIELDS,
     Inventory,
     RsCheckError,
     SkippedRow,
     SpecRow,
     ToolConfig,
+    describe_step_sum,
 )
 from .npi_runner import (
     DEFAULT_HIERARCHY_SEARCH_LIMIT,
@@ -47,7 +48,7 @@ def _common_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="FIELD=INDEX",
-        help="map a field to a 1-based column; RS_route= or RS_route2= disables that optional mapping",
+        help="map a field to a 1-based column; RS_route=, RS_route2= or step_sum= disables that optional mapping",
     )
     parser.add_argument("--header-row", type=int, help="override header row")
     parser.add_argument("--data-start-row", type=int, help="override first data row")
@@ -254,7 +255,7 @@ def _column_overrides(values: Sequence[str]) -> dict[str, int | None]:
             raise ConfigError(
                 f"unknown --column field {field_name!r}; expected one of {', '.join(FIELD_NAMES)}"
             )
-        if field_name in ROUTE_FIELDS and not raw_index:
+        if field_name in OPTIONAL_COLUMN_FIELDS and not raw_index:
             result[field_name] = None
             continue
         try:
@@ -339,15 +340,17 @@ def _read_workbook(args: argparse.Namespace, config: ToolConfig) -> tuple[list[S
 
 def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
     specs, skipped = _read_workbook(args, config)
+    failed = False
     for spec in specs:
-        for finding in spec.blank_findings:
-            print(f"warning[{finding.code}]: {finding.message}", file=sys.stderr)
+        for finding in spec.workbook_findings:
+            failed |= finding.severity == "error"
+            print(f"{finding.severity}[{finding.code}]: {finding.message}", file=sys.stderr)
     if args.json:
         rows = [spec.as_dict() for spec in specs]
         print(json.dumps({"rows": rows, "skipped_rows": [s.as_dict() for s in skipped]} if args.include_skipped
                          else rows, ensure_ascii=False, indent=2))
     else:
-        print(f"VALID: {len(specs)} specification row(s)")
+        print(f"{'FAIL' if failed else 'VALID'}: {len(specs)} specification row(s)")
         for spec in specs:
             position = spec.position
             if spec.position_alias:
@@ -365,7 +368,10 @@ def _validate_command(args: argparse.Namespace, config: ToolConfig) -> int:
                       f"{json.dumps(spec.rs_inst, ensure_ascii=False)}")
             if len(spec.rs_inst_items) > 1:
                 print("  RS_inst items: " + "; ".join(spec.rs_inst_items))
-    return 0
+            if spec.step_sum_check is not None:
+                check = spec.step_sum_check.as_dict()
+                print(f"  step_sum [{check['status']}]: {describe_step_sum(check)}")
+    return 1 if failed else 0
 
 
 def _check_command(

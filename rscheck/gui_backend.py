@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, Union
 
 from .checker import parameter_value_state
+from .interconnect import build_group_graphs
 from .model import (
     CRG_TRACE_EXCLUDED_INPUTS,
     CRG_TRACE_STATUSES,
     FIELD_NAMES,
+    OPTIONAL_COLUMN_FIELDS,
     ROUTE_FIELDS,
     SELECTOR_POLICY,
     OPTIONAL_ROW_FIELDS,
@@ -31,6 +33,7 @@ from .model import (
     RS_INST_LEGACY_SPLIT_RULE,
     RS_INST_LIST_RULE,
     RS_INST_SPLIT_RULE,
+    StepSumCheck,
     split_rs_inst,
     skip_reason,
     InventoryError,
@@ -137,7 +140,7 @@ def find_project_root() -> Path:
 
 
 def default_columns() -> dict[str, str]:
-    return {name: str(index) for index, name in enumerate(FIELD_NAMES, start=1)}
+    return {name: "" if name == "step_sum" else str(index) for index, name in enumerate(FIELD_NAMES, start=1)}
 
 
 def resolve_user_path(value: str | Path, *, base: str | Path | None = None) -> Path:
@@ -248,7 +251,7 @@ def _common_arguments(request: GuiRunRequest) -> list[str]:
     reverse: dict[str, list[str]] = {}
     for field_name in FIELD_NAMES:
         column = _positive_integer(
-            request.columns.get(field_name, ""), f"column {field_name}", optional=field_name in ROUTE_FIELDS
+            request.columns.get(field_name, ""), f"column {field_name}", optional=field_name in OPTIONAL_COLUMN_FIELDS
         )
         columns[field_name] = column
         if column:
@@ -460,6 +463,39 @@ def load_validation_rows(stdout: str) -> tuple[Mapping[str, Any], ...]:
     return load_validation_result(stdout)[0]
 
 
+def _validate_step_sum(spec: Mapping[str, Any], label: str) -> None:
+    if "step_sum_check" not in spec:
+        return  # Existing reports and unmapped worksheets.
+    check = spec["step_sum_check"]
+    def invalid() -> None:
+        raise GuiReportError(f"{label}.step_sum_check is invalid or inconsistent")
+    if not isinstance(check, Mapping) or not isinstance(check.get("range"), str):
+        invalid()
+    sheet, _, address = check["range"].rpartition("!")
+    bounds = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)(?::\1([1-9][0-9]*))?", address)
+    if not bounds or not sheet or sheet != spec.get("sheet"):
+        invalid()
+    start, end = int(bounds[2]), int(bounds[3] or bounds[2])
+    members = check.get("members")
+    if not isinstance(members, list) or not members:
+        invalid()
+    pairs = []
+    previous = start - 1
+    for member in members:
+        if not isinstance(member, Mapping):
+            invalid()
+        row, step = member.get("row"), member.get("step")
+        if type(row) is not int or type(step) is not int or step < 0 or not previous < row <= end:
+            invalid()
+        pairs.append((row, step))
+        previous = row
+    expected = check.get("expected")
+    if ((type(expected) is not int or expected < 0) and expected not in ("", "NA")
+            or type(check.get("actual")) is not int or pairs[0] != (spec.get("row"), spec.get("step"))
+            or StepSumCheck(check["range"], expected, tuple(pairs)).as_dict() != check):
+        invalid()
+
+
 def load_validation_result(stdout: str) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...]]:
     try:
         value = json.loads(stdout)
@@ -484,6 +520,7 @@ def load_validation_result(stdout: str) -> tuple[tuple[Mapping[str, Any], ...], 
                 f"validation row {index + 1} is missing: {', '.join(missing)}"
             )
         _validate_selector_fields(item, f"validation row {index + 1}")
+        _validate_step_sum(item, f"validation row {index + 1}")
         _validate_position_resolution(item, f"validation row {index + 1}")
         _validate_crg_source_resolution(item, f"validation row {index + 1}")
         rows.append(dict(item))
@@ -565,6 +602,20 @@ def _validate_instance_match(
     label = f"report row {row_number}.instance_match"
     if not isinstance(match, Mapping):
         raise GuiReportError(f"{label} must be an object")
+    if "boundary_ownership" in match:
+        ownership = match["boundary_ownership"]
+        if not isinstance(ownership, Mapping):
+            raise GuiReportError(f"{label}.boundary_ownership must be an object")
+        children, count, sample = (ownership.get(k) for k in ("children", "excluded_count", "excluded_sample"))
+        if (not isinstance(children, list) or not children or not all(isinstance(c, str) and c for c in children)
+                or type(count) is not int or count < 0 or not isinstance(sample, list)
+                or len(sample) != min(count, 12)):
+            raise GuiReportError(f"{label}: invalid child boundary evidence")
+        for item in sample:
+            if (not isinstance(item, Mapping) or not all(isinstance(item.get(k), str) and item[k] for k in ("instance", "owner"))
+                    or not isinstance(item.get("rows"), list) or not item["rows"]
+                    or any(type(n) is not int or n < 1 for n in item["rows"])):
+                raise GuiReportError(f"{label}: invalid child instance ownership")
     # Reports written before list support treated the original cell as one literal.
     tokens = spec.get("RS_inst_items")
     ignored = spec.get("ignored_fields", {})
@@ -938,7 +989,10 @@ def _validate_report_clock_trace(value: Any, name: str, *, reset: bool = False) 
         raise GuiReportError(
             f"{name}.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
         )
-    exclusions = ["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS)
+    strategy = value.get("strategy", "legacy")
+    if strategy not in ("legacy", "port_map_v1"):
+        raise GuiReportError(f"{name}.strategy is invalid")
+    exclusions = [] if strategy == "port_map_v1" else (["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS))
     if excluded_inputs != exclusions:
         raise GuiReportError(
             f"{name}.excluded_inputs must be exactly {exclusions!r}"
@@ -1288,6 +1342,7 @@ def load_report(path: str | Path) -> LoadedReport:
                 f"report row {index + 1}.spec is missing: {', '.join(missing)}"
             )
         _validate_selector_fields(spec, f"report row {index + 1}.spec", saved_report=True)
+        _validate_step_sum(spec, f"report row {index + 1}.spec")
         if not isinstance(spec["RS_CFG_EN"], str):
             raise GuiReportError(
                 f"report row {index + 1}.spec.RS_CFG_EN must be a string"
@@ -1352,6 +1407,13 @@ def load_report(path: str | Path) -> LoadedReport:
     state = "FAIL" if not summary["passed"] else "SKIPPED" if not rows else "PARTIAL" if partial else "PASS"
     if "check_status" in value and value["check_status"] != state:
         raise GuiReportError("JSON report check_status does not match checked rows")
+    if "interconnect_groups" in value:
+        try:
+            expected = build_group_graphs(rows, partial_design=any(f.get("code") == "NPI_LOAD_PARTIAL" for f in global_findings))
+        except (KeyError, TypeError, ValueError, AttributeError, InventoryError) as exc:
+            raise GuiReportError(f"invalid interconnect group membership or port evidence: {exc}") from exc
+        if value["interconnect_groups"] != expected:
+            raise GuiReportError("interconnect_groups does not match the merged rows and captured RTL port evidence")
     return LoadedReport(
         summary=dict(summary),
         global_findings=global_findings,

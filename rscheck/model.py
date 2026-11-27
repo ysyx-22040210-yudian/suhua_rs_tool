@@ -20,10 +20,12 @@ REQUIRED_COLUMN_FIELDS = (
 )
 
 ROUTE_FIELDS = ("RS_route", "RS_route2")
-FIELD_NAMES = REQUIRED_COLUMN_FIELDS + ROUTE_FIELDS
+OPTIONAL_COLUMN_FIELDS = ROUTE_FIELDS + ("step_sum",)
+FIELD_NAMES = REQUIRED_COLUMN_FIELDS + OPTIONAL_COLUMN_FIELDS
 SELECTOR_POLICY = "inst_then_route_by_excel_group"
 REQUIRED_ROW_FIELDS = ("Intf_type", "RS_module", "position", "step")
-OPTIONAL_ROW_FIELDS = tuple(name for name in FIELD_NAMES if name not in REQUIRED_ROW_FIELDS)
+# step_sum is owned by a cell range, not by each row covered by it.
+OPTIONAL_ROW_FIELDS = tuple(name for name in REQUIRED_COLUMN_FIELDS + ROUTE_FIELDS if name not in REQUIRED_ROW_FIELDS)
 
 
 def skip_reason(value: str) -> str | None:
@@ -106,6 +108,17 @@ class ExcelConfig:
 
 
 @dataclass(frozen=True)
+class TraceCellRule:
+    kind: str
+    module: str
+    output: str
+    inputs: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "module": self.module, "output": self.output, "inputs": list(self.inputs)}
+
+
+@dataclass(frozen=True)
 class RtlConfig:
     clk_port: str = "clk"
     rst_port: str = "rst"
@@ -115,6 +128,7 @@ class RtlConfig:
     allow_leaf_signal_match: bool = False
     crg_match: str = "module"
     crg_trace_max_depth: int = DEFAULT_CRG_TRACE_MAX_DEPTH
+    trace_cells: tuple[TraceCellRule, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,6 +174,41 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
+class StepSumCheck:
+    cell_range: str
+    expected: int | str  # The anchor's non-negative integer, "", or "NA".
+    members: tuple[tuple[int, int], ...]  # Only active Excel (row, step) pairs.
+
+    @property
+    def merged(self) -> bool:
+        return ":" in self.cell_range.rpartition("!")[2]
+
+    def as_dict(self) -> dict[str, Any]:
+        actual = sum(step for _, step in self.members)
+        status = ("blank" if self.expected == "" else "NA" if self.expected == "NA" else
+                  "pass" if self.expected == actual else "mismatch")
+        return {"range": self.cell_range, "expected": self.expected, "actual": actual, "status": status,
+                "members": [{"row": row, "step": step} for row, step in self.members]}
+
+
+def describe_step_sum(check: Mapping[str, Any]) -> str:
+    members = check["members"]
+    parts = [f"第{m['row']}行={m['step']}" for m in members[:8]]
+    if len(members) > len(parts):
+        parts.append(f"…共 {len(members)} 行")
+    declared = check["expected"] if check["expected"] != "" else "空"
+    return f"{check['range']}：合计格={declared}，参与行 step 之和={check['actual']}（{'，'.join(parts)}）。"
+
+
+def step_sum_issue(check: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    if check["status"] == "mismatch":
+        return "error", "STEP_SUM_MISMATCH", describe_step_sum(check)
+    if check["status"] == "blank":
+        return "warning", "STEP_SUM_BLANK", describe_step_sum(check) + "合计格为空，跳过该项检查。"
+    return None
+
+
+@dataclass(frozen=True)
 class SpecRow:
     source: Path
     sheet: str
@@ -185,6 +234,8 @@ class SpecRow:
     # an exact/fuzzy RS_inst success (or an empty-selector row) from running.
     route_cell_error: str = ""
     route2_cell_error: str = ""
+    # Report once, on the first active row; the anchor itself may be a skipped row.
+    step_sum_check: StepSumCheck | None = None
 
     @property
     def ignored_fields(self) -> dict[str, str]:
@@ -201,6 +252,17 @@ class SpecRow:
                              self.row_number, self.position, self.rs_inst, self.rs_cfg_en,
                              actual={"field": name, "reason": "blank"})
                      for name, reason in self.ignored_fields.items() if reason == "blank")
+
+    @property
+    def workbook_findings(self) -> tuple[Finding, ...]:
+        findings = self.blank_findings
+        if self.step_sum_check is not None:
+            check = self.step_sum_check.as_dict()
+            issue = step_sum_issue(check)
+            if issue:
+                findings += (Finding(*issue, self.row_number, self.position, self.rs_inst, self.rs_cfg_en,
+                                     expected=check["expected"], actual=check["actual"]),)
+        return findings
 
     @property
     def has_route(self) -> bool:
@@ -255,6 +317,7 @@ class SpecRow:
             "position": self.position,
             "position_alias": self.position_alias,
             "step": self.step,
+            **({"step_sum_check": self.step_sum_check.as_dict()} if self.step_sum_check is not None else {}),
             "clk": self.clk,
             "rst": self.rst,
             "CRG_source": self.crg_source,
@@ -398,6 +461,7 @@ class ClockTrace:
     diagnostics: tuple[str, ...] = ()
     endpoints: tuple[SourceEndpoint, ...] = ()
     is_reset: bool = False
+    strategy: str = "legacy"
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], *, reset: bool = False, endpoints_required: bool = False) -> "ClockTrace":
@@ -414,7 +478,10 @@ class ClockTrace:
             raise InventoryError(
                 f"clock_trace.max_depth must be an integer between 1 and {MAX_CRG_TRACE_DEPTH}"
             )
-        required_exclusions = ["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS)
+        strategy = value.get("strategy", "legacy")
+        if strategy not in ("port_map_v1", "legacy"):
+            raise InventoryError(f"{label}: unknown trace strategy")
+        required_exclusions = [] if strategy == "port_map_v1" else (["clk"] if reset else list(CRG_TRACE_EXCLUDED_INPUTS))
         if excluded_inputs != required_exclusions:
             raise InventoryError(
                 f"{label}.excluded_inputs must be exactly {required_exclusions!r}"
@@ -460,7 +527,7 @@ class ClockTrace:
             status=status,
             modules=modules,
             diagnostics=tuple(raw_diagnostics),
-            endpoints=tuple(endpoints), is_reset=reset,
+            endpoints=tuple(endpoints), is_reset=reset, strategy=strategy,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -468,26 +535,80 @@ class ClockTrace:
             ("reset_port" if self.is_reset else "clock_port"): self.clock_port,
             "max_depth": self.max_depth,
             "excluded_inputs": list(self.excluded_inputs),
+            **({"strategy": self.strategy} if self.strategy != "legacy" else {}),
             "status": self.status,
             "modules": [module.as_dict() for module in self.modules],
             "diagnostics": list(self.diagnostics),
-            **({"endpoints": [e.as_dict() for e in self.endpoints]} if self.endpoints or self.is_reset else {}),
+            **({"endpoints": [e.as_dict() for e in self.endpoints]}
+               if self.endpoints or self.is_reset or self.strategy == "port_map_v1" else {}),
         }
+
+
+@dataclass(frozen=True)
+class InterfaceMemberPair:
+    source: str
+    target: str
+    path: tuple[str, ...]
+
+    def as_dict(self):
+        return {"source": self.source, "target": self.target, "path": list(self.path)}
 
 
 @dataclass(frozen=True)
 class PortConnection:
     connection: str
     object_type: str = ""
+    # None means the inventory predates interconnect capture, not "disconnected".
+    link: Mapping[str, str] | None = None
+    # None: older capture/no member scan. Empty tuple: scanned, no proven paths.
+    member_pairs: tuple[InterfaceMemberPair, ...] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"connection": self.connection, "type": self.object_type,
+                **({"link": dict(self.link)} if self.link is not None else {}),
+                **({"member_pairs": [p.as_dict() for p in self.member_pairs]} if self.member_pairs is not None else {})}
 
     @classmethod
     def from_value(cls, value: Any) -> "PortConnection":
         if isinstance(value, str):
             return cls(connection=value)
         if isinstance(value, Mapping):
+            link = value.get("link")
+            if "link" in value:
+                fields = {"kind", "identity", "interface_type", "modport", "direction"}
+                if (not isinstance(link, Mapping) or set(link) != fields
+                        or any(not isinstance(link[f], str) for f in fields)
+                        or link["kind"] not in ("signal", "interface")
+                        or link["direction"] not in ("input", "output", "inout", "unknown")
+                        or (link["identity"] and "." not in link["identity"])
+                        or (link["kind"] == "signal" and (link["modport"] or link["interface_type"]))):
+                    raise InventoryError("invalid port interconnect link evidence")
+            pairs = None
+            if "member_pairs" in value:
+                raw = value["member_pairs"]
+                if (not isinstance(raw, list) or not link or link["kind"] != "interface" or
+                        not link["identity"]):
+                    raise InventoryError("invalid member_pairs on non-interface port")
+                pairs_list = []
+                seen = set()
+                for pair in raw:
+                    if not isinstance(pair, Mapping) or set(pair) != {"source", "target", "path"}:
+                        raise InventoryError("invalid interface member pair")
+                    a, b, path = pair["source"], pair["target"], pair["path"]
+                    if (not isinstance(path, list) or not 2 <= len(path) <= 128 or
+                            any(not isinstance(p, str) or not p.rpartition(".")[0] or not p.rpartition(".")[2]
+                                for p in path) or path[0] != a or path[-1] != b or len(set(path)) != len(path)):
+                        raise InventoryError("invalid interface member path")
+                    owners = {a.rpartition(".")[0], b.rpartition(".")[0]}
+                    if len(owners) != 2 or link["identity"] not in owners or (a,b) in seen:
+                        raise InventoryError("invalid interface member endpoints")
+                    seen.add((a,b))
+                    pairs_list.append(InterfaceMemberPair(a,b,tuple(path)))
+                pairs = tuple(pairs_list)
             return cls(
                 connection=str(value.get("connection", "")),
                 object_type=str(value.get("type", "")),
+                link=link, member_pairs=pairs,
             )
         return cls(connection="")
 
@@ -504,6 +625,8 @@ class ActualInstance:
     clk_sources: tuple[DriverSource, ...]
     clock_trace: ClockTrace | None = None
     reset_trace: ClockTrace | None = None
+    # A single physical RS can be referenced with distinct CRG targets.
+    target_traces: Mapping[str, tuple[ClockTrace, ClockTrace]] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(
@@ -558,6 +681,19 @@ class ActualInstance:
                 if not isinstance(raw_reset, Mapping):
                     raise InventoryError("instance 'reset_trace' must be an object or null")
                 reset_trace = ClockTrace.from_mapping(raw_reset, reset=True, endpoints_required=True)
+        target_traces = {}
+        targets = value.get("target_traces", {})
+        if not isinstance(targets, Mapping):
+            raise InventoryError("target_traces must be an object")
+        for target, traces in targets.items():
+            if not isinstance(target, str) or not target or not isinstance(traces, Mapping) or set(traces) != {"clk", "rst"}:
+                raise InventoryError("invalid target trace pair")
+            if not all(isinstance(t, Mapping) and t.get("strategy") == "port_map_v1" for t in traces.values()):
+                raise InventoryError("target_traces requires port_map_v1")
+            target_traces[target] = (
+                ClockTrace.from_mapping(traces["clk"], endpoints_required=True),
+                ClockTrace.from_mapping(traces["rst"], reset=True, endpoints_required=True),
+            )
         raw_line = value.get("line")
         try:
             line = int(raw_line) if raw_line not in (None, "") else None
@@ -574,6 +710,7 @@ class ActualInstance:
             clk_sources=tuple(DriverSource.from_mapping(v) for v in raw_sources),
             clock_trace=clock_trace,
             reset_trace=reset_trace,
+            target_traces=target_traces,
         )
 
 
@@ -581,6 +718,7 @@ class ActualInstance:
 class PositionInventory:
     found: bool
     instances: tuple[ActualInstance, ...]
+    child_positions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -589,6 +727,9 @@ class Inventory:
     warnings: tuple[str, ...] = ()
     notices: tuple[str, ...] = ()
     schema_version: int = 3
+    trace_cells: tuple[TraceCellRule, ...] | None = None
+    # None: historical snapshots contain only the instances explicitly recorded.
+    position_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -743,6 +884,9 @@ class RowResult:
     suffix_regex: str | None = None
     route_field_used: str = ""
     primary_attempts: tuple[InstanceItemMatch, ...] = ()
+    boundary_children: tuple[str, ...] = ()
+    boundary_excluded: int = 0
+    boundary_excluded_sample: tuple[tuple[str, str, tuple[int, ...]], ...] = ()
 
     @property
     def source_signal_status(self) -> str:

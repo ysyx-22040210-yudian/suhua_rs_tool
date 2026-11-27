@@ -6,6 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import quoteattr
 
 from rscheck.config import load_config
 from rscheck.excel_reader import column_letters_to_index, read_spec_rows
@@ -31,6 +32,7 @@ def _xlsx(
     *,
     headers: tuple[str, ...] | None = None,
     cell_overrides: dict[str, str] | None = None,
+    merge_refs: tuple[str, ...] = (),
     main_namespace: str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     document_relationship_namespace: str = (
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -60,16 +62,21 @@ def _xlsx(
         rows = [ET.fromstring(xml) for xml in cells]
         for address, xml in cell_overrides.items():
             row_number = re.fullmatch(r"[A-Z]+([0-9]+)", address).group(1)
-            row = next(row for row in rows if row.get("r") == row_number)
+            row = next((row for row in rows if row.get("r") == row_number), None)
+            if row is None:
+                row = ET.Element("row", {"r": row_number})
+                rows.append(row)
             old = row.find(f"c[@r='{address}']")
             if old is not None:
                 row.remove(old)
             row.append(ET.fromstring(xml))
-        cells = [ET.tostring(row, encoding="unicode") for row in rows]
+        cells = [ET.tostring(row, encoding="unicode") for row in sorted(rows, key=lambda r: int(r.get("r")))]
+    merges = ("<mergeCells>" + "".join(f"<mergeCell ref={quoteattr(ref)}/>" for ref in merge_refs)
+              + "</mergeCells>") if merge_refs else ""
     worksheet = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<worksheet xmlns="{main_namespace}">'
-        f"<sheetData>{''.join(cells)}</sheetData></worksheet>"
+        f"<sheetData>{''.join(cells)}</sheetData>{merges}</worksheet>"
     )
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(

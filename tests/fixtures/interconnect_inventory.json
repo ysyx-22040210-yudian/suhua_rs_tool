@@ -1,0 +1,240 @@
+{
+  "schema_version": 4,
+  "positions": {
+    "link_top": {
+      "found": true,
+      "instances": [
+        {
+          "name": "explicit_view",
+          "full_name": "link_top.explicit_view",
+          "module": "rs_generic",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "slv",
+              "type": "npiModport",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.fabric",
+                "interface_type": "bus_if",
+                "modport": "slv",
+                "direction": "unknown"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "observe",
+          "full_name": "link_top.observe",
+          "module": "rs_watch",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "link_top.fabric",
+              "type": "npiInterface",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.fabric",
+                "interface_type": "bus_if",
+                "modport": "",
+                "direction": "unknown"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "other",
+          "full_name": "link_top.other",
+          "module": "rs_recv",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "link_top.separate",
+              "type": "npiInterface",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.separate",
+                "interface_type": "bus_if",
+                "modport": "slv",
+                "direction": "unknown"
+              }
+            },
+            "data_i": {
+              "connection": "link_top.d",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.d",
+                "interface_type": "",
+                "modport": "",
+                "direction": "input"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "peer",
+          "full_name": "link_top.peer",
+          "module": "rs_wire",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "sink": {
+              "connection": "link_top.shared_data",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.peer.sampled",
+                "interface_type": "",
+                "modport": "",
+                "direction": "input"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "rx",
+          "full_name": "link_top.rx",
+          "module": "rs_recv",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "link_top.fabric",
+              "type": "npiInterface",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.fabric",
+                "interface_type": "bus_if",
+                "modport": "slv",
+                "direction": "unknown"
+              }
+            },
+            "data_i": {
+              "connection": "link_top.shared_data",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.peer.sampled",
+                "interface_type": "",
+                "modport": "",
+                "direction": "input"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        },
+        {
+          "name": "tx",
+          "full_name": "link_top.tx",
+          "module": "rs_send",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "link_top.fabric",
+              "type": "npiInterface",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.fabric",
+                "interface_type": "bus_if",
+                "modport": "mst",
+                "direction": "unknown"
+              }
+            },
+            "d": {
+              "connection": "link_top.d",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.d",
+                "interface_type": "",
+                "modport": "",
+                "direction": "input"
+              }
+            },
+            "data_o": {
+              "connection": "link_top.shared_data",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.peer.sampled",
+                "interface_type": "",
+                "modport": "",
+                "direction": "output"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        }
+      ]
+    },
+    "link_top.wrap": {
+      "found": true,
+      "instances": [
+        {
+          "name": "leaf",
+          "full_name": "link_top.wrap.leaf",
+          "module": "rs_recv",
+          "file": "examples/rtl/rs_interconnect.sv",
+          "line": null,
+          "parameters": {},
+          "ports": {
+            "bus": {
+              "connection": "link_top.fabric",
+              "type": "npiInterface",
+              "link": {
+                "kind": "interface",
+                "identity": "link_top.fabric",
+                "interface_type": "bus_if",
+                "modport": "slv",
+                "direction": "unknown"
+              }
+            },
+            "data_i": {
+              "connection": "link_top.wrap.forwarded",
+              "type": "npiNet",
+              "link": {
+                "kind": "signal",
+                "identity": "link_top.peer.sampled",
+                "interface_type": "",
+                "modport": "",
+                "direction": "input"
+              }
+            }
+          },
+          "clk_sources": [],
+          "clock_trace": null,
+          "reset_trace": null
+        }
+      ]
+    }
+  },
+  "warnings": [],
+  "notices": []
+}

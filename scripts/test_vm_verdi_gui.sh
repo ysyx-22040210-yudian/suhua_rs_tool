@@ -263,6 +263,16 @@ write_sample_trace_rules() {
   printf 'rs_pipe\tclk\trst\nrs_custom\tclock_i\treset_ni\nrs_clk_only\tclk\trst_n\n' >"$output_path"
 }
 
+write_sample_driver_plan() {
+  "$PYTHON_BIN" - "$PROJECT_ROOT/config/rscheck.example.json" "$1" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as config, open(sys.argv[2], "w", encoding="utf-8") as f:
+    for rule in json.load(config)["rtl"]["trace_cells"]:
+        for name in rule["inputs"]:
+            print("R", rule["kind"], rule["module"], rule["output"], name, sep="\t", file=f)
+PY
+}
+
 assert_sample_clock_traces() {
   local inventory_path=$1
   local inventory_label=$2
@@ -342,9 +352,9 @@ def assert_trace(
     if (
         trace.get("clock_port") != clock_port
         or trace.get("max_depth") != 16
-        or trace.get("excluded_inputs") != ["clk", "rst_n"]
+        or trace.get("excluded_inputs") != [] or trace.get("strategy") != "port_map_v1"
         or trace.get("status") != expected_status
-        or trace.get("diagnostics") != []
+        or not trace.get("diagnostics")
         or actual_nodes != expected_nodes
         or actual_sources != expected_sources
     ):
@@ -681,6 +691,7 @@ cd "$PARTIAL_ELAB_ROOT"
 [ -d "$PARTIAL_ELAB_DB" ] || fail "partial-load elabcom did not create a KDB"
 printf 'top.u_tile\ntop.u_tile_peer\n' >"$PARTIAL_POSITIONS"
 write_sample_trace_rules "$PARTIAL_TRACE_RULES"
+write_sample_driver_plan "$TEST_ROOT/driver_plan.tsv"
 
 set +e
 LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
@@ -688,6 +699,7 @@ LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     --positions "$PARTIAL_POSITIONS" \
     --output "$PARTIAL_INVENTORY" \
     --trace-rules "$PARTIAL_TRACE_RULES" \
+    --driver-plan "$TEST_ROOT/driver_plan.tsv" \
     --trace-max-depth 16 \
     --clk-port clk \
     --rst-port rst \
@@ -955,6 +967,7 @@ LD_LIBRARY_PATH="$NPI_RUNTIME_LIB_DIRS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     --positions "$CLEAN_POSITIONS" \
     --output "$CLEAN_INVENTORY" \
     --trace-rules "$CLEAN_TRACE_RULES" \
+    --driver-plan "$TEST_ROOT/driver_plan.tsv" \
     --trace-max-depth 16 \
     --clk-port clk \
     --rst-port rst \
@@ -1275,9 +1288,9 @@ for name in expected_group_names:
         not isinstance(trace, dict)
         or trace.get("clock_port") != "clk"
         or trace.get("max_depth") != 3
-        or trace.get("excluded_inputs") != ["clk", "rst_n"]
-        or trace.get("status") != "depth_limited"
-        or trace.get("diagnostics") != []
+        or trace.get("excluded_inputs") != [] or trace.get("strategy") != "port_map_v1"
+        or trace.get("status") != "complete"
+        or not trace.get("diagnostics")
         or actual_nodes != branched_nodes
     ):
         raise SystemExit("{} has incomplete branched clock trace: {!r}".format(name, trace))
@@ -1437,7 +1450,7 @@ def assert_crg_report(row, expected, expected_instances, matched_module, depth, 
             or item.get("max_depth") != 3
             or item.get("status") != "matched"
             or item.get("trace_status") != trace_status
-            or item.get("diagnostics") != []
+            or not item.get("diagnostics")
             or item.get("matched")
             != {
                 "instance": expected,
@@ -1458,7 +1471,7 @@ assert_crg_report(
     "crg_core",
     3,
     [occ, mux, core],
-    "depth_limited",
+    "complete",
 )
 assert_crg_report(
     control_row,

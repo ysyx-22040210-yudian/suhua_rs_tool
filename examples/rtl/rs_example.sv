@@ -38,8 +38,8 @@ module clk_occ (
     input  logic rst_n,
     output logic clk_out
 );
-    // clk/rst_n are intentionally excluded from CRG cone expansion. source_in
-    // and enable_in remain the structural upstream inputs requested by users.
+    // Only clk_out -> source_in is registered in the example driver map;
+    // enable_in, clk and rst_n are not part of that path.
     assign clk_out = rst_n && enable_in ? source_in : 1'b0;
 endmodule
 

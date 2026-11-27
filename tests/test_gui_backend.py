@@ -73,6 +73,7 @@ class GuiBackendTests(unittest.TestCase):
             "RS_CFG_EN": "89",
             "RS_route": "17",
             "RS_route2": "22",
+            "step_sum": "23",
         }
         command = build_validate_command(
             self._request(columns=columns), python_executable="python-under-test"
@@ -99,7 +100,8 @@ class GuiBackendTests(unittest.TestCase):
 
     def test_default_columns_append_route_after_rs_cfg_en(self) -> None:
         columns = default_columns()
-        self.assertEqual(len(columns), 11)
+        self.assertEqual(len(columns), 12)
+        self.assertEqual(columns["step_sum"], "")
         self.assertEqual(columns["RS_route2"], "11")
         self.assertEqual(columns["RS_CFG_EN"], "9")
         self.assertEqual(columns["RS_route"], "10")

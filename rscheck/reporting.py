@@ -6,14 +6,21 @@ from pathlib import Path
 from typing import Any
 
 from .match_review import format_match_details
+from .interconnect import build_group_graphs
 from .model import (
-    RS_INST_FUZZY_RULE, RS_INST_GROUP_RULE, RS_INST_LIST_RULE, CheckReport, Finding, OutputError, RowResult,
+    RS_INST_FUZZY_RULE, RS_INST_GROUP_RULE, RS_INST_LIST_RULE, CheckReport, Finding, OutputError, RowResult, describe_step_sum,
 )
 
 
 def _instance_match(row: RowResult) -> dict[str, Any]:
     spec = row.spec
     scope = {"position": spec.position, "RS_module": spec.rs_module}
+    if row.boundary_children:
+        scope["boundary_ownership"] = {
+            "children": list(row.boundary_children), "excluded_count": row.boundary_excluded,
+            "excluded_sample": [{"instance": p, "owner": b, "rows": list(r)}
+                                for p, b, r in row.boundary_excluded_sample],
+        }
     items = spec.rs_inst_items
     if not items:
         return {"mode": "none", "query": "", "rule": "not_run", "status": "no_selector",
@@ -84,10 +91,7 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
                 **identity,
                 "parameters": dict(instance.parameters),
                 "ports": {
-                    name: {
-                        "connection": port.connection,
-                        "type": port.object_type,
-                    }
+                    name: port.as_dict()
                     for name, port in instance.ports.items()
                 },
                 "clk_sources": [
@@ -114,6 +118,8 @@ def _row_to_dict(row: RowResult) -> dict[str, Any]:
 
 
 def report_to_dict(report: CheckReport) -> dict[str, Any]:
+    rows = [_row_to_dict(row) for row in report.rows]
+    graphs = build_group_graphs(rows, partial_design=any(f.code == "NPI_LOAD_PARTIAL" for f in report.global_findings))
     return {
         "schema_version": 4,
         "check_status": report.status,
@@ -129,7 +135,8 @@ def report_to_dict(report: CheckReport) -> dict[str, Any]:
         },
         "skipped_rows": [r.as_dict() for r in report.skipped_rows],
         "global_findings": [item.as_dict() for item in report.global_findings],
-        "rows": [_row_to_dict(row) for row in report.rows],
+        **({"interconnect_groups": graphs} if graphs else {}),
+        "rows": rows,
     }
 
 
@@ -261,6 +268,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
         "instance_match",
         "match_details",
     ]
+    if any(row.spec.step_sum_check is not None for row in report.rows):
+        fieldnames.append("step_sum_check")
     try:
         with output.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -274,6 +283,8 @@ def write_csv_report(report: CheckReport, path: str | Path) -> Path:
                 record = _match_record(row)
                 match_fields = {"instance_match": json.dumps(record["instance_match"], ensure_ascii=False),
                                 "match_details": format_match_details(record)}
+                if row.spec.step_sum_check is not None:
+                    match_fields["step_sum_check"] = json.dumps(record["spec"]["step_sum_check"], ensure_ascii=False)
                 if not row.findings:
                     writer.writerow(
                         {
@@ -350,6 +361,9 @@ def format_console_report(report: CheckReport, *, match_details: bool = False) -
             outputs = "; ".join(f"{e.instance}.{e.port} -> {e.connection or '?'} (depth {e.depth})" for e in s.endpoints)
             lines.append(f"  {s.role} source: {s.instance}.{s.start_port} -> {s.target}; "
                          f"expected={s.expected} status={s.status}; {outputs or 'no proven output connection'}")
+        if row.spec.step_sum_check is not None and not any(f.code.startswith("STEP_SUM_") for f in row.findings):
+            check = row.spec.step_sum_check.as_dict()
+            lines.append(f"  step_sum [{check['status']}]: {describe_step_sum(check)}")
         match = row.nearest_match
         if match is not None:
             ranking = ", ".join(f"{item.full_name} ({item.distance})" for item in match.ranked)

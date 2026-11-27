@@ -156,7 +156,7 @@ class VmVerdiReadinessContractTests(unittest.TestCase):
         self.assertIn("clean_load_trace_rules.tsv", source)
         self.assertGreaterEqual(source.count("--trace-rules"), 2)
         self.assertGreaterEqual(source.count("--trace-max-depth 16"), 2)
-        self.assertIn('or trace.get("excluded_inputs") != ["clk", "rst_n"]', source)
+        self.assertIn('trace.get("strategy") != "port_map_v1"', source)
         self.assertIn('occ = "top.u_tile.u_occ"', source)
         self.assertIn('mux = "top.u_tile.u_clk_mux"', source)
         self.assertIn('core = "top.u_tile.u_crg"', source)

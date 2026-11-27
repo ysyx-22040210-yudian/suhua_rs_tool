@@ -17,6 +17,7 @@ try:
     import tkinter.font as tkfont
     from tkinter import filedialog, messagebox, ttk
     from . import gui_style as design
+    from .interconnect_canvas import InterconnectCanvas
 except ImportError as exc:  # pragma: no cover - exercised on minimal Linux installs
     tk = None  # type: ignore[assignment]
     tkfont = None  # type: ignore[assignment]
@@ -54,7 +55,9 @@ from .gui_backend import (
     load_position_hierarchy_search,
     load_validation_result,
 )
-from .model import FIELD_NAMES, ROUTE_FIELDS, SELECTOR_POLICY, RS_INST_FUZZY_RULE, RS_INST_LIST_RULE, ModuleRule, RsCheckError, ToolConfig, blank_field_message
+from .model import (FIELD_NAMES, OPTIONAL_COLUMN_FIELDS, ROUTE_FIELDS, SELECTOR_POLICY, RS_INST_FUZZY_RULE,
+                    RS_INST_LIST_RULE, ModuleRule, RsCheckError, ToolConfig, blank_field_message,
+                    describe_step_sum, step_sum_issue)
 from .match_review import format_match_details
 from .hierarchy_cache import CacheLoadStopped, HierarchyCache
 from .hierarchy_tree import ScopeTree
@@ -240,6 +243,15 @@ def _review_sections(
         sections.append((title, f"实际 {'未确定' if actual is None else actual} / 期望 {spec.get('step', '—')} 拍"
                          f"     ·     匹配 {len(record.get('matched_instances', []))} 个物理实例"))
     if not is_global:
+        ownership = (record.get("instance_match") or {}).get("boundary_ownership")
+        if ownership:
+            sections.append(("Position 归属", f"{spec['position']} 是本行搜索上界。"
+                             f"已排除 {ownership['excluded_count']} 个下级已认领实例；"
+                             "在「匹配明细」中可核对全路径及所属 Excel 行。"))
+        if "step_sum_check" in spec:
+            check = spec["step_sum_check"]
+            state = {"pass": "通过", "mismatch": "不一致", "blank": "空值，未检查", "NA": "NA，未检查"}[check["status"]]
+            sections.append((f"Excel 合并拍数 · {state}", describe_step_sum(check)))
         ignored = spec.get("ignored_fields", {})
         if ignored:
             lines = [f"{field}：{'空值（警告）' if reason == 'blank' else 'NA（不报警）'}" for field, reason in ignored.items()]
@@ -290,7 +302,14 @@ def _review_sections(
                 lines.append(f"  {check['target']}：无已确认的源端连线")
             for e in check["endpoints"]:
                 lines.append(f"  {' → '.join(e['path'])} · {e['port'] or '?'} 接 {e['connection'] or '?'}")
+            for diagnostic in check.get("diagnostics", ()):
+                lines.append(f"  · {diagnostic}")
         sections.append(("CRG 源端连线 · clk / rst", "\n".join(lines)))
+    elif (record.get("crg_source_check") or {}).get("instances"):
+        evidence = [f"{e['instance']} · {d}" for e in record["crg_source_check"]["instances"]
+                    for d in e.get("diagnostics", ())]
+        if evidence:
+            sections.append(("CRG 反追记录", "\n".join(evidence)))
     return sections
 
 
@@ -726,7 +745,8 @@ class RsCheckApp:
             row = index % rows_per_block
             block = index // rows_per_block
             label_column = block * 2
-            ttk.Label(columns_group, text=f"{name}（可选）" if name in ROUTE_FIELDS else name).grid(
+            label = "合并拍数 step_sum（可选）" if name == "step_sum" else f"{name}（可选）" if name in OPTIONAL_COLUMN_FIELDS else name
+            ttk.Label(columns_group, text=label).grid(
                 row=row,
                 column=label_column,
                 sticky="w",
@@ -858,6 +878,9 @@ class RsCheckApp:
             textvariable=self.crg_trace_max_depth_var,
             width=8,
         ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(trace_options, text="DIV / GATE / OCC 端口规则…",
+                   command=self._open_trace_rule_editor).pack(side="left", padx=10)
 
         output_card, output_group = self.ui.card(tab, "04", "报告输出")
         output_card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -1680,6 +1703,8 @@ class RsCheckApp:
         self.inspector_tabs.add(summary_view, text="诊断摘要")
         self.match_view = ttk.Frame(self.inspector_tabs)
         self.inspector_tabs.add(self.match_view, text="匹配明细")
+        self.connection_view = InterconnectCanvas(self.inspector_tabs, self.ui)
+        self.inspector_tabs.add(self.connection_view, text="RS 互联图")
         self.inspector_tabs.add(raw_view, text="原始 JSON")
         self.copy_match_button = ttk.Button(
             inspector_bar, text="复制匹配明细", style="Quiet.TButton",
@@ -2057,7 +2082,7 @@ class RsCheckApp:
         excel["validate_headers"] = bool(self.header_check_var.get())
         raw["columns"] = {
             name: self.column_vars[name].get().strip() for name in FIELD_NAMES
-            if name not in ROUTE_FIELDS or self.column_vars[name].get().strip()
+            if name not in OPTIONAL_COLUMN_FIELDS or self.column_vars[name].get().strip()
         }
         raw["rtl"]["crg_trace_max_depth"] = (
             self.crg_trace_max_depth_var.get().strip()
@@ -2234,6 +2259,25 @@ class RsCheckApp:
         self._new_rule()
         self._render_rule_tree()
         self.status_var.set("模块规则已删除")
+
+    def _open_trace_rule_editor(self):
+        from .trace_rule_editor import TraceRuleEditor
+        path = self.config_var.get().strip()
+        baseline = self._loaded_config
+        if not baseline or not path or not _same_config_path(path, self._loaded_config_path):
+            messagebox.showerror("未打开规则库", "请先加载当前配置 JSON", parent=self.root)
+            return
+
+        def save(rules):
+            current = load_config(path)
+            if current.rtl.trace_cells != baseline.rtl.trace_cells:
+                raise GuiInputError("端口规则已被外部修改，请重新加载配置后再编辑")
+            save_config(replace(current, rtl=replace(current.rtl, trace_cells=rules)), path)
+            # Do not overwrite unsaved column mappings or other database edits.
+            self._loaded_config = replace(baseline, rtl=replace(baseline.rtl, trace_cells=rules))
+            self.status_var.set(f"已保存 {len(rules)} 条时钟 / 复位反追端口规则")
+
+        return TraceRuleEditor(self.root, baseline.rtl.trace_cells, save)
 
     def _save_module_rules(self) -> None:
         config_path = self.config_var.get().strip()
@@ -2836,7 +2880,7 @@ class RsCheckApp:
                 if process.cancelled or self._cancel_requested.is_set():
                     self.events.put(WorkerOutcome(action=action, process=process))
                     return
-                if action == "validate" and process.returncode == 0:
+                if action == "validate" and process.returncode in (0, 1):
                     rows, skipped = load_validation_result(process.stdout)
                     self.events.put(
                         WorkerOutcome(action=action, process=process, validation_rows=rows, skipped_rows=skipped)
@@ -2986,9 +3030,10 @@ class RsCheckApp:
                 self._append_log(f"[hierarchy warning] {warning}\n")
             self.status_var.set("Verdi DUT 层次查询完成")
             return
-        if outcome.action == "validate" and process.returncode == 0:
+        if outcome.action == "validate" and process.returncode in (0, 1):
             self._render_validation(outcome.validation_rows, outcome.skipped_rows)
-            self.status_var.set(f"Excel 验证完成，参与检查 {len(outcome.validation_rows)} 行，整行跳过 {len(outcome.skipped_rows)} 行")
+            self.status_var.set(f"Excel 验证完成，参与检查 {len(outcome.validation_rows)} 行，整行跳过 {len(outcome.skipped_rows)} 行"
+                                + ("；合并拍数不一致" if process.returncode else ""))
             self.notebook.select(self.results_tab)
             return
         if outcome.action == "check" and process.returncode in (0, 1) and outcome.report:
@@ -3072,6 +3117,7 @@ class RsCheckApp:
         self._saved_control_states.clear()
 
     def _clear_results(self) -> None:
+        self._graphs_by_row = {}
         # Filtering detaches items; they must also be deleted before reusing IDs.
         if self._result_records:
             self.result_tree.delete(*self._result_records)
@@ -3162,12 +3208,8 @@ class RsCheckApp:
 
     def _render_validation(self, rows: tuple[Mapping[str, Any], ...], skipped: tuple[Mapping[str, Any], ...] = ()) -> None:
         self._clear_results()
-        self.summary_state_var.set("VALID" if rows else "SKIPPED")
         self.summary_rows_var.set(f"行数 {len(rows)}" + (f" · 跳过 {len(skipped)}" if skipped else ""))
-        self.summary_pass_var.set(f"通过 {len(rows)}")
-        self.summary_fail_var.set("失败 0")
-        self.summary_errors_var.set("错误 0")
-        total_warnings = 0
+        total_errors = total_warnings = failed_rows = 0
         for index, spec in enumerate(rows):
             iid = f"validation-{index}"
             position_text = _position_display(spec)
@@ -3178,8 +3220,19 @@ class RsCheckApp:
                          "message": blank_field_message(spec.get("sheet", ""), spec["row"], field),
                          "actual": {"field": field, "reason": "blank"}}
                         for field, reason in spec.get("ignored_fields", {}).items() if reason == "blank"]
+            if "step_sum_check" in spec:
+                check = spec["step_sum_check"]
+                issue = step_sum_issue(check)
+                if issue:
+                    severity, code, message = issue
+                    findings.append({"severity": severity, "code": code, "message": message,
+                                     "expected": check["expected"], "actual": check["actual"]})
+            errors = sum(f["severity"] == "error" for f in findings)
+            warnings = len(findings) - errors
+            failed_rows += bool(errors)
+            total_errors += errors
+            total_warnings += warnings
             self._result_records[iid] = {"spec": spec, "findings": findings, "matched_instances": []}
-            total_warnings += len(findings)
             if findings:
                 self._issue_rows.add(iid)
             self.result_tree.insert(
@@ -3187,7 +3240,7 @@ class RsCheckApp:
                 "end",
                 iid=iid,
                 values=(
-                    "WARNING" if findings else "VALID",
+                    "FAIL" if errors else "WARNING" if warnings else "VALID",
                     spec.get("row", ""),
                     spec.get("Intf_type", ""),
                     position_text,
@@ -3197,10 +3250,14 @@ class RsCheckApp:
                     spec.get("RS_CFG_EN", ""),
                     "-",
                     f"-/{spec.get('step', '')}",
-                    f"0E/{len(findings)}W",
+                    f"{errors}E/{warnings}W",
                 ),
-                tags=("warning" if findings else "pass",),
+                tags=("fail" if errors else "warning" if warnings else "pass",),
             )
+        self.summary_state_var.set("FAIL" if total_errors else "VALID" if rows else "SKIPPED")
+        self.summary_pass_var.set(f"通过 {len(rows) - failed_rows}")
+        self.summary_fail_var.set(f"失败 {failed_rows}")
+        self.summary_errors_var.set(f"错误 {total_errors}")
         self.summary_warnings_var.set(f"警告 {total_warnings}")
         self._filter_results()
         if not rows:
@@ -3208,6 +3265,14 @@ class RsCheckApp:
 
     def _render_report(self, report: LoadedReport) -> None:
         self._clear_results()
+        graphs = report.raw.get("interconnect_groups", [])
+        self._graphs_by_row = {}
+        for number, graph in enumerate(graphs, 1):
+            # The group number belongs to the report, not the current row
+            # filter or the page within an individual schematic.
+            entry = (graph, (number, len(graphs)))
+            for row in graph["rows"]:
+                self._graphs_by_row[(graph["sheet"], row)] = entry
         summary = report.summary
         passed = bool(summary["passed"])
         skipped = summary.get("skipped_rows", 0)
@@ -3353,6 +3418,12 @@ class RsCheckApp:
 
     def _display_evidence(self, record, finding=None) -> None:
         payload = _evidence_payload(record, finding) if record else {}
+        if hasattr(self, "connection_view"):
+            spec = (record or {}).get("spec", {})
+            graph, group_no = getattr(self, "_graphs_by_row", {}).get(
+                (spec.get("sheet"), spec.get("row")), (None, None))
+            self.connection_view.set_graph(graph, "没有可显示的组：请映射 step_sum、纵向合并数据行，并用本版本 collector 运行 RTL 检查。",
+                                           group_no=group_no)
         sections = _review_sections(record, payload, finding) if record else [
             ("尚未选择结果", "选中结果行可查看拍数、实例匹配和诊断原因。")]
         self.review_text.configure(state="normal")

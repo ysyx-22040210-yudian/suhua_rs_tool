@@ -17,6 +17,7 @@ from .model import (
     ModuleRule,
     RtlConfig,
     ToolConfig,
+    TraceCellRule,
 )
 
 
@@ -61,6 +62,34 @@ def _string(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"'{name}' must be a non-empty string")
     return value.strip()
+
+
+def parse_trace_cells(raw: Any) -> tuple[TraceCellRule, ...]:
+    if not isinstance(raw, list):
+        raise ConfigError("rtl.trace_cells must be a list of DIV/GATE/OCC port mappings")
+    seen = set()
+    kinds = {}
+    rows = []
+
+    def identifier(value):
+        if not isinstance(value, str) or not value or any(c.isspace() or not c.isprintable() for c in value):
+            raise ConfigError("模块和端口名称不能为空，不能包含空白或控制字符")
+        return value
+
+    for i, row in enumerate(raw, 1):
+        if not isinstance(row, Mapping) or set(row) != {"kind", "module", "output", "inputs"}:
+            raise ConfigError(f"trace_cells 第 {i} 条：须包含 kind、module、output、inputs")
+        kind, module, output = row["kind"], identifier(row["module"]), identifier(row["output"])
+        if kind not in ("DIV", "GATE", "OCC") or kinds.setdefault(module, kind) != kind:
+            raise ConfigError(f"trace_cells 第 {i} 条：同一模块只能归属 DIV / GATE / OCC 中的一类")
+        if not isinstance(row["inputs"], list) or not row["inputs"]:
+            raise ConfigError(f"trace_cells 第 {i} 条：至少指定一个输入端口")
+        inputs = tuple(sorted(identifier(p) for p in row["inputs"]))
+        if (module, output) in seen or output in inputs or len(inputs) != len(set(inputs)):
+            raise ConfigError(f"trace_cells 第 {i} 条：{module}.{output} 重复、输入重复，或输入与输出同名")
+        seen.add((module, output))
+        rows.append(TraceCellRule(kind, module, output, inputs))
+    return tuple(sorted(rows, key=lambda r: (r.module, r.output)))
 
 
 def _module_rules(
@@ -279,6 +308,7 @@ def config_from_dict(raw: Any) -> ToolConfig:
             "allow_leaf_signal_match",
             "crg_match",
             "crg_trace_max_depth",
+            "trace_cells",
         },
         "rtl",
     )
@@ -362,6 +392,7 @@ def config_from_dict(raw: Any) -> ToolConfig:
             "rtl.crg_trace_max_depth",
             MAX_CRG_TRACE_DEPTH,
         ),
+        trace_cells=parse_trace_cells(rtl_raw.get("trace_cells", [])),
     )
     module_rules = _module_rules(
         root.get("module_rules"),
@@ -396,6 +427,7 @@ def config_to_dict(config: ToolConfig) -> dict[str, Any]:
             "allow_leaf_signal_match": config.rtl.allow_leaf_signal_match,
             "crg_match": config.rtl.crg_match,
             "crg_trace_max_depth": config.rtl.crg_trace_max_depth,
+            "trace_cells": [r.as_dict() for r in config.rtl.trace_cells],
         },
         "position_mappings": {
             alias: position

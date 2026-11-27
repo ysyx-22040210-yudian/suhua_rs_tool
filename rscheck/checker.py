@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import heapq
 import re
+from dataclasses import replace
 from typing import Iterable, Mapping
 
+from .position_bounds import boundary_forest
 from .model import (
     ActualInstance,
     CheckReport,
+    ClockTrace,
     ClockTraceNode,
     ConfigError,
     CrgTraceEvaluation,
+    DriverSource,
     Finding,
     InstanceItemMatch,
     InstanceStepEvaluation,
@@ -17,6 +21,7 @@ from .model import (
     MAX_CRG_TRACE_DEPTH,
     ModuleRule,
     ParameterEvaluation,
+    PositionInventory,
     NAME_CANDIDATE_LIMIT,
     NAME_TIE_REVIEW_LIMIT,
     NameCandidate,
@@ -666,18 +671,56 @@ def _select_item(
     return tuple(instance for instance, _ in matches), None, findings
 
 
+def _trace_for_row(instance: ActualInstance, spec: SpecRow, inventory: Inventory,
+                   config: RtlConfig, rule: ModuleRule) -> ActualInstance:
+    """Never reuse a trace pruned for a different target, or an obsolete fan-in path."""
+    target = spec.crg_source.strip(".")
+    reason = ""
+    clk, rst = instance.clock_trace, instance.reset_trace
+    if inventory.trace_cells is not None and inventory.trace_cells != config.trace_cells:
+        reason = "Driver port mappings differ from this inventory; recollect the elaborated KDB."
+    elif instance.target_traces:
+        if target in instance.target_traces:
+            clk, rst = instance.target_traces[target]
+        else:
+            reason = f"No driver trace was collected for target {target!r}; recollect the elaborated KDB."
+    if reason:
+        def unavailable(formal, is_reset):
+            return ClockTrace(formal, config.crg_trace_max_depth, (), "unresolved", (), (reason,),
+                              is_reset=is_reset, strategy="port_map_v1")
+        clk, rst = unavailable(rule.clk_port, False), unavailable(rule.rst_port, True)
+    else:
+        def safe(trace):
+            if trace is None:
+                return None
+            if trace.strategy == "port_map_v1" and inventory.trace_cells is not None:
+                return trace
+            # Pre-port-map inventories cannot prove which intermediate input
+            # was crossed. A direct driver is independent of any jump rule.
+            if any(n.depth > 1 for n in (*trace.modules, *trace.endpoints)):
+                return replace(trace, status="unresolved", modules=tuple(n for n in trace.modules if n.depth == 1),
+                               endpoints=tuple(e for e in trace.endpoints if e.depth == 1),
+                               diagnostics=(*trace.diagnostics, "Legacy multi-hop trace is not port-qualified; recollect the elaborated KDB."))
+            return trace
+        clk, rst = safe(clk), safe(rst)
+    if clk is instance.clock_trace and rst is instance.reset_trace:
+        return instance
+    return replace(instance, clock_trace=clk, reset_trace=rst,
+                   clk_sources=tuple(DriverSource(n.instance, n.module) for n in clk.modules) if clk else ())
+
+
 def _check_row(
     spec: SpecRow,
     inventory: Inventory,
     config: RtlConfig,
     module_rules: Mapping[str, ModuleRule],
     suffix: re.Pattern[str],
+    position: PositionInventory | None,
 ) -> RowResult:
     rule = resolve_module_rule(spec.rs_module, module_rules)
-    findings = [*spec.blank_findings, *_check_rs_cfg_en_label(spec, rule)]
+    findings = [*spec.workbook_findings, *_check_rs_cfg_en_label(spec, rule)]
     items = spec.rs_inst_items
     is_list = len(items) > 1
-    position = inventory.positions.get(spec.position)
     if position is None or not position.found:
         findings.append(_row_finding(spec, "POSITION_NOT_FOUND",
                                      f"RTL hierarchy position was not found: {spec.position}",
@@ -745,7 +788,9 @@ def _check_row(
             primary_findings = diagnostics
             union.update((i.full_name, i) for i in members)
     findings.extend(primary_findings)
-    matched_instances = tuple(union.values())
+    matched_instances = tuple(
+        _trace_for_row(i, spec, inventory, config, rule) if target_active else i for i in union.values()
+    )
     step_evaluations: list[InstanceStepEvaluation] = []
     crg_evaluations: list[CrgTraceEvaluation] = []
     source_signals: list[SourceSignalCheck] = []
@@ -874,10 +919,45 @@ def check_specs(
         suffix = re.compile(rf"^(?:{config.suffix_regex})$")
     except re.error as exc:
         raise ConfigError(f"invalid rtl.suffix_regex: {exc}") from exc
-    rows = tuple(
-        _check_row(spec, inventory, config, module_rules, suffix)
-        for spec in spec_list
-    )
+    # Evaluate all siblings at the same boundary against the *same* candidate
+    # pool. A deeper boundary finishes first regardless of workbook order.
+    by_position: dict[str, list[int]] = {}
+    for i, spec in enumerate(spec_list):
+        by_position.setdefault(spec.position, []).append(i)
+    children, bottom_up = boundary_forest(inventory.positions, inventory.position_scope, by_position)
+    nested = {child for group in children.values() for child in group}
+    available = {}  # position -> unclaimed full paths and original per-instance RTL evidence
+    claimed = {}    # position -> {full path: (owning boundary, workbook rows)}
+    results = {}
+    for boundary in bottom_up:
+        bucket = inventory.positions.get(boundary)
+        pool = {inst.full_name: inst for inst in bucket.instances} if bucket and bucket.found else {}
+        inherited = {}
+        for child in children[boundary]:
+            # Child evidence wins if an older offline snapshot repeats the full path.
+            pool.update(available.pop(child))
+            inherited.update(claimed.pop(child))
+        for path in inherited:
+            pool.pop(path, None)
+        candidates = PositionInventory(True, tuple(pool.values())) if bucket and bucket.found else None
+        local = {}
+        # Show enough paths/row numbers for review, without copying an entire
+        # lower-level design into every parent row's JSON / CSV.
+        sample = tuple((p, *inherited[p]) for p in heapq.nsmallest(12, inherited)) if boundary in by_position else ()
+        for i in by_position.get(boundary, ()):
+            spec = spec_list[i]
+            row = _check_row(spec, inventory, config, module_rules, suffix, candidates)
+            results[i] = replace(row, boundary_children=tuple(children[boundary]),
+                                 boundary_excluded=len(inherited), boundary_excluded_sample=sample)
+            for inst in row.instances:
+                # Ownership follows the selector, not downstream step/port/CRG checks.
+                local.setdefault(inst.full_name, []).append(spec.row_number)
+        for path, row_numbers in local.items():
+            pool.pop(path, None)
+            inherited[path] = (boundary, tuple(row_numbers))
+        if boundary in nested:  # independent roots have no parent to consume residuals
+            available[boundary], claimed[boundary] = pool, inherited
+    rows = tuple(results[i] for i in range(len(spec_list)))
     global_findings: list[Finding] = [
         Finding(severity="error", code="NPI_UNRESOLVED", message=warning)
         for warning in inventory.warnings
@@ -890,6 +970,10 @@ def check_specs(
     if inventory.schema_version < 4 and any(r.source_signals for r in rows):
         global_findings.append(Finding(severity="warning", code="SOURCE_INVENTORY_LEGACY",
             message="Legacy inventory: clk/rst source signals were NOT verified. Recollect with the current NPI collector (inventory v4)."))
+    if inventory.position_scope is None and any(children[p] for p in by_position):
+        global_findings.append(Finding(severity="warning", code="POSITION_INVENTORY_LEGACY",
+            message="旧 inventory 未记录完整子树；嵌套 position 只能在快照已列出的实例中分配。"
+                    "请用新版 collector 从 elab++ 重新采集后确认所有后代实例。"))
 
     owners_by_position: dict[str, dict[str, list[SpecRow]]] = {}
     for row in rows:
@@ -897,22 +981,18 @@ def check_specs(
         for instance in row.instances:
             position_owners.setdefault(instance.full_name, []).append(row.spec)
     for position_name, instance_owners in owners_by_position.items():
-        position = inventory.positions.get(position_name)
-        if position is None or not position.found:
-            continue
-        for instance in position.instances:
-            owners = instance_owners.get(instance.full_name, [])
+        for path, owners in instance_owners.items():
             if len(owners) > 1:
                 global_findings.append(
                     Finding(
                         severity="error",
                         code="AMBIGUOUS_GROUP_MATCH",
                         message=(
-                            f"{instance.full_name} matches multiple rows: "
+                            f"{path} matches multiple rows: "
                             + ", ".join(f"row {spec.row_number} ({spec.selector_label})" for spec in owners)
                         ),
                         position=position_name,
-                        instance=instance.full_name,
+                        instance=path,
                         actual=[spec.selector_label for spec in owners],
                     )
                 )

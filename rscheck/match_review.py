@@ -54,6 +54,13 @@ def format_match_details(record: Mapping[str, Any] | None) -> str:
     elif rule == RS_INST_LEGACY_SPLIT_RULE:
         lines.append("RS_inst 分项规则（历史报告）：仅按分号或实际换行拆分。")
     match = record.get("instance_match")
+    ownership = (match or {}).get("boundary_ownership")
+    if ownership:
+        lines.append(f"position 是搜索上界；已排除下级边界认领的 {ownership['excluded_count']} 个实例。")
+        for item in ownership["excluded_sample"]:
+            lines.append(f"  已归属 {item['owner']}（Excel 行 {', '.join(map(str, item['rows']))}）：{item['instance']}")
+        if ownership['excluded_count'] > len(ownership['excluded_sample']):
+            lines.append("  这里只列出部分归属，其他实例可在对应子行核对。")
     if not match:
         if "passed" not in record and "RS_inst_items" in spec:
             items = spec["RS_inst_items"]

@@ -192,7 +192,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 “CRG Source映射库”页应提供相同的搜索、CRUD、原子保存、dirty 阻断和外部修改冲突处理。示例配置应显示 `crg_core -> top.u_tile.u_crg`、`crg_aux -> top.u_tile.u_aux_crg`；命中后 GUI/JSON/CSV 同时保留简称与完整路径，并以右侧完整 hierarchy 作为 CRG trace 目标。简称和完整 CRG 路径都不得加入 NPI positions。
 
-在线验收必须确认 trace 从每种 `RS_module` 最终规则的 clk formal 开始。追到中间模块 output 后，继续展开该模块全部 input formal，但精确排除名字为 `clk`、`rst_n` 的 input；对其余 input 分支递归重复。RS 模块本身不计深度，直驱模块为 depth 1，depth N 节点仍参与目标匹配但不再展开；net、assign、concat、slice 和 primitive 不消耗模块深度。目标是解析后的 CRG_source 完整 instance hierarchy，任一分支精确命中即通过。未命中、达到深度边界或 trace 不可用分别只产生 `CRG_SOURCE_NOT_FOUND`、`CRG_TRACE_DEPTH_LIMIT`、`CRG_TRACE_UNAVAILABLE` warning。
+在线验收须分别从 RS 的 clk/rst formal 开始。中间模块仅按用户登记的 DIV、GATE、OCC 输出→输入规则跳转；未登记的输出不展开，即使其他控制口碰巧接到预期 CRG 也不能作为证据。专用 GUI 与真实 KDB 测试：在项目根目录执行 `PYTHON_BIN=python3 bash scripts/test_vm_driver_map.sh`。RS 模块本身不计深度，直驱模块为 depth 1，depth N 节点仍参与目标匹配但不再展开；net、assign、concat、slice 和 primitive 不消耗模块深度。目标是解析后的 CRG_source 完整 instance hierarchy，任一分支精确命中即通过。未命中、达到深度边界或 trace 不可用分别只产生 `CRG_SOURCE_NOT_FOUND`、`CRG_TRACE_DEPTH_LIMIT`、`CRG_TRACE_UNAVAILABLE` warning。
 
 当前 `0.12.0` 的“配置 JSON”行应同时显示“导入”“加载”“导出”。完整配置文件仍有六个根对象；导出副本的 `rtl.crg_trace_max_depth` 必须等于 GUI 当前值，重新导入后 Spinbox 值和检查命令的 `--crg-trace-max-depth` 必须一致。三个数据库、dirty、副本和原子导入语义保持不变。
 
@@ -202,7 +202,7 @@ macOS 只支持 Excel 验证和离线 inventory 模式；真实 NPI collector、
 
 Excel/internal `RS_CFG_EN` 去除首尾空白后若精确等于大写 `NA`，该行全部 `RS_CFG_EN` 标签及 RTL `RS_CRG_EN` 参数存在性/值检查都会跳过；`na`、`N/A` 和 `Na` 均不等价。这个逐行特殊值只豁免门控检查，`RS_module`、实例分组、动态 `step`、clk 和 rst 仍正常执行。非 `NA` 时，`has_rs_cfg_en=true` 要求每个 RTL 实例存在 effective `RS_CRG_EN`、值为 0，且 Excel 标签精确填写 `假门控`；`false` 时 Excel 字段的任意字面内容都不参与标签判定，但仍解析、显示和写入报告，RTL 则不得实际存在 `RS_CRG_EN`，否则仍报 `RS_CFG_EN_PARAMETER_UNEXPECTED`。映射字段中的公式按已保存结果处理；返回字符串 `NA` 可以豁免，返回 Excel 错误值 `#N/A` 则是工作簿错误。工具不会回退匹配 RTL `RS_CFG_EN`。`step_parameters` 为空时每个物理实例贡献 1；非空且所有值均可解析时，全部非零贡献 1、至少一个为 0 贡献 0。`RS_CRG_EN` 不能加入 `step_parameters`；RTL 中另一个确实存在的 `RS_CFG_EN` 可作为普通动态拍 parameter。任一缺失/`null`/X/Z/非法值都会让贡献未知并 fail-closed。`step` 可为 0，但无候选、最近并列或层次不存在时均不通过，并分别报告具体的选择原因。每条规则还必须有非空 `clk_port/rst_port`；两个端口分别取证和判定。当前没有“无 rst/跳过 rst”模式：模块存在且连接了所指 clk、但缺少所指 rst formal port 时，该行应 FAIL 且只报 `RST_PORT_MISSING`，不得误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
 
-“检查结果”页应新增 `CRG Trace` 列，并继续显示“匹配实例”和“实际/期望拍”。report v4 正常命中显示 `PASS`，warning 显示 `WARNING`，旧 report v2/v3 显示 `N/A`。只有 CRG warning 的通过行状态也显示 `WARNING`，但仍计入 passed rows，CLI 退出码仍为 `0`。证据面板必须包含 `crg_source_check` 和逐实例 `clock_trace`，可看到完整 hierarchy、depth、witness path、规则 clock formal、最大深度和固定排除项 `["clk","rst_n"]`。
+“检查结果”页应新增 `CRG Trace` 列，并继续显示“匹配实例”和“实际/期望拍”。report v4 正常命中显示 `PASS`，warning 显示 `WARNING`，旧 report v2/v3 显示 `N/A`。只有 CRG warning 的通过行状态也显示 `WARNING`，但仍计入 passed rows，CLI 退出码仍为 `0`。证据面板必须包含 `crg_source_check` 和逐实例 `clock_trace`，可看到完整 hierarchy、depth、witness path、规则 clock formal、最大深度、每次跳转的端口，以及分支停止原因。
 
 运行期间输入控件和两个启动按钮应禁用，“取消”应启用。取消后状态应显示 `CANCELLED`，CLI 和 collector 进程组都应退出；关闭正在运行的窗口时应先出现取消确认。
 
@@ -263,7 +263,7 @@ cd "$PROJECT_ROOT"
   --visible-seconds 10
 ```
 
-预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100`、六根 config-io marker 和 `schemas=report-v4/inventory-v4`；结果页 2 行 PASS、0 error、0 warning。每轮 inventory v3 必须含 `clock_trace`，report v4 必须含 `crg_source_check`，CSV 必须含 `crg_trace_status/max_depth/evidence`。旧 v2 fixture 另有兼容测试：只有带非空 `module` 且 `instance` 精确命中完整目标的 legacy `clk_sources` 项可通过，否则是 `CRG_TRACE_UNAVAILABLE` warning。
+预期：`GUI_SMOKE_PASS`、`mode=offline case=positive iterations=100`、六根 config-io marker 和 `schemas=report-v4/inventory-v4`；结果页 2 行 PASS、0 error、0 warning。每轮 inventory v4 必须含时钟及复位 trace，report v4 必须含 `crg_source_check`，CSV 必须含 `crg_trace_status/max_depth/evidence`。旧 v2 fixture 另有兼容测试：只有带非空 `module` 且 `instance` 精确命中完整目标的 legacy `clk_sources` 项可通过，否则是 `CRG_TRACE_UNAVAILABLE` warning。
 
 `has_rs_cfg_en=false` / Excel 任意文本专项连续 20 轮：
 
@@ -429,7 +429,7 @@ gui_session_resolve
 GUI_SMOKE_PASS: rows=行数 2 errors=错误 0 warnings=警告 0 mode=online case=positive iterations=3 window=mapped window_id=0x... contract=elab-only ... schemas=report-v4/inventory-v4
 ```
 
-3 轮中的每一轮都必须通过真实 collector 加载该 KDB。首组 6 个实例都必须从规则 `clk` formal 追到 `u_occ` depth 1、`u_clk_mux` depth 2 和 `u_crg`/`u_aux_crg` depth 3；目标 `u_crg` 任一分支命中即通过。`clk_occ` 的 input `clk/rst_n` 必须被精确排除。第二组 `u_aux_crg` 为 direct depth 1。inventory 必须是 v3，report 必须是 v4，运行命令必须包含 `--crg-trace-max-depth 16`。
+3 轮中的每一轮都必须通过真实 collector 加载该 KDB。首组 6 个实例都必须从规则 `clk` formal 追到 `u_occ` depth 1、`u_clk_mux` depth 2 和 `u_crg`/`u_aux_crg` depth 3；目标 `u_crg` 任一分支命中即通过。示例 OCC 规则只允许 `clk_out → source_in`；即便 enable 指向目标 CRG 也不应沿它反追。第二组 `u_aux_crg` 为 direct depth 1。inventory 必须是 v4，并确认 `strategy=port_map_v1`；report 必须是 v4，运行命令必须包含 `--crg-trace-max-depth 16`。
 
 Position 原始路径发现不需要 Excel 或配置文件。下面的块可直接复制，先验证 clean KDB 的精确双匹配、`limit=2` 截断和合法零匹配，再打开工具自带的候选窗口连续选择 20 轮：
 

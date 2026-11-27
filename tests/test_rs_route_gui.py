@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RouteGuiTests(unittest.TestCase):
+    def test_merged_steps_in_mapped_window(self):
+        self._exercise_window("step_sum")
+
     def test_route2_scoped_duplicate_then_partial_list_in_mapped_window(self):
         self._exercise_window("route2")
 
@@ -98,6 +101,32 @@ class RouteGuiTests(unittest.TestCase):
                         self.assertFalse(error.called, str(error.call_args))
                     self.assertEqual(app.summary_state_var.get(), state, app.log_text.get("1.0", "end")[-2000:])
                     self.assertFalse(app.controller.is_running)
+
+                if scenario == "step_sum":
+                    from tests.test_step_sum import SAMPLE, wrong_total
+                    self.assertEqual(app.column_vars["step_sum"].get(), "")
+                    app.column_vars["step_sum"].set("12")
+                    app.excel_var.set(str(SAMPLE))
+                    invoke_and_wait(app.validate_button, "VALID")
+                    self.assertEqual(app.summary_rows_var.get(), "行数 4 · 跳过 1")
+                    app.result_tree.selection_set("validation-2")
+                    app._on_result_selected()
+                    self.assertIn("L4:L6", app.review_text.get("1.0", "end"))
+                    self.assertIn("第5行=1，第6行=1", app.review_text.get("1.0", "end"))
+                    invoke_and_wait(app.run_button, "PASS")
+                    self.assertEqual(load_report(app.json_report_var.get()).summary["warnings"], 0)
+                    invalid = out / "wrong-total.xlsx"
+                    wrong_total(invalid)
+                    app.excel_var.set(str(invalid))
+                    invoke_and_wait(app.validate_button, "FAIL")
+                    self.assertEqual(app.summary_errors_var.get(), "错误 1")
+                    self.assertEqual(app.result_tree.item("validation-0", "values")[0], "FAIL")
+                    self.assertIn("合计格=2，参与行 step 之和=1", app.review_text.get("1.0", "end"))
+                    invoke_and_wait(app.run_button, "FAIL")
+                    row = load_report(app.json_report_var.get()).rows[0]
+                    self.assertEqual(row["findings"][0]["code"], "STEP_SUM_MISMATCH")
+                    self.assertEqual(row["step_check"]["effective_step"], 1)
+                    return
 
                 if scenario == "field_policy":
                     book = out / "fields.csv"

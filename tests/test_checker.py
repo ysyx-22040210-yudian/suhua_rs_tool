@@ -1090,7 +1090,7 @@ class CheckerTests(unittest.TestCase):
             {"CRG_TRACE_UNAVAILABLE"},
         )
 
-    def test_v3_recursive_trace_matches_exact_full_path(self) -> None:
+    def test_v3_recursive_trace_is_not_port_qualified(self) -> None:
         target = self.specs[0].crg_source
 
         def mutate(raw) -> None:
@@ -1116,28 +1116,9 @@ class CheckerTests(unittest.TestCase):
             [self.specs[0]], self._v3_inventory(mutate), self.rtl, self.rules
         )
 
-        self.assertTrue(report.passed)
-        self.assertEqual(report.warning_count, 1)
-        self.assertTrue(
-            all(item.status == "matched" for item in report.rows[0].crg_evaluations)
-        )
-        self.assertTrue(
-            all(item.matched.depth == 2 for item in report.rows[0].crg_evaluations)
-        )
-
-        raw_report = report_to_dict(report)
-        crg_check = raw_report["rows"][0]["crg_source_check"]
-        self.assertEqual(raw_report["schema_version"], 4)
-        self.assertEqual(crg_check["expected"], target)
-        self.assertEqual(crg_check["status"], "pass")
-        self.assertEqual(crg_check["instances"][0]["status"], "matched")
-        self.assertEqual(crg_check["instances"][0]["matched"]["depth"], 2)
-        self.assertEqual(
-            raw_report["rows"][0]["matched_instances"][0]["clock_trace"][
-                "excluded_inputs"
-            ],
-            ["clk", "rst_n"],
-        )
+        self.assertTrue(report.passed)  # evidence unavailable is a warning, never a fabricated match
+        self.assertTrue(all(e.status == "unavailable" and e.matched is None for e in report.rows[0].crg_evaluations))
+        self.assertTrue(all("Legacy multi-hop" in e.diagnostics[-1] for e in report.rows[0].crg_evaluations))
 
     def test_v3_crg_match_is_exact_not_leaf_or_module_name(self) -> None:
         for target in ("u_crg", "crg_core", "top.u_tile.u_cr"):
@@ -1192,7 +1173,7 @@ class CheckerTests(unittest.TestCase):
             all(item.status == "matched" for item in report.rows[0].crg_evaluations)
         )
 
-    def test_v3_configured_depth_includes_boundary_and_blocks_deeper_match(self) -> None:
+    def test_legacy_multi_hop_cannot_win_even_at_depth_boundary(self) -> None:
         target = self.specs[0].crg_source
 
         def mutate(raw) -> None:
@@ -1238,14 +1219,9 @@ class CheckerTests(unittest.TestCase):
             self.rules,
         )
 
-        self.assertEqual(
-            {item.code for item in limited.rows[0].findings},
-            {"CRG_TRACE_DEPTH_LIMIT"},
-        )
-        self.assertEqual(boundary.warning_count, 1)
-        self.assertTrue(
-            all(item.matched.depth == 3 for item in boundary.rows[0].crg_evaluations)
-        )
+        for report in (limited, boundary):
+            self.assertTrue(all(e.status == "unavailable" and e.matched is None
+                                for e in report.rows[0].crg_evaluations))
 
     def test_checker_rejects_out_of_range_trace_depth_from_direct_callers(self) -> None:
         for depth in (0, 257, True):

@@ -2,11 +2,13 @@
 
 该工具提供命令行（CLI）和自带的 Tkinter 桌面 GUI，把 Excel 中的打拍规格与 NPI 展开后的 RTL 层次做对比，当前检查：
 
-当前代码版本为 `0.14.0`；当前 collector 输出 inventory v4，CLI 输出 report v4。
+当前代码版本为 `0.19.0`；当前 collector 输出 inventory v4，CLI 输出 report v4。
 
 **Python 3.8 可直接运行 CLI 和自带 GUI。** 在仓库根目录、可显示窗口的 Linux 终端执行 `python3.8 -m rscheck gui`。无需安装第三方 Python 包；GUI 需要该解释器自己的 Tkinter。见[Python 3.8 启动与自检](docs/USAGE.md#用-python-38-直接运行)。
 
 **Excel 空值与 NA：** `Intf_type`、`RS_module`、`position`、`step` 任一留空或填大写 `NA`，整行跳过，不计入通过或失败。其余已映射字段留空时只跳过该项，每行每个空字段报一次警告；填 `NA` 同样跳过该项，但不报警。`step=0` 仍检查。见[填写示例及字段之间的依赖](docs/USAGE.md#空值与-na)。
+
+**合并拍数（可选）：** 在 GUI「检查配置 → 列映射」给 `step_sum` 填列号，即可用「验证 Excel」核对每个纵向合并格是否等于范围内**参与检查行**的 `step` 之和。区内整行跳过的不计数；错误定位到工作表和合并范围。默认不启用；原有逐行 RTL 拍数检查不变。见[可运行的 Excel 样表](examples/specs_merged_steps.xlsx)与[填写方法](docs/USAGE.md#合并拍数-step_sum)。
 
 - Excel `position` 简写是否能通过可选映射库解析到实际 RTL 全路径，以及解析后的路径是否存在；
 - 同一 `RS_inst` 组（可填写前缀或完整本地例化名）的物理实例是否按模块规则计算出与 `step` 相等的有效拍数；
@@ -17,7 +19,9 @@
 - 每行解析出的默认或显式模块规则，以及逐实例 effective parameter 是否满足该规则的 `RS_CRG_EN` 和有效拍贡献条件；Excel/internal 字段仍使用兼容键 `RS_CFG_EN` 保存“假门控”标签；
 - 重叠的 `RS_inst` 导致同一实例匹配多个 Excel 组时，明确报错。
 
-`Intf_type` 作为业务标签进入报告，不参与 RTL 判定。仅凭这些字段无法可靠检查各拍之间的数据串接，详见“当前边界”。
+**合并组的 RS 互联图：** 运行 RTL 检查后，选中同一 `step_sum` 合并区内任一参与行，打开「检查证据 → RS 互联图」。方框是 RS 例化，线直接接到另一个 RS 的端口：例如 `tx.data_o → rx.data_i` 的线上标 `shared_data`；通过同一 interface 实例连接时，线上标接口实例名，两端显示各自的 modport，不给整束接口指定方向。`Intf_type` 可以是端口名、interface 类型或带 modport 的类型。「连接明细」可核对成对的端口、实际线名和 Excel 命中行；不把行序当作证据。详见[互联图说明](docs/USAGE.md#合并组的-rs-互联图)。
+
+**RS 只有一个总 interface 时：** 不必有 `mst/slv`，也不必拆分单独的数据输入、输出端口。共用同一实际接口画一条无向整束线；若两端各接自己的接口，而上层把成员通过 `assign` 直连，则只画有证据的成员（绿色赋值箭头），不把两个接口整体当成同一个。要看新增的成员证据，请重新编译 collector 并用原有 `*.elab++` 重新运行「RTL 检查」。
 
 例如，Excel 写 `RS_inst=CTRL_RS_DO`（末尾是字母 O），elab 中是 `top.u_tile.CTRL_RS_D0`（末尾是数字 0）。若没有合法的同名或前缀组，且它在同模块候选中唯一最近，工具用这个实例检查有效拍数和端口，报告保留原名、选中路径和编辑距离 1。若填写的是 `AAAA_BBB`，已能命中六个合法组成员，则仍检查整组。这些行为不要求映射 `RS_route`。
 
@@ -101,7 +105,9 @@ Excel 的 `position` 可以填写便于维护的简写，不必重复很长的 R
 }
 ```
 
-解析时按区分大小写的简写精确查找。命中时，内部 `position`、分组、clk/rst 相对路径和 NPI positions 请求全部使用右侧全路径，report v4 的 `spec.position_alias` 保留 Excel 原值；未命中时保持兼容，把 Excel 值直接当作完整 RTL 路径，`position_alias` 为空。因此旧表仍可直接填写 `top.u_tile`。显式映射只改变路径解析，不改变 Excel 列位置、模块规则或 `RS_inst` 匹配语义。
+解析时按区分大小写的简写精确查找。命中后用右侧全路径作搜索上界，报告保留原简写；未命中则把 Excel 值当作完整 RTL 路径。`position` 不再要求是 RS 实例的直接父层。源端 clk/rst 信号的解析基准仍是目标 CRG，不是 position。
+
+**嵌套 position 从深到浅匹配，与 Excel 行序无关。** 例如子行在 `top.tile` 中选到了 `RS_A`，父行 `top` 就不能再选它；`top.tile` 内没被子行选中的 `RS_B` 仍可被父行选中。同一边界的多行不按先后抢占，选中同一物理实例仍报冲突。在结果的“匹配明细”可查排除数、实例全路径和所属子行。[详细规则](docs/USAGE.md#32-position-简写与完整路径)
 
 “Position 映射库”和“CRG Source映射库”都支持**选择 DUT 层次…**。先在“检查配置”指定在线 NPI collector 和 Verdi elaborated KDB（如 `top.elab++`），打开选择器就能从顶层逐级展开，不必输入正则。也可按完整路径筛选：`u_lsu` 查包含该片段的路径，`(?i)\.u_crg$` 查以 `.u_crg` 结尾的分支。命中项保留在原来的父层之下。“使用所选路径”只回填当前编辑框；确认后再点“应用修改”和“保存映射库”。
 
@@ -152,7 +158,7 @@ Excel 的 `CRG_source` 同样可以使用简写。可选的 `crg_source_mappings
 
 命中时，内部 `CRG_source` 使用右侧完整路径，report v4/CSV 的 `crg_source_alias` 保留 Excel 原值；未命中时把 Excel 值直接视为完整路径，`crg_source_alias` 为空。checker 将该完整路径作为有界时钟追踪的目标，并与追踪到的上游模块完整 instance hierarchy 做区分大小写的精确匹配。CRG 路径仍不会加入 NPI collector 的 positions 请求；runner 会另行把每种 `RS_module` 最终生效的 `clk_port/rst_port` 作为 trace rule 传给 collector。
 
-时钟、复位两条追踪独立使用同一最大深度。时钟展开中间模块输入时排除 `clk`、`rst_n`；复位排除 `clk`，继续沿 `rst_n` 等输入反追。直接驱动模块为第 1 层。只取各自实际经过的目标输出的外侧连接，不能用同模块另一输出或 RS 端线名补证据。
+时钟、复位分别追 driver，只在命中用户登记的 DIV / GATE / OCC 模块输出时，才跳到该条规则的指定输入。未登记的模块或输出不会展开；直接接到目标 CRG 无需规则。GUI：“检查配置 → RTL 数据来源 → DIV / GATE / OCC 端口规则…”。一个输出可登记多个输入；同一模块的时钟、复位输出可以各走各的输入。命中 Excel 指定的完整 CRG 实例即停止该分支，使用该输出的实际连线比对。规则随配置导入/导出。见[使用指南与配置示例](docs/USAGE.md#34-crg-来源简写与完整路径)。升级请重新编译 collector；可运行 `bash scripts/test_vm_driver_map.sh` 验证。
 
 最大模块跳数由 `rtl.crg_trace_max_depth` 配置，默认 `16`，只接受 `1..256`。这是有限遍历，不会无上限递归；collector 还使用已访问对象的最小深度终止环路，并为每次 trace 设置 100,000 个 Netlist 对象的固定访问上限。未命中产生 `CRG_SOURCE_NOT_FOUND`，达到深度上限产生 `CRG_TRACE_DEPTH_LIMIT`，无法取得可靠 trace 证据产生 `CRG_TRACE_UNAVAILABLE`；三者都是 warning，不改变该行其他检查的 PASS/FAIL，也不会把本应为 `0` 的 CLI 退出码改成 `1`。
 
@@ -219,7 +225,7 @@ python -m rscheck crg-source-db delete \
 
 ## 分组规则
 
-填写 `RS_inst` 时，一行定义一组；解析后的完整 `position` 和该格提取的名字集合用于识别重复规格，分隔符、顺序和同格重复项不改变组的身份。`position` 可以是 `position_mappings` 中的简写，也可以直接是组成员父 scope 的完整 NPI 路径。`RS_inst` 可以填写组前缀，也可以填写一个完整的 NPI 本地例化名；完整名不是 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
+填写 `RS_inst` 时，一行定义一组；解析后的完整 `position` 和该格提取的名字集合用于识别重复规格，分隔符、顺序和同格重复项不改变组的身份。`position` 可以是 `position_mappings` 中的简写，也可以直接是该组搜索上界的完整 NPI 路径。`RS_inst` 可以填写组前缀，也可以填写一个完整的 NPI 本地例化名；完整名不是 `top.u_tile.CTRL_RS_D0` 这样的层次全路径。
 
 实例的本地名字减去 `RS_inst` 后，空 remainder 直接合法，用于完整名输入；非空 remainder 才必须完整匹配 `rtl.suffix_regex`。例如，`RS_inst=AAAA_BBB` 时 `AAAA_BBB_C0`、`AAAA_BBB_C12` 匹配，`AAAA_BBB0`、`AAAA_BBB_C` 不匹配；`RS_inst=CTRL_RS_D0` 时，本地实例 `CTRL_RS_D0` 以空后缀匹配。
 
@@ -259,7 +265,7 @@ bash scripts/launch_rscheck_gui.sh
 
 “检查配置”页可选择 Excel/CSV 和配置 JSON，设置工作表、表头行、数据起始行、`CRG Trace 最大层数`（`1..256`），以及各内部属性对应的互不重复 1-based 列号。“严格校验表头（可选）”默认未勾选，仅用于用户主动采用标准表头时的附加诊断。两套映射库都能从 DUT 树选路径，并将简写与所选全路径原子保存回配置 JSON。“模块规则库”页维护兼容规则键 `has_rs_cfg_en`、逗号分隔的 `step_parameters` 和逐模块 `clk_port/rst_port`。端口输入留空时分别使用 `clk`、`rst_n`。任一数据库存在未保存修改时不能运行检查。
 
-“配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`crg_source_mappings`、`module_rules`。导出以当前界面的 Excel 选项和列号（含可选 `RS_route`、`RS_route2`）、已加载配置的完整 `rtl`、三个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
+“配置 JSON”行的“导入”和“导出”处理的是完整配置，文件根对象必须恰好是 `excel`、`columns`、`rtl`、`position_mappings`、`crg_source_mappings`、`module_rules`。导出以当前界面的 Excel 选项和列号（含可选 `RS_route`、`RS_route2`、`step_sum`）、已加载配置的完整 `rtl`、三个内存数据库生成独立副本；已点击“应用新建/修改”但尚未单独保存的数据库修改也会进入副本，搜索过滤不会删减导出内容。导出不切换当前配置路径、不清除未保存状态，并拒绝把目标选为当前配置自身；若路径输入框已改为另一个尚未加载的文件，也会先拒绝导出，避免把旧 `rtl` 误认为新文件内容。
 
 “导入”严格要求候选文件包含上述六个根对象；手动“加载”用于重读路径输入框，并继续兼容历史配置省略 `position_mappings` 或 `crg_source_mappings` 的情况，其中缺少 `crg_source_mappings` 时按空库处理。两者都会先读取并校验候选；若当前 Excel/列号表单不同于已加载配置，先确认是否丢弃，再依次确认模块规则库、Position 映射库和 CRG Source 映射库的未保存修改。所有确认完成后还会重新读取候选文件，只有复核仍有效才更新界面；导入还会把候选文件切为当前配置路径，成功后三个数据库的未保存状态都会清除。取消文件选择、候选无效或任一确认被拒绝时，当前配置字段、路径和内存数据库都保持不变。配置中原本以字符串保存的纯数字工作表名在 GUI 未编辑时仍按名字导出和运行，不会误转成序号。配置只保存可移植的检查语义；Excel/CSV、collector、Elab KDB、NPI 库、inventory 和报告等本次运行输入/输出路径不属于配置。
 
@@ -331,7 +337,7 @@ make -C npi \
 
 标准 Verdi 布局下，NPI L1 头文件默认位于 `$VERDI_HOME/share/NPI/L1/C/inc`；`libnpiL1.so` 通常与 `libNPI.so` 同目录，也可能只存在于小写平台目录（例如 `.../lib/linux64`）。GNU Make 会按空白拆分目标名，因此仓库路径及上述四个 NPI 目录不得包含空白；Makefile 会对此提前报错。该限制只影响 collector/端到端构建，独立 GUI 启动器仍支持 KDB 路径包含空格。
 
-构建产物默认位于 `npi/build/rs_npi_collector`，同时链接 `libNPI.so` 和 `libnpiL1.so`。采集器使用 NPI Language Model 枚举每个实例的全部 formal ports，并用 `npi_mod_inst_get_port` 作为 NPI L1 fallback；这能覆盖 partial KDB 中 `instance -> npiPort` 关系为空、但按完整实例路径仍可查询端口的情况。上游模块展开时，collector 还会把 Netlist 已解析端口与 Language Model/L1 端口集合合并：已解析的同名端口不重复追踪，Netlist 漏失或未解析的 input 由 Language/L1 补追。Python runner 通过临时 `--trace-rules` 文件传入每种 `RS_module` 生效的 clk formal，并通过 `--trace-max-depth` 传入有界模块深度；collector 从这些端口执行 Netlist 上游追踪并生成 inventory v4。trace cache 键包含 RS 实例完整 hierarchy，因而不同父 scope 中同名 local net 和 clock cone 不会串用结果。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。若 load 返回 0，collector 会按 NPI 手册示例继续探测 top：至少一个 top 可查询时继续并报告 `NPI_LOAD_PARTIAL`；没有任何 top 可查询时才退出 11。后续 position、实例、formal port 和 parameter 证据仍 fail-closed。
+构建产物默认位于 `npi/build/rs_npi_collector`，同时链接 `libNPI.so` 和 `libnpiL1.so`。采集器使用 NPI Language Model 枚举每个实例的全部 formal ports，并用 `npi_mod_inst_get_port` 作为 NPI L1 fallback；这能覆盖 partial KDB 中 `instance -> npiPort` 关系为空、但按完整实例路径仍可查询端口的情况。跨越中间模块只查命中输出上明确登记的输入，不遍历模块全部输入。Python runner 通过 `--trace-rules` 指定各 RS 起点，`--driver-plan` 传入端口映射和每组目标，`--trace-max-depth` 指定上限；时钟和复位按实例、起点、角色及目标隔离。`npi_load_design` 只接收 `-elab <path>`，不会接收源码、filelist 或任意 Verdi 参数透传。若 load 返回 0，collector 会按 NPI 手册示例继续探测 top：至少一个 top 可查询时继续并报告 `NPI_LOAD_PARTIAL`；没有任何 top 可查询时才退出 11。后续 position、实例、formal port 和 parameter 证据仍 fail-closed。
 
 运行前设置 `VERDI_HOME`。Python runner 会自动把对应 NPI library 目录加入采集器子进程的 `LD_LIBRARY_PATH`：
 
@@ -415,13 +421,13 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 
 ## 当前边界
 
-- 当前版本仅把 `Intf_type` 作为报告标签。若要检查 interface 数据链，需要补充 input/output formal port 映射、首尾预期信号和 stage 顺序定义。
+- 可以根据 `Intf_type` 查看合并组的实际共享网络，但规格未声明预期的级联顺序、首尾端点或协议行为，不据此裁定拓扑对错。
 - 不把 RS 端的表达式当作源端名字。NPI 不能证实上游目标输出或其实际连线时提示证据不足。
 - 模块规则必须同时指定非空的 clk 与 rst formal port 名；端口名可自定义；Excel 行的 `rst` 填 `NA` 可静默跳过复位检查，留空则跳过并提示 warning。两个期望值都已填写时，checker 对两个端口独立取证和判定：实际模块存在且已连接规则所指 clk、但没有规则所指 rst 时，该行 FAIL 且只报告 `RST_PORT_MISSING`，不得同时误报 `CLK_PORT_MISSING` 或 `CLK_UNCONNECTED`。
-- CRG 来源只做有界上游模块遍历，不解析时序逻辑语义；中间模块 input 只精确排除 `clk`、`rst_n`，其他名称即使具有时钟或复位含义也会被展开。目标必须与上游模块完整 instance hierarchy 精确匹配。未命中、深度截断和 trace 不可用仅为 warning，不替代 clk/rst 连线的硬检查。
+- CRG 来源只做有界上游模块遍历，不解析时序逻辑语义；中间模块只走登记的输出→输入映射，没有按端口名的隐式排除或展开。目标必须与上游模块完整 instance hierarchy 精确匹配。未命中、深度截断和 trace 不可用仅为 warning，不替代 clk/rst 连线的硬检查。
 - `RS_CRG_EN` 和动态拍数都使用 elaboration 后的逐实例 effective 参数值，不用模块声明默认值替代实例 override；模块规则要求的参数缺失或无法解析时 fail-closed。
 - inventory `warnings` 中的 NPI traversal 问题仍按 `NPI_UNRESOLVED` 硬错误处理；partial load 本身写入可选 `notices` 并显示为非致命 warning，只有 position、实例、端口和 parameter 证据仍完整时检查才可能 PASS。
-- 默认只收集 `position` 下的直接 module children；为了兼容 generate，采集器会穿过非 module 的 generate scope，但不会下钻进已经遇到的普通子模块。
+- `position` 是向下搜索的边界。采集器进入普通模块、generate 等子层次；嵌套边界单独存储，只把子行未认领的实例交给上层继续匹配。
 - SystemVerilog instance array 的名字形如 `u[0]`，与 `AAAA_BBB_C0` 这类后缀命名不是同一种分组格式；单个元素可按完整本地名填写，按数组前缀分组则需要定制 suffix 规则。
 
 ## 测试
@@ -430,7 +436,7 @@ Verdi 路径可通过 `VERDI_BIN`、`VERDI_HOME`、`NOVAS_INST_DIR` 覆盖；GUI
 python -m unittest discover -v
 ```
 
-自动测试覆盖 XLSX/CSV 解析、自定义列映射、`RS_inst` 的逐项选择以及 `RS_route` / `RS_route2` 回退、position/CRG Source 两套简称映射、`step=0`、实例分组、逐模块 clk/rst 端口、有 clk/无 rst finding 隔离、动态拍数、RTL `RS_CRG_EN`、Excel `NA`/don't-care，以及从规则 clk formal 出发的多分支 CRG 递归、`clk/rst_n` 精确排除、深度边界、环路终止、完整 hierarchy trace cache 隔离、partial KDB Language/L1 input 补追、v2 legacy 兼容、inventory v3/report v4、GUI CRG Trace 展示与 CSV trace 证据。真实 NPI/L1 编译、partial/clean KDB、多层追踪和可见 GUI 仍必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
+自动测试覆盖 XLSX/CSV 解析、自定义列映射、`RS_inst` 的逐项选择以及 `RS_route` / `RS_route2` 回退、position/CRG Source 两套简称映射、`step=0`、实例分组、逐模块 clk/rst 端口、有 clk/无 rst finding 隔离、动态拍数、RTL `RS_CRG_EN`、Excel `NA`/don't-care，以及从规则 clk formal 出发的DIV/GATE/OCC 指定端口反追、时钟与复位独立证据、深度边界、环路终止、完整 hierarchy trace cache 隔离、partial KDB Language/L1 input 补追、v2 legacy 兼容、inventory v3/report v4、GUI CRG Trace 展示与 CSV trace 证据。真实 NPI/L1 编译、partial/clean KDB、多层追踪和可见 GUI 仍必须在有对应 Synopsys 安装和 license 的 Linux 环境中执行。
 
 在已登录图形桌面并安装 Verdi/NPI、当前 shell 已能正常启动 Verdi 的 Linux 设备上，推荐从当前 bootstrap checkout 启动 fresh-checkout 驱动。它会在 VM 本机当前用户的 `$HOME` 下重新克隆仓库，默认锁定克隆时的 `origin/main`，再运行完整 GUI 正向链路；`VM_RUN_BASE` 可用绝对路径改写运行目录的父目录：
 
@@ -454,7 +460,7 @@ GUI 探测优先使用当前 shell 已可访问的 `DISPLAY`，否则扫描常�
 
 ## 已验证环境
 
-当前有界递归 CRG 追踪版本已在下列环境签核：
+旧版有界递归策略的历史验证环境如下（不代表当前端口映射策略）：
 
 ```text
 CentOS 7.9

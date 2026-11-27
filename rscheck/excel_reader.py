@@ -5,7 +5,8 @@ import io
 import posixpath
 import re
 import zipfile
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Mapping
@@ -17,6 +18,7 @@ from .model import (
     ExcelConfig,
     SkippedRow,
     SpecRow,
+    StepSumCheck,
     WorkbookError,
     skip_reason,
     with_route_groups,
@@ -24,6 +26,7 @@ from .model import (
 
 
 _CELL_REF_RE = re.compile(r"^([A-Z]+)([0-9]+)$")
+_MERGE_CELL = re.compile(r"\$?([A-Z]{1,3})\$?([1-9][0-9]{0,6})")
 _EXCEL_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?")
 _XLSX_TEXT_ESCAPE = re.compile(r"_x000[9ADad]_|_x005[Ff]_(?=x[0-9A-Fa-f]{4}_)")
 _XLSX_TEXT_CHARS = {"_x0009_": "\t", "_x000d_": "\r", "_x000a_": "\n", "_x005f_": "_"}
@@ -60,16 +63,69 @@ def _normalise_text(value: object) -> str:
     return str(value).strip()
 
 
-def _parse_step(value: str, row_number: int) -> int:
+def _parse_count(value: str, label: str) -> int:
     if not re.fullmatch(r"[0-9]+(?:\.0+)?", value):
-        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}")
-    try:
-        number = Decimal(value)
-    except InvalidOperation as exc:
-        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}") from exc
-    if not number.is_finite() or number != number.to_integral_value() or number < 0:
-        raise WorkbookError(f"row {row_number}: step must be a non-negative integer, got {value!r}")
-    return int(number)
+        raise WorkbookError(f"{label} must be a non-negative integer, got {value!r}")
+    return int(Decimal(value))
+
+
+class _StepSumColumn:
+    """Join merge metadata (usually after sheetData) with active rows in the same sheet."""
+
+    def __init__(self, sheet: str, config: ExcelConfig):
+        self.sheet = sheet
+        self.column = config.columns["step_sum"]
+        n, self.letter = self.column, ""
+        while n > 0:
+            n, digit = divmod(n - 1, 26)
+            self.letter = chr(65 + digit) + self.letter
+        self.data_start = config.data_start_row
+        self.spans: list[tuple[int, int]] = []
+        # A subtotal on an excluded row can still own other, active rows.
+        self.cells: dict[int, tuple[str, str, bool]] = {}
+
+    def add_merge(self, ref: str) -> None:
+        ends = ref.upper().split(":")
+        left, right = _MERGE_CELL.fullmatch(ends[0]), _MERGE_CELL.fullmatch(ends[-1])
+        if len(ends) > 2 or not left or not right:
+            raise WorkbookError(f"{self.sheet}!{ref}: invalid Excel merge reference")
+        c1, c2 = column_letters_to_index(left[1]), column_letters_to_index(right[1])
+        start, end = int(left[2]), int(right[2])
+        if not min(c1, c2) <= self.column <= max(c1, c2) or max(start, end) < self.data_start:
+            return
+        if c1 != c2 or not self.data_start <= start <= end <= 1048576:
+            raise WorkbookError(f"{self.sheet}!{ref} (step_sum): 仅支持数据区内同一列的纵向合并")
+        self.spans.append((start, end))
+
+    def apply(self, specs: list[SpecRow], on_notice: Callable[[str], None] | None) -> list[SpecRow]:
+        spans = sorted(self.spans)
+        for (_, prev_end), (start, end) in zip(spans, spans[1:]):
+            if start <= prev_end:
+                raise WorkbookError(f"{self.sheet}!{self.letter}{start}:{self.letter}{end} (step_sum): 合并区域重叠")
+        starts = [start for start, _ in spans]
+        groups: dict[tuple[int, int], list[int]] = {}
+        for index, spec in enumerate(specs):
+            row = spec.row_number
+            pos = bisect_right(starts, row) - 1
+            span = spans[pos] if pos >= 0 and row <= spans[pos][1] else (row, row)
+            groups.setdefault(span, []).append(index)
+        formula_cells = []
+        for (start, end), indices in groups.items():
+            anchor = f"{self.letter}{start}"
+            location = f"{self.sheet}!{anchor}" + (f":{self.letter}{end}" if end != start else "")
+            value, error, formula = self.cells.get(start, ("", "", False))
+            if error:
+                raise WorkbookError(error)
+            if formula:
+                formula_cells.append(anchor)
+            expected = value if skip_reason(value) else _parse_count(value, f"{location}: step_sum")
+            members = tuple((specs[i].row_number, specs[i].step) for i in indices)
+            owner = indices[0]
+            specs[owner] = replace(specs[owner], step_sum_check=StepSumCheck(location, expected, members))
+        if formula_cells and on_notice:
+            on_notice(f"info[EXCEL_FORMULA_CACHE]: {self.sheet}: used saved results for {len(formula_cells)} "
+                      f"step_sum formula cell(s) (e.g. {', '.join(formula_cells[:3])}); if inputs changed, recalculate and save.")
+        return specs
 
 
 def _validate_headers(rows: Iterable[tuple[int, Mapping[int, str]]], config: ExcelConfig) -> None:
@@ -160,7 +216,7 @@ def _rows_to_specs(
         if "\n" in raw_inst or "\r" in raw_inst:
             values["RS_inst"] = raw_inst
         try:
-            step = _parse_step(values["step"], row_number)
+            step = _parse_count(values["step"], f"row {row_number}: step")
         except WorkbookError as exc:
             errors.append(str(exc))
             continue
@@ -298,7 +354,7 @@ def _sheet_target(archive: zipfile.ZipFile, selector: str | int) -> tuple[str, s
 
 
 def _xlsx_cell_value(
-    cell: ET.Element, shared_strings: list[str], location: str, *, formula: bool, numeric_step: bool
+    cell: ET.Element, shared_strings: list[str], location: str, *, formula: bool, numeric_field: str
 ) -> str:
     """Read the stored value; never interpret the formula or follow external references."""
     kind = cell.get("t", "n")
@@ -338,7 +394,7 @@ def _xlsx_cell_value(
     if formula and kind == "n":
         if not _EXCEL_NUMBER.fullmatch(raw):
             raise WorkbookError(f"{location}: invalid cached number {raw!r}. {_RECALCULATE}")
-        if numeric_step:
+        if numeric_field:
             # Excel may serialize an integral number in scientific notation.
             # Limit expansion to Excel's numeric range before converting to int.
             try:
@@ -353,7 +409,7 @@ def _xlsx_cell_value(
                     return str(int(number))
             except InvalidOperation:
                 pass
-            raise WorkbookError(f"{location}: step must be a non-negative integer, got {raw!r}")
+            raise WorkbookError(f"{location}: {numeric_field} must be a non-negative integer, got {raw!r}")
     elif formula and kind != "d":
         raise WorkbookError(f"{location}: unsupported formula result type {kind!r}. {_RECALCULATE}")
     return raw
@@ -366,6 +422,7 @@ def _xlsx_rows(
     config: ExcelConfig,
     shared_strings: list[str],
     on_notice: Callable[[str], None] | None,
+    totals: _StepSumColumn | None,
 ) -> Iterator[_InputRow]:
     field_for_column = {column: name for name, column in config.columns.items()}
     formula_count = 0
@@ -379,7 +436,10 @@ def _xlsx_rows(
         try:
             context = ET.iterparse(stream, events=("end",))
             for _, element in context:
-                if _local_name(element.tag) != "row":
+                tag = _local_name(element.tag)
+                if tag == "mergeCell" and totals is not None:
+                    totals.add_merge(element.get("ref", ""))
+                if tag != "row":
                     continue
                 row_number = int(element.attrib.get("r", "0"))
                 is_data = row_number >= config.data_start_row
@@ -408,7 +468,7 @@ def _xlsx_rows(
                     location = f"{sheet_name}!{reference} ({field_name})"
                     cells[column] = _xlsx_cell_value(
                         cell, shared_strings, location, formula=formula,
-                        numeric_step=is_data and field_name == "step",
+                        numeric_field=field_name if is_data and field_name in ("step", "step_sum") else "",
                     )
                     if formula:
                         formulas.append(reference)
@@ -418,6 +478,20 @@ def _xlsx_rows(
                             rs_inst_formula_cell = reference.upper()
 
                 if is_data:
+                    if totals is not None and totals.column in mapped:
+                        col = totals.column
+                        cell = mapped[col]
+                        formula = _first_child(cell, "f") is not None
+                        # A missing/invalid anchor matters only if its range contains
+                        # an active row. Do not evaluate it as a field on the anchor row.
+                        try:
+                            value = _xlsx_cell_value(cell, shared_strings, f"{sheet_name}!{cell.get('r')} (step_sum)",
+                                                     formula=formula, numeric_field="step_sum").strip()
+                            if value or formula:
+                                totals.cells[row_number] = (value, "", formula)
+                        except WorkbookError as exc:
+                            totals.cells[row_number] = ("", str(exc), formula)
+                        del mapped[col]
                     gate_errors = {}
                     excluded = {}
                     for field in REQUIRED_ROW_FIELDS:
@@ -485,8 +559,9 @@ def _read_xlsx(
     with archive:
         sheet_name, sheet_path = _sheet_target(archive, config.sheet)
         strings = _shared_strings(archive)
-        rows = _xlsx_rows(archive, sheet_path, sheet_name, config, strings, on_notice)
-        return _rows_to_specs(
+        totals = _StepSumColumn(sheet_name, config) if "step_sum" in config.columns else None
+        rows = _xlsx_rows(archive, sheet_path, sheet_name, config, strings, on_notice, totals)
+        specs = _rows_to_specs(
             path,
             sheet_name,
             rows,
@@ -495,6 +570,7 @@ def _read_xlsx(
             crg_source_mappings,
             on_skip,
         )
+        return totals.apply(specs, on_notice) if totals is not None else specs
 
 
 def _read_csv(
@@ -526,17 +602,23 @@ def _read_csv(
             dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t")
         except csv.Error:
             dialect = csv.excel
-    parsed_rows = (_InputRow(number, dict(enumerate(values, start=1)))
-                   for number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1))
-    return _rows_to_specs(
+    totals = _StepSumColumn("CSV", config) if "step_sum" in config.columns else None
+    def parsed_rows() -> Iterator[_InputRow]:
+        for number, values in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
+            cells = dict(enumerate(values, start=1))
+            if totals is not None and number >= config.data_start_row and cells.get(totals.column):
+                totals.cells[number] = (cells[totals.column].strip(), "", False)
+            yield _InputRow(number, cells)
+    specs = _rows_to_specs(
         path,
         "CSV",
-        parsed_rows,
+        parsed_rows(),
         config,
         position_mappings,
         crg_source_mappings,
         on_skip,
     )
+    return totals.apply(specs, None) if totals is not None else specs
 
 
 def read_spec_rows(

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .inventory import load_inventory
+from .position_bounds import SUBTREE_SCOPE
 from .model import (
     MAX_CRG_TRACE_DEPTH,
     Inventory,
@@ -556,6 +557,18 @@ def collect_inventory(
             temp_dir = Path(temp_name)
             positions_path = temp_dir / "positions.txt"
             trace_rules_path = temp_dir / "trace_rules.tsv"
+            driver_plan = temp_dir / "driver_plan.tsv"
+            records = [
+                ("R", rule.kind, rule.module, rule.output, name)
+                for rule in config.trace_cells for name in rule.inputs
+            ]
+            records.extend(sorted({
+                ("T", spec.position, spec.rs_module, spec.crg_source.strip("."))
+                for spec in spec_list if "CRG_source" not in spec.ignored_fields
+            }))
+            if any(not v or any(c in v for c in "\t\r\n\0") for record in records for v in record):
+                raise InventoryError("driver plan fields must be nonempty and cannot contain TAB, NUL or newline")
+            driver_plan.write_text("".join("\t".join(row) + "\n" for row in records), encoding="utf-8")
             output_path = temp_dir / "inventory.json"
             positions_path.write_text("\n".join(positions) + "\n", encoding="utf-8")
             trace_rules_path.write_text(
@@ -573,6 +586,8 @@ def collect_inventory(
                 str(output_path),
                 "--trace-rules",
                 str(trace_rules_path),
+                "--driver-plan",
+                str(driver_plan),
                 "--trace-max-depth",
                 str(config.crg_trace_max_depth),
                 "--clk-port",
@@ -582,6 +597,8 @@ def collect_inventory(
                 "--elab-db",
                 str(elab_db_path),
             ]
+            if any(s.step_sum_check and s.step_sum_check.merged for s in spec_list):
+                command.append("--interconnect")
             try:
                 completed = subprocess.run(
                     command,
@@ -605,6 +622,10 @@ def collect_inventory(
                 detail = _collector_diagnostics(completed, temp_dir)
                 if "exactly module<TAB>clock_port" in detail:
                     detail += "\nOld collector: rebuild rs_npi_collector for clock and reset source tracing (inventory v4)."
+                if "--interconnect" in command and "unexpected argument '--interconnect'" in detail:
+                    detail += "\n该 collector 不支持互联证据，请重新编译本版本 rs_npi_collector。"
+                if "unexpected argument '--driver-plan'" in detail:
+                    detail += "\n该 collector 使用旧的反追策略，请重新编译本版本 rs_npi_collector。"
                 raise InventoryError(
                     f"NPI collector exited with code {completed.returncode}"
                     + (f":\n{detail}" if detail else "")
@@ -618,6 +639,10 @@ def collect_inventory(
                     f"{inventory.schema_version}; rebuild rs_npi_collector for "
                     "clock and reset source-connection tracing (inventory v4)"
                 )
+            if inventory.position_scope != SUBTREE_SCOPE:
+                raise InventoryError("NPI collector did not enumerate position subtrees; rebuild this version of rs_npi_collector")
+            if inventory.trace_cells != config.trace_cells:
+                raise InventoryError("NPI collector did not confirm the configured driver port mappings; rebuild rs_npi_collector")
             if inventory.notices:
                 detail = _collector_diagnostics(completed, temp_dir)
                 if detail:

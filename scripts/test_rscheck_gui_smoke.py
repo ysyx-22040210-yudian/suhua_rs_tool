@@ -17,6 +17,7 @@ if str(DEFAULT_PROJECT_ROOT) not in sys.path:
 
 import rscheck.gui as gui_module
 from rscheck.gui import RsCheckApp, tk
+from rscheck.config import parse_trace_cells
 from rscheck.gui_backend import INVENTORY_SOURCE, LIVE_SOURCE, build_check_command
 from rscheck.model import FIELD_NAMES, ModuleRule
 
@@ -111,6 +112,7 @@ def _clock_trace_fields(
     max_depth: int = 16,
     status: str = "complete",
     diagnostics: Sequence[str] = (),
+    port_mapped: bool = False,
 ) -> dict[str, object]:
     path: list[str] = []
     traced_modules = []
@@ -135,14 +137,16 @@ def _clock_trace_fields(
         "clock_trace": {
             "clock_port": clock_port,
             "max_depth": max_depth,
-            "excluded_inputs": ["clk", "rst_n"],
+            "excluded_inputs": [] if port_mapped else ["clk", "rst_n"],
+            **({"strategy": "port_map_v1"} if port_mapped else {}),
             "status": status,
             "modules": traced_modules,
             "endpoints": [{"instance": source, "depth": len(path), "path": list(path),
                            "port": "clock_out", "connection": f"{parent}.{source_clk}"}],
             "diagnostics": list(diagnostics),
         },
-        "reset_trace": {"reset_port": reset_port, "excluded_inputs": ["clk"], "status": "complete",
+        "reset_trace": {"reset_port": reset_port, "excluded_inputs": [] if port_mapped else ["clk"], "status": "complete",
+                        **({"strategy": "port_map_v1"} if port_mapped else {}),
                         "max_depth": max_depth, "modules": [reset_node], "diagnostics": [],
                         "endpoints": [{**reset_node, "port": "reset_out", "connection": f"{parent}.rst_n"}]},
     }
@@ -546,7 +550,7 @@ def _write_rs_cfg_na_inputs(output: Path) -> tuple[Path, Path]:
     return specs_path, inventory_path
 
 
-def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
+def _write_crg_source_mapping_inputs(output: Path, trace_cells) -> tuple[Path, Path]:
     specs_path = output / "crg_source_mapping_specs.csv"
     inventory_path = output / "crg_source_mapping_inventory.json"
     position = "top.u_crg_mapping"
@@ -572,6 +576,7 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
         json.dump(
             {
                 "schema_version": 4,
+                "trace_cells": trace_cells,
                 "positions": {
                     position: {
                         "found": True,
@@ -607,7 +612,11 @@ def _write_crg_source_mapping_inputs(output: Path) -> tuple[Path, Path]:
                                         ),
                                         (_CRG_SOURCE_FULL_PATH, "crg_core"),
                                     ],
-                                    source_clk="clk_crg_map",
+                                    source_clk="clk_crg_map", port_mapped=True,
+                                    diagnostics=[
+                                        "OCC top.u_crg_mapping.u_occ.clk_out -> top.u_crg_mapping.u_occ.source_in",
+                                        "GATE top.u_crg_mapping.u_clk_mux.clk_out -> top.u_crg_mapping.u_clk_mux.functional_in",
+                                    ],
                                 ),
                             }
                         ],
@@ -1203,6 +1212,9 @@ def main() -> int:
             f"{sorted(exported_config)!r}"
         )
     expected_exported_rtl = dict(source_config.get("rtl", {}))
+    expected_exported_rtl["trace_cells"] = [
+        r.as_dict() for r in parse_trace_cells(expected_exported_rtl.get("trace_cells", []))
+    ]
     expected_exported_rtl["crg_trace_max_depth"] = 32
     if exported_config.get("rtl") != expected_exported_rtl:
         raise SystemExit("GUI config export did not preserve the complete RTL config")
@@ -1328,7 +1340,7 @@ def main() -> int:
     elif args.rs_cfg_na:
         excel_path, inventory_path = _write_rs_cfg_na_inputs(output)
     elif args.crg_source_mapping:
-        excel_path, inventory_path = _write_crg_source_mapping_inputs(output)
+        excel_path, inventory_path = _write_crg_source_mapping_inputs(output, expected_exported_rtl["trace_cells"])
     elif args.custom_port:
         excel_path = _write_custom_port_spec(output)
         inventory_path = _current_sample_inventory_path(project_root)

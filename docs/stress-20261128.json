@@ -1,0 +1,464 @@
+{
+  "byte_identical_replay": [
+    "JSON",
+    "CSV",
+    "match.txt"
+  ],
+  "concurrent_online_4": [
+    {
+      "max_rss_kib": 184664,
+      "seconds": 11.83,
+      "system_s": 0.16,
+      "user_s": 12.8
+    },
+    {
+      "max_rss_kib": 184612,
+      "seconds": 11.99,
+      "system_s": 0.15,
+      "user_s": 13.0
+    },
+    {
+      "max_rss_kib": 185696,
+      "seconds": 11.92,
+      "system_s": 0.17,
+      "user_s": 12.91
+    },
+    {
+      "max_rss_kib": 185148,
+      "seconds": 11.96,
+      "system_s": 0.17,
+      "user_s": 12.94
+    }
+  ],
+  "detail": {
+    "cancel": {
+      "cancelled_while_native_running": 12,
+      "canvas_max_s": 0.016,
+      "canvas_median_s": 0.012,
+      "canvas_selections": 96,
+      "effective_steps": 1920,
+      "independent_links": 96,
+      "live_gui_ready_s": 11.541,
+      "max_cancel_s": 0.183,
+      "residual_group_members": 0,
+      "sha256": "ce8b2b37d44adcd87d296137f8a1f563651d4ad52e597352dff03188eabb3ad5",
+      "source_signal_checks": 192,
+      "unique_rs": 3456
+    },
+    "excel20k": {
+      "cached_formulas": 20500,
+      "gui_ready_s": 4.066,
+      "input_rows": 20000,
+      "merges": 500,
+      "skipped_rows": 500,
+      "validated_rows": 19500,
+      "xlsx_bytes": 1150571,
+      "xlsx_sha256": "735225a1afbcac908a69417cfd1420984d91b2a5be6946c628be5b282a1237ac"
+    },
+    "fuzzy": {
+      "distances_checked": 262144,
+      "pool": 4096,
+      "selectors": 64
+    },
+    "grid-gui": {
+      "canvas_max_s": 0.018,
+      "canvas_median_s": 0.012,
+      "canvas_selections": 96,
+      "effective_steps": 1920,
+      "independent_links": 96,
+      "live_gui_ready_s": 11.732,
+      "sha256": "ce8b2b37d44adcd87d296137f8a1f563651d4ad52e597352dff03188eabb3ad5",
+      "source_signal_checks": 192,
+      "unique_rs": 3456
+    },
+    "soak": {
+      "median_round_seconds": 1.614,
+      "mode": "real inventory replay, one mapped GUI",
+      "post_gc_gui_rss_kib": [
+        86852,
+        103904,
+        104768,
+        104952,
+        105676,
+        105860,
+        106584,
+        106748,
+        107476,
+        107624,
+        108352,
+        108548,
+        109276,
+        109440,
+        110168,
+        110348,
+        111072,
+        111256,
+        111980,
+        112148,
+        112872,
+        113036,
+        113764,
+        113928,
+        114656,
+        114820,
+        115232,
+        115512,
+        116372,
+        116804
+      ],
+      "round_seconds": [
+        1.668,
+        1.587,
+        1.542,
+        1.731,
+        1.634,
+        1.611,
+        1.731,
+        1.546,
+        1.561,
+        1.98,
+        1.54,
+        1.623,
+        1.635,
+        1.617,
+        1.559,
+        1.586,
+        1.562,
+        1.611,
+        1.734,
+        1.761,
+        1.863,
+        1.75,
+        1.633,
+        1.653,
+        1.595,
+        1.664,
+        1.505,
+        1.371,
+        1.457,
+        1.577
+      ],
+      "rounds": 30,
+      "sample_method": "Linux /proc/self/status VmRSS after each successful check and graph selection"
+    }
+  },
+  "environment": {
+    "app": "0.19.0",
+    "kernel": "3.10.0-1160.53.1.el7.x86_64",
+    "logical_cpus": 8,
+    "python": "3.8.20",
+    "tk": 8.6
+  },
+  "fault_injection": {
+    "bad_rows": [
+      2,
+      3,
+      5,
+      6
+    ],
+    "diagnostics": {
+      "2": [
+        "STEP_MISMATCH"
+      ],
+      "3": [
+        "CLK_CONNECTION_MISMATCH",
+        "RST_CONNECTION_MISMATCH"
+      ],
+      "5": [
+        "STEP_MISMATCH"
+      ],
+      "6": [
+        "RS_CFG_EN_LABEL_MISMATCH"
+      ],
+      "7": [
+        "EXCEL_FIELD_BLANK"
+      ]
+    },
+    "warning_rows": [
+      7
+    ]
+  },
+  "full_suite": {
+    "process": {
+      "max_rss_kib": 94008,
+      "seconds": 34.35,
+      "system_s": 3.6,
+      "user_s": 14.16
+    },
+    "seconds": 30.378,
+    "skips": 0,
+    "tests": 457
+  },
+  "functional_gates": "PASS",
+  "master_gui": {
+    "cases": [
+      {
+        "case": "partial-load",
+        "errors": 0,
+        "iterations": 1,
+        "mode": "online",
+        "rows": 2,
+        "state": "PASS",
+        "warnings": 1
+      },
+      {
+        "case": "positive",
+        "errors": 0,
+        "iterations": 30,
+        "mode": "online",
+        "rows": 2,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "crg-depth-limit",
+        "errors": 0,
+        "iterations": 25,
+        "mode": "online",
+        "rows": 2,
+        "state": "PASS",
+        "warnings": 6
+      },
+      {
+        "case": "custom-port",
+        "errors": 0,
+        "iterations": 1,
+        "mode": "online",
+        "rows": 1,
+        "state": "PASS",
+        "warnings": 2
+      },
+      {
+        "case": "clk-present-rst-missing",
+        "errors": 1,
+        "iterations": 25,
+        "mode": "online",
+        "rows": 1,
+        "state": "FAIL",
+        "warnings": 0
+      },
+      {
+        "case": "negative",
+        "errors": 2,
+        "iterations": 1,
+        "mode": "online",
+        "rows": 1,
+        "state": "FAIL",
+        "warnings": 0
+      },
+      {
+        "case": "default-rule",
+        "errors": 0,
+        "iterations": 1,
+        "mode": "offline",
+        "rows": 1,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "rs-cfg-dontcare",
+        "errors": 0,
+        "iterations": 25,
+        "mode": "offline",
+        "rows": 1,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "rs-cfg-na",
+        "errors": 0,
+        "iterations": 25,
+        "mode": "offline",
+        "rows": 1,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "crg-source-mapping",
+        "errors": 0,
+        "iterations": 25,
+        "mode": "offline",
+        "rows": 1,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "positive",
+        "errors": 0,
+        "iterations": 120,
+        "mode": "offline",
+        "rows": 2,
+        "state": "PASS",
+        "warnings": 0
+      },
+      {
+        "case": "positive",
+        "errors": 0,
+        "iterations": 1,
+        "mode": "offline",
+        "rows": 20000,
+        "state": "PASS",
+        "warnings": 0
+      }
+    ],
+    "process": {
+      "max_rss_kib": 1474620,
+      "seconds": 225.45,
+      "system_s": 20.59,
+      "user_s": 108.98
+    }
+  },
+  "observations": [
+    "tk_after_callback_after_window_close",
+    "post_gc_rss_growth_over_repeated_large_reports"
+  ],
+  "offline_gui_rows": {
+    "1000": {
+      "max_rss_kib": 96712,
+      "seconds": 2.25,
+      "system_s": 0.16,
+      "user_s": 1.61
+    },
+    "5000": {
+      "max_rss_kib": 380064,
+      "seconds": 7.34,
+      "system_s": 0.42,
+      "user_s": 6.6
+    },
+    "10000": {
+      "max_rss_kib": 748260,
+      "seconds": 12.53,
+      "system_s": 0.68,
+      "user_s": 12.64
+    },
+    "20000": {
+      "max_rss_kib": 1475124,
+      "seconds": 27.74,
+      "system_s": 1.92,
+      "user_s": 25.91
+    }
+  },
+  "offline_replay": {
+    "max_rss_kib": 184564,
+    "seconds": 1.31,
+    "system_s": 0.07,
+    "user_s": 1.23
+  },
+  "oracle": {
+    "effective_steps": 1920,
+    "independent_links": 96,
+    "sha256": "ce8b2b37d44adcd87d296137f8a1f563651d4ad52e597352dff03188eabb3ad5",
+    "source_signal_checks": 192,
+    "unique_rs": 3456
+  },
+  "other_timing": {
+    "cancel": {
+      "max_rss_kib": 196076,
+      "seconds": 17.63,
+      "system_s": 1.07,
+      "user_s": 15.7
+    },
+    "excel20k": {
+      "max_rss_kib": 415896,
+      "seconds": 8.81,
+      "system_s": 0.32,
+      "user_s": 5.75
+    },
+    "fault": {
+      "max_rss_kib": 59000,
+      "seconds": 0.54,
+      "system_s": 0.03,
+      "user_s": 0.51
+    },
+    "fuzzy": {
+      "max_rss_kib": 14928,
+      "seconds": 2.67,
+      "system_s": 0.01,
+      "user_s": 2.65
+    },
+    "grid-gui": {
+      "max_rss_kib": 196268,
+      "seconds": 13.85,
+      "system_s": 0.55,
+      "user_s": 13.47
+    },
+    "soak": {
+      "max_rss_kib": 185656,
+      "seconds": 52.54,
+      "system_s": 4.51,
+      "user_s": 47.28
+    },
+    "tk-reopen": {
+      "max_rss_kib": 44912,
+      "seconds": 3.32,
+      "system_s": 0.24,
+      "user_s": 1.5
+    }
+  },
+  "picker": {
+    "crg": {
+      "browse_calls": 0,
+      "first": "disk",
+      "manual_reload": 0,
+      "max_reopen_ms": 205,
+      "memory_hits": 11
+    },
+    "position": {
+      "browse_calls": 2,
+      "first": "collector",
+      "manual_reload": 1,
+      "max_reopen_ms": 111,
+      "memory_hits": 11
+    }
+  },
+  "report_bytes": {
+    "csv": 2312439,
+    "json": 17062489,
+    "text": 858975
+  },
+  "rtl_fixture_sha256_lf": "5c552c2627e4bda2ed0fa02d953f20cb50af18afcdd4bfa90204cf8fabeff54e",
+  "run_owned_native_or_gui_processes_at_end": [],
+  "schema": "rscheck.stress.v1",
+  "serial_online": [
+    {
+      "max_rss_kib": 184932,
+      "seconds": 11.68,
+      "system_s": 0.19,
+      "user_s": 11.38
+    },
+    {
+      "max_rss_kib": 184752,
+      "seconds": 11.82,
+      "system_s": 0.21,
+      "user_s": 11.51
+    },
+    {
+      "max_rss_kib": 184616,
+      "seconds": 11.75,
+      "system_s": 0.18,
+      "user_s": 11.46
+    }
+  ],
+  "source_core_sha256_lf": "b80e41f1bb51c2523ebb8e957d39097a932865d6ab1984e98e99eddc98329613",
+  "special_repeats": {
+    "median_round_s": 4.982,
+    "rounds": 10,
+    "skips": 0,
+    "tests": 200
+  },
+  "status": "PASS_WITH_FINDINGS",
+  "tk_lifecycle": {
+    "full_suite_callback_errors": 4,
+    "reopen_callback_errors": 8,
+    "reopen_cycles": 8
+  },
+  "workbook_sha256": "156cd12a770d0208919b8af5073af10f38c776a452fa839da34c01557e1a428b",
+  "xlsx": {
+    "active": 385,
+    "boundaries": 193,
+    "data_rows": 481,
+    "formulas": 577,
+    "merges": 96,
+    "skipped": 96
+  }
+}

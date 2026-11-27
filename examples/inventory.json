@@ -1,8 +1,37 @@
 {
   "schema_version": 4,
+  "position_scope": "partitioned_subtree_v1",
+  "trace_cells": [
+    {
+      "kind": "GATE",
+      "module": "clk_mux",
+      "output": "clk_out",
+      "inputs": [
+        "functional_in",
+        "test_in"
+      ]
+    },
+    {
+      "kind": "OCC",
+      "module": "clk_occ",
+      "output": "clk_out",
+      "inputs": [
+        "source_in"
+      ]
+    },
+    {
+      "kind": "GATE",
+      "module": "reset_stage",
+      "output": "reset_out",
+      "inputs": [
+        "rst_n"
+      ]
+    }
+  ],
   "positions": {
     "top.u_tile": {
       "found": true,
+      "child_positions": [],
       "instances": [
         {
           "name": "AAAA_BBB_C0",
@@ -54,10 +83,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -141,14 +168,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -190,7 +222,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -243,10 +278,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -330,14 +363,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -379,7 +417,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -432,10 +473,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -519,14 +558,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -568,7 +612,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -621,10 +668,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -708,14 +753,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -757,7 +807,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -810,10 +863,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -897,14 +948,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -946,7 +1002,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -999,10 +1058,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1086,14 +1143,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1135,7 +1197,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {
@@ -1182,10 +1247,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1269,14 +1332,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst_n",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "unresolved",
             "modules": [],
             "endpoints": [],
@@ -1323,10 +1391,8 @@
           "clock_trace": {
             "clock_port": "clk",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1349,14 +1415,15 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "rst",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1398,7 +1465,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_ctrl_reset.reset_out -> top.u_tile.u_ctrl_reset.rst_n",
+              "stop: no output mapping for crg_aux.reset_out at top.u_tile.u_aux_crg.reset_out"
+            ]
           }
         },
         {
@@ -1449,10 +1519,8 @@
           "clock_trace": {
             "clock_port": "clock_i",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk",
-              "rst_n"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1536,14 +1604,19 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.functional_in",
+              "GATE top.u_tile.u_clk_mux.clk_out -> top.u_tile.u_clk_mux.test_in",
+              "OCC top.u_tile.u_occ.clk_out -> top.u_tile.u_occ.source_in",
+              "stop: no output mapping for crg_aux.clk_out at top.u_tile.u_aux_crg.clk_out",
+              "stop: no output mapping for crg_core.clk_out at top.u_tile.u_crg.clk_out"
+            ]
           },
           "reset_trace": {
             "reset_port": "reset_ni",
             "max_depth": 16,
-            "excluded_inputs": [
-              "clk"
-            ],
+            "strategy": "port_map_v1",
+            "excluded_inputs": [],
             "status": "complete",
             "modules": [
               {
@@ -1585,7 +1658,10 @@
                 ]
               }
             ],
-            "diagnostics": []
+            "diagnostics": [
+              "GATE top.u_tile.u_reset.reset_out -> top.u_tile.u_reset.rst_n",
+              "stop: no output mapping for crg_core.reset_out at top.u_tile.u_crg.reset_out"
+            ]
           }
         },
         {

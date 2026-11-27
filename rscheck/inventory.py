@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .model import ActualInstance, Inventory, InventoryError, PositionInventory
+from .config import parse_trace_cells
+from .position_bounds import SUBTREE_SCOPE, boundary_forest
+from .model import ActualInstance, ConfigError, Inventory, InventoryError, PositionInventory
 
 
 def load_inventory(path: str | Path) -> Inventory:
@@ -29,9 +31,13 @@ def load_inventory(path: str | Path) -> Inventory:
         )
 
     raw_positions = raw.get("positions")
+    scope = raw.get("position_scope")
+    if "position_scope" in raw and scope != SUBTREE_SCOPE:
+        raise InventoryError(f"unsupported inventory position_scope: {scope!r}")
     if not isinstance(raw_positions, Mapping):
         raise InventoryError("inventory 'positions' must be a JSON object")
     positions: dict[str, PositionInventory] = {}
+    subtree_instances: set[str] = set()
     for position, raw_position in raw_positions.items():
         if not isinstance(raw_position, Mapping):
             raise InventoryError(f"position {position!r} must be a JSON object")
@@ -65,6 +71,10 @@ def load_inventory(path: str | Path) -> Inventory:
                     f"{instance.full_name!r}"
                 )
             full_names.add(instance.full_name)
+            if scope == SUBTREE_SCOPE:
+                if instance.full_name in subtree_instances:
+                    raise InventoryError(f"physical instance repeated across position buckets: {instance.full_name}")
+                subtree_instances.add(instance.full_name)
             instances.append(instance)
         position_name = str(position).strip(".")
         if position_name in positions:
@@ -72,9 +82,15 @@ def load_inventory(path: str | Path) -> Inventory:
         found = raw_position.get("found", False)
         if not isinstance(found, bool):
             raise InventoryError(f"position {position!r} 'found' must be true or false")
+        children = raw_position.get("child_positions", [] if scope is None else None)
+        if not isinstance(children, list) or not all(isinstance(p, str) and p for p in children):
+            raise InventoryError(f"position {position!r} requires an array of child_positions")
+        if children and scope != SUBTREE_SCOPE:
+            raise InventoryError("child_positions requires a partitioned subtree inventory")
         positions[position_name] = PositionInventory(
             found=found,
             instances=tuple(instances),
+            child_positions=tuple(children),
         )
 
     if "warnings" not in raw:
@@ -87,7 +103,15 @@ def load_inventory(path: str | Path) -> Inventory:
     raw_notices = raw.get("notices", [])
     if not isinstance(raw_notices, list):
         raise InventoryError("inventory 'notices' must be an array")
+    if scope == SUBTREE_SCOPE:
+        boundary_forest(positions, scope, ())
+    try:
+        cells = parse_trace_cells(raw["trace_cells"]) if "trace_cells" in raw else None
+    except ConfigError as exc:
+        raise InventoryError(str(exc)) from exc
     return Inventory(
+        position_scope=scope,
+        trace_cells=cells,
         positions=positions,
         warnings=tuple(str(item) for item in raw_warnings),
         notices=tuple(str(item) for item in raw_notices),
@@ -103,9 +127,12 @@ def inventory_to_dict(inventory: Inventory) -> dict[str, Any]:
         )
     return {
         "schema_version": inventory.schema_version,
+        **({"position_scope": inventory.position_scope} if inventory.position_scope else {}),
+        **({"trace_cells": [c.as_dict() for c in inventory.trace_cells]} if inventory.trace_cells is not None else {}),
         "positions": {
             position: {
                 "found": value.found,
+                **({"child_positions": list(value.child_positions)} if inventory.position_scope else {}),
                 "instances": [
                     _instance_to_dict(instance, inventory.schema_version)
                     for instance in value.instances
@@ -127,10 +154,7 @@ def _instance_to_dict(instance: ActualInstance, schema_version: int) -> dict[str
         "line": instance.line,
         "parameters": dict(instance.parameters),
         "ports": {
-            name: {
-                "connection": port.connection,
-                "type": port.object_type,
-            }
+            name: port.as_dict()
             for name, port in instance.ports.items()
         },
         "clk_sources": [
@@ -145,6 +169,11 @@ def _instance_to_dict(instance: ActualInstance, schema_version: int) -> dict[str
             else None
         )
     if schema_version >= 4:
+        if instance.target_traces:
+            result["target_traces"] = {
+                target: {"clk": clk.as_dict(), "rst": rst.as_dict()}
+                for target, (clk, rst) in instance.target_traces.items()
+            }
         if result["clock_trace"] is not None:
             result["clock_trace"].setdefault("endpoints", [])
         result["reset_trace"] = instance.reset_trace.as_dict() if instance.reset_trace else None

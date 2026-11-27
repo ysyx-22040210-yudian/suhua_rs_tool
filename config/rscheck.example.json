@@ -33,7 +33,12 @@
     "require_contiguous_indices": false,
     "allow_leaf_signal_match": false,
     "crg_match": "module",
-    "crg_trace_max_depth": 16
+    "crg_trace_max_depth": 16,
+    "trace_cells": [
+      {"kind": "OCC", "module": "clk_occ", "output": "clk_out", "inputs": ["source_in"]},
+      {"kind": "GATE", "module": "clk_mux", "output": "clk_out", "inputs": ["functional_in", "test_in"]},
+      {"kind": "GATE", "module": "reset_stage", "output": "reset_out", "inputs": ["rst_n"]}
+    ]
   },
   "module_rules": {
     "rs_pipe": {

@@ -48,9 +48,9 @@ class NpiCollectorContractTests(unittest.TestCase):
         self.assertIn("connected_type == npiNlSliceNet", source)
         self.assertIn("connected_type == npiNlPseudoNet", source)
         self.assertIn("NPI Netlist module port has unknown direction", source)
-        self.assertIn("npiNlInstPort, instance, current", source)
-        self.assertIn('name == "clk" || (!state->is_reset && name == "rst_n")', source)
-        self.assertIn("intermediate port(s) with unknown direction", source)
+        self.assertIn('argument == "--driver-plan"', source)
+        self.assertNotIn("expand_module_inputs(", source)
+        self.assertIn("mapped input missing or not an input", source)
         self.assertIn("mark_trace_unresolved(state, message.str())", source)
         self.assertIn("depth >= state->trace.max_depth", source)
         self.assertIn('state.trace.status = "depth_limited"', source)
@@ -58,7 +58,7 @@ class NpiCollectorContractTests(unittest.TestCase):
         self.assertIn('\\"schema_version\\": 4', source)
         self.assertIn('\\"clock_trace\\": ', source)
         self.assertIn(
-            '\\"excluded_inputs\\": [\\"clk\\", \\"rst_n\\"]', source
+            '\\"excluded_inputs\\": []', source
         )
         self.assertIn("result.clk_sources = result.clock_trace.modules", source)
 
@@ -147,47 +147,15 @@ class NpiCollectorContractTests(unittest.TestCase):
             'std::string cache_key = clock_port + "\\x1f";', body
         )
 
-    def test_partial_kdb_always_merges_language_model_input_ports(self) -> None:
-        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(
-            encoding="utf-8"
-        )
-        start = source.index("  void expand_module_inputs(")
-        end = source.index("  ClockTrace trace_clock(", start)
-        body = source[start:end]
-        fallback_call = "trace_language_input_ports("
-        fallback_guard = "if (!fallback_available &&"
-        self.assertIn("const bool fallback_available", body)
-        self.assertIn(fallback_call, body)
-        self.assertIn(fallback_guard, body)
-        self.assertLess(body.index(fallback_call), body.index(fallback_guard))
-        self.assertIn("netlist_classified_ports", body)
-        self.assertIn("netlist_resolved_ports", body)
-        self.assertIn("netlist_unknown_ports", body)
-        self.assertIn("fallback_classified_ports.find(*name)", body)
-        self.assertNotIn(
-            "if (scanned_ports == 0 || unknown_directions != 0) {", body
-        )
-
-        fallback_start = source.index("  bool trace_language_input_ports(")
-        fallback_end = source.index(
-            "  void trace_netlist_input_relation(", fallback_start
-        )
-        fallback_body = source[fallback_start:fallback_end]
-        self.assertIn("npi_iterate(npiPort, module)", fallback_body)
-        self.assertIn(
-            "npi_mod_inst_get_port(&mutable_full_name[0], fallback_ports)",
-            fallback_body,
-        )
-        self.assertLess(
-            fallback_body.index("netlist_resolved_ports.find(port->first)"),
-            fallback_body.index("if (!port->second.has_direction)"),
-        )
-
-        netlist_start = source.index("  void trace_netlist_input_relation(")
-        netlist_end = source.index("  void expand_module_inputs(", netlist_start)
-        netlist_body = source[netlist_start:netlist_end]
-        self.assertIn("if (!hits.empty() && !name.empty())", netlist_body)
-        self.assertIn("resolved_ports->insert(name)", netlist_body)
+    def test_partial_kdb_named_input_has_direction_checked_language_fallback(self) -> None:
+        source = (self.project_root / "npi" / "rs_npi_collector.cpp").read_text(encoding="utf-8")
+        body = source.split("  void follow_mapped_inputs(", 1)[1].split("  ClockTrace trace_clock(", 1)[0]
+        self.assertIn("plan_.inputs.find(NamePair(curr.module, curr.output))", body)
+        self.assertIn("npi_nl_get(npiNlDirection, start) == npiNlInput", body)
+        self.assertIn("formal->second.direction == npiInput", body)
+        self.assertIn("resolve_trace_start(curr.instance, input, formal->second)", body)
+        self.assertNotIn("npi_nl_iterate(", body)
+        self.assertLess(body.index("curr.instance == target"), body.index("curr.depth >= "))
 
     def test_makefile_requires_and_links_verdi_npi_l1(self) -> None:
         makefile = (self.project_root / "npi" / "Makefile").read_text(
@@ -633,8 +601,10 @@ class NpiRunnerTests(unittest.TestCase):
                     json.dumps(
                         {
                             "schema_version": 4,
+                            "trace_cells": [],
+                            "position_scope": "partitioned_subtree_v1",
                             "positions": {
-                                "top.u": {"found": False, "instances": []}
+                                "top.u": {"found": False, "instances": [], "child_positions": []}
                             },
                             "warnings": [],
                         }
@@ -693,8 +663,10 @@ class NpiRunnerTests(unittest.TestCase):
                     json.dumps(
                         {
                             "schema_version": 4,
+                            "trace_cells": [],
+                            "position_scope": "partitioned_subtree_v1",
                             "positions": {
-                                "top.u": {"found": False, "instances": []}
+                                "top.u": {"found": False, "instances": [], "child_positions": []}
                             },
                             "warnings": [],
                         }
@@ -754,6 +726,24 @@ class NpiRunnerTests(unittest.TestCase):
                         RtlConfig(),
                         elab_db=elab_db,
                     )
+
+    def test_live_v4_direct_children_only_collector_requires_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            collector = root / "collector"
+            collector.touch()
+            db = root / "test.elab++"
+            db.mkdir()
+
+            def completed(command, **kwargs):
+                out = Path(command[command.index("--output") + 1])
+                out.write_text(json.dumps({"schema_version": 4, "trace_cells": [], "positions": {
+                    "top.u": {"found": True, "instances": []}}, "warnings": []}), encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with patch("rscheck.npi_runner.subprocess.run", side_effect=completed):
+                with self.assertRaisesRegex(InventoryError, "position subtrees; rebuild"):
+                    collect_inventory(collector, [self._spec()], RtlConfig(), elab_db=db)
 
     def test_trace_depth_is_defensively_bounded_for_direct_callers(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -853,8 +843,10 @@ class NpiRunnerTests(unittest.TestCase):
                     json.dumps(
                         {
                             "schema_version": 4,
+                            "trace_cells": [],
+                            "position_scope": "partitioned_subtree_v1",
                             "positions": {
-                                "top.u": {"found": False, "instances": []}
+                                "top.u": {"found": False, "instances": [], "child_positions": []}
                             },
                             "warnings": [],
                             "notices": ["top remains queryable after partial load"],
